@@ -5,7 +5,7 @@ Python SDK for Disseqt validators via the Dataset API. Decorator-based dynamic r
 ## Features
 
 - **Clean API**: Single `client.validate(request)` method for all validators
-- **Type Safety**: Full typing support with Python 3.12+
+- **Type Safety**: Full typing support with Python 3.10.14+
 - **Auto-Registration**: Decorator-based validator registration system
 - **Normalized Responses**: Consistent response format with dynamic `others` bag
 - **Domain-Specific Models**: Module-scoped request types for each validation domain

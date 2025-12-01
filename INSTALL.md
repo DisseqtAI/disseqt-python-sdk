@@ -171,7 +171,7 @@ python -c "import disseqt_sdk; print('✓ disseqt-sdk installed successfully')"
 
 ## Prerequisites
 
-- Python 3.12 or higher
+- Python 3.10.14 or higher
 - Git (for git-based installation)
 - pip or uv package manager
 
