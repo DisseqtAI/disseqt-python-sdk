@@ -2,6 +2,7 @@
 
 from .agentic_behaviour import AgenticBehaviourRequest
 from .base import SDKConfigInput
+from .composite_score import CompositeScoreRequest
 from .input_validation import InputValidationRequest
 from .mcp_security import McpSecurityRequest
 from .output_validation import OutputValidationRequest
@@ -16,4 +17,5 @@ __all__ = [
     "AgenticBehaviourRequest",
     "McpSecurityRequest",
     "ThemesClassifierRequest",
+    "CompositeScoreRequest",
 ]

@@ -81,6 +81,22 @@ result = client.validate(topic_validator)
 print(result)
 ```
 
+## Examples
+
+For more detailed examples and use cases, see the **[examples/](examples/)** directory:
+
+- **[example.py](examples/example.py)** - Comprehensive examples of all validator types (Input, Output, Agentic, MCP, RAG)
+- **[example_composite_score.py](examples/example_composite_score.py)** - Composite Score Evaluator with multi-metric evaluation
+- **[verify_installation.py](examples/verify_installation.py)** - Installation verification script
+
+Each example includes:
+- Complete working code
+- API configuration
+- Error handling
+- Output interpretation
+
+See [examples/README.md](examples/README.md) for detailed documentation of each example.
+
 ## Response Format
 
 All validators return a normalized response:

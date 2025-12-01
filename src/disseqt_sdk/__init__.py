@@ -8,5 +8,5 @@ Normalized responses with a dynamic `others` bag.
 from .client import Client
 from .models.base import SDKConfigInput
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __all__ = ["Client", "SDKConfigInput"]

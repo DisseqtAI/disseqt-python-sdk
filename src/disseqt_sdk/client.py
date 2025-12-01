@@ -11,6 +11,7 @@ import requests
 from .registry import get_validator_metadata
 from .routes import build_validator_url
 from .validators.base import BaseValidator, ThemesClassifierValidator
+from .validators.composite.evaluate import CompositeScoreEvaluator
 
 
 class HTTPError(Exception):
@@ -66,7 +67,9 @@ class Client:
             "X-Request-Id": str(uuid.uuid4()),
         }
 
-    def validate(self, request: BaseValidator | ThemesClassifierValidator) -> dict[str, Any]:
+    def validate(
+        self, request: BaseValidator | ThemesClassifierValidator | CompositeScoreEvaluator
+    ) -> dict[str, Any]:
         """Validate using the specified validator.
 
         Args:

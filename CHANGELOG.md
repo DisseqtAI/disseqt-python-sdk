@@ -7,7 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2025-12-01
+
+### Changed
+- **Python Version Requirement**: Updated minimum Python version to >=3.10.14 (from >=3.12)
+  - Added Python 3.10 and 3.11 to supported classifiers
+  - Updated tool configurations (Black, Ruff, Mypy) to target Python 3.10
+  - Rebuilt UV environment with Python 3.10.14
+  - All tests passing on Python 3.10.14
+  - Broader compatibility for users
+- **Project Organization**: Moved all example files to `examples/` directory
+  - Created `examples/` folder with comprehensive documentation
+  - Better project structure following Python best practices
+
 ### Added
+- **🚀 COMPOSITE SCORE EVALUATOR**: New comprehensive evaluation system
+  - Combines multiple validators into a single weighted score
+  - Evaluates three main categories:
+    * **Factual/Semantic Alignment**: 9 metrics (factual_consistency, answer_relevance, conceptual_similarity, compression_score, rouge_score, cosine_similarity, bleu_score, fuzzy_score, meteor_score)
+    * **Language Quality**: 3 metrics (clarity, readability, response_tone)
+    * **Safety/Security/Integrity**: 6 metrics (toxicity, gender_bias, racial_bias, hate_speech, data_leakage, insecure_output)
+  - Features:
+    * Custom weight configuration for top-level and submetric categories
+    * Configurable label thresholds with custom labels
+    * Binary threshold or weighted scoring modes
+    * Detailed breakdown of passed/failed metrics per category
+    * Overall confidence score with label
+    * Credit tracking and usage information
+  - New components:
+    * `CompositeScoreRequest` model with `llm_input_query`, `llm_output`, `llm_input_context`
+    * `CompositeScoreEvaluator` validator with custom request/response handlers
+    * Dedicated endpoint: `/api/v1/validators/composite/evaluate`
+    * `ValidatorDomain.COMPOSITE` enum
+    * Example usage in `example_composite_score.py`
+
 - **🎉 COMPLETE VALIDATOR IMPLEMENTATION**: Implemented all 52 core validators (81.25% of total)
   - **Input Validation**: 14/14 validators (100% COMPLETE) ✅
     - `ToxicityValidator`, `BiasValidator`, `InputPromptInjectionValidator` (existing)
@@ -39,6 +72,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Backward compatible with existing validators
 - **Flexible Response Handling**: No forced normalization, preserves API response structure
 - **Enhanced Enums**: Added 40+ new validator slugs across all domains
+- **Comprehensive Test Suite**: 97% test coverage achieved (exceeds >95% target)
+  - 127 total tests (51 new tests added)
+  - Full coverage of composite score feature
+  - Client integration tests with header verification
+  - Edge case testing (unicode, special characters, empty values)
+  - Error handling tests (HTTP errors, network errors)
+  - All validator post-init methods tested
+- **Examples Organization**: Created `examples/` directory with documentation
+  - `example.py` - General validator usage examples
+  - `example_composite_score.py` - Composite score evaluation examples
+  - `verify_installation.py` - Installation verification utility
+  - `examples/README.md` - Comprehensive examples documentation
 
 ### Changed
 - **Path Template Standardization**: Unified to `/api/v1/sdk/validators/{domain}/{validator}`

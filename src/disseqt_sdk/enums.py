@@ -14,6 +14,7 @@ class ValidatorDomain(Enum):
     AGENTIC_BEHAVIOR = "agentic-behavior"
     MCP_SECURITY = "mcp-security"
     THEMES_CLASSIFIER = "themes-classifier"
+    COMPOSITE = "composite"
 
 
 class InputValidation(Enum):
@@ -91,3 +92,9 @@ class ThemesClassifier(Enum):
     """Themes classifier validator slugs."""
 
     CLASSIFY = "classify"
+
+
+class Composite(Enum):
+    """Composite score evaluation slugs."""
+
+    EVALUATE = "evaluate"
