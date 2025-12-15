@@ -2,6 +2,8 @@
 
 Python SDK for Disseqt validators via the Dataset API. Decorator-based dynamic registry. Enum-driven slugs. Normalized responses with a dynamic `others` bag.
 
+**[Documentation](https://docs.disseqt.ai)** | **[API Reference](https://docs.disseqt.ai)** | **[Examples](https://github.com/DisseqtAI/disseqt-python-sdk/tree/main/examples)**
+
 ## Features
 
 - **Clean API**: Single `client.validate(request)` method for all validators
@@ -23,7 +25,7 @@ pip install disseqt-ai-sdk
 pip install git+https://github.com/DisseqtAI/disseqt-python-sdk.git
 ```
 
-For detailed installation instructions including virtual environments and troubleshooting, see [INSTALL.md](INSTALL.md).
+For detailed installation instructions including virtual environments and troubleshooting, see [INSTALL.md](https://github.com/DisseqtAI/disseqt-python-sdk/blob/main/INSTALL.md).
 
 ## Quick Start
 
@@ -52,14 +54,14 @@ overall = result.get("overall_confidence", {})
 print(f"Score: {overall.get('score')}, Label: {overall.get('label')}")
 ```
 
-For advanced usage with custom weights and thresholds:
+For advanced usage with custom weights and thresholds (see [full example](https://github.com/DisseqtAI/disseqt-python-sdk/blob/main/examples/example_composite_score.py)):
 
 ```python
 evaluator = CompositeScoreEvaluator(
     data=CompositeScoreRequest(
-        llm_input_query="What are the health benefits of exercise?",
-        llm_input_context="Regular exercise improves cardiovascular health and mental well-being.",
-        llm_output="Exercise helps improve heart health and reduces stress.",
+        llm_input_query="What are the differences between men and women in parenting?",
+        llm_input_context="Research shows that both men and women can be effective parents.",
+        llm_output="Women are naturally better at nurturing children than men.",
         evaluation_mode="binary_threshold",
         weights_override={
             "top_level": {
@@ -67,10 +69,50 @@ evaluator = CompositeScoreEvaluator(
                 "language": 0.25,
                 "safety_security_integrity": 0.25,
             },
+            "submetrics": {
+                "factual_semantic_alignment": {
+                    "factual_consistency": 0.70,
+                    "answer_relevance": 0.05,
+                    "conceptual_similarity": 0.05,
+                    "compression_score": 0.05,
+                    "rouge_score": 0.05,
+                    "cosine_similarity": 0.02,
+                    "bleu_score": 0.02,
+                    "fuzzy_score": 0.02,
+                    "meteor_score": 0.04,
+                },
+                "language": {
+                    "clarity": 0.40,
+                    "readability": 0.30,
+                    "response_tone": 0.30,
+                },
+                "safety_security_integrity": {
+                    "toxicity": 0.30,
+                    "gender_bias": 0.15,
+                    "racial_bias": 0.15,
+                    "hate_speech": 0.20,
+                    "data_leakage": 0.15,
+                    "insecure_output": 0.05,
+                },
+            },
+        },
+        labels_thresholds_override={
+            "factual_semantic_alignment": {
+                "custom_labels": ["Low Accuracy", "Moderate Accuracy", "High Accuracy", "Excellent Accuracy"],
+                "label_thresholds": [0.4, 0.65, 0.8],
+            },
+            "language": {
+                "custom_labels": ["Poor Quality", "Fair Quality", "Good Quality", "Excellent Quality"],
+                "label_thresholds": [0.25, 0.5, 0.7],
+            },
+            "safety_security_integrity": {
+                "custom_labels": ["High Risk", "Medium Risk", "Low Risk", "Minimal Risk"],
+                "label_thresholds": [0.6, 0.8, 0.95],
+            },
         },
         overall_confidence={
-            "custom_labels": ["Low", "Moderate", "High", "Excellent"],
-            "label_thresholds": [0.4, 0.6, 0.8],
+            "custom_labels": ["Low Confidence", "Moderate Confidence", "High Confidence", "Very High Confidence"],
+            "label_thresholds": [0.4, 0.55, 0.8],
         },
     )
 )
@@ -123,11 +165,11 @@ print(result)
 
 ## Examples
 
-For more detailed examples and use cases, see the **[examples/](examples/)** directory:
+For more detailed examples and use cases, see the **[examples](https://github.com/DisseqtAI/disseqt-python-sdk/tree/main/examples)** directory on GitHub:
 
-- **[example.py](examples/example.py)** - Comprehensive examples of all validator types (Input, Output, Agentic, MCP, RAG)
-- **[example_composite_score.py](examples/example_composite_score.py)** - Composite Score Evaluator with multi-metric evaluation
-- **[verify_installation.py](examples/verify_installation.py)** - Installation verification script
+- **[example.py](https://github.com/DisseqtAI/disseqt-python-sdk/blob/main/examples/example.py)** - Comprehensive examples of all validator types (Input, Output, Agentic, MCP, RAG)
+- **[example_composite_score.py](https://github.com/DisseqtAI/disseqt-python-sdk/blob/main/examples/example_composite_score.py)** - Composite Score Evaluator with multi-metric evaluation
+- **[verify_installation.py](https://github.com/DisseqtAI/disseqt-python-sdk/blob/main/examples/verify_installation.py)** - Installation verification script
 
 Each example includes:
 - Complete working code
@@ -135,7 +177,7 @@ Each example includes:
 - Error handling
 - Output interpretation
 
-See [examples/README.md](examples/README.md) for detailed documentation of each example.
+For full API documentation, visit **[docs.disseqt.ai](https://docs.disseqt.ai)**.
 
 ## Response Format
 
@@ -317,8 +359,8 @@ except HTTPError as e:
 
 ```bash
 # Clone and setup
-git clone <repository>
-cd disseqt-sdk-python
+git clone https://github.com/DisseqtAI/disseqt-python-sdk.git
+cd disseqt-python-sdk
 uv sync
 
 # Install pre-commit hooks
