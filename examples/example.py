@@ -21,7 +21,8 @@ def main():
     client = Client(
         project_id="e14f79b1-c839-44dc-96c8-f1166ed45a63",
         api_key="3a2e8d8b-3bd1-4300-a13a-58122f49b0a6",
-        base_url="https://production-monitoring-eu.disseqt.ai",
+        # base_url="https://production-monitoring-eu.disseqt.ai",
+        base_url="http://localhost:8081",
         timeout=30,
     )
 

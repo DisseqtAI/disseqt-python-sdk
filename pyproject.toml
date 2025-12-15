@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "disseqt-sdk"
+name = "disseqt-ai-sdk"
 version = "0.2.0"
 description = "Python SDK for disseqt.ai"
 readme = "README.md"
@@ -11,6 +11,7 @@ license = {text = "Proprietary"}
 authors = [
     {name = "Disseqt AI Limited", email = "support@disseqt.ai"},
 ]
+keywords = ["ai", "llm", "validation", "sdk", "machine-learning", "safety", "guardrails"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -26,6 +27,13 @@ dependencies = [
     "requests>=2.31.0",
     "typing-extensions>=4.8.0",
 ]
+
+[project.urls]
+Homepage = "https://disseqt.ai"
+Documentation = "https://github.com/DisseqtAI/disseqt-python-sdk#readme"
+Repository = "https://github.com/DisseqtAI/disseqt-python-sdk"
+Issues = "https://github.com/DisseqtAI/disseqt-python-sdk/issues"
+Changelog = "https://github.com/DisseqtAI/disseqt-python-sdk/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/disseqt_sdk"]

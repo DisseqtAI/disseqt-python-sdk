@@ -13,29 +13,17 @@ Python SDK for Disseqt validators via the Dataset API. Decorator-based dynamic r
 
 ## Installation
 
-### From GitHub (Current Method)
+```bash
+pip install disseqt-ai-sdk
+```
+
+### From GitHub
 
 ```bash
 pip install git+https://github.com/DisseqtAI/disseqt-python-sdk.git
 ```
 
-For specific versions:
-
-```bash
-# Specific branch
-pip install git+https://github.com/DisseqtAI/disseqt-python-sdk.git@main
-
-# Specific tag (when available)
-pip install git+https://github.com/DisseqtAI/disseqt-python-sdk.git@v0.1.0
-```
-
-### From PyPI (Coming Soon)
-
-```bash
-pip install disseqt-sdk
-```
-
-For detailed installation instructions including private repository access, virtual environments, and troubleshooting, see [INSTALL.md](INSTALL.md).
+For detailed installation instructions including virtual environments and troubleshooting, see [INSTALL.md](INSTALL.md).
 
 ## Quick Start
 

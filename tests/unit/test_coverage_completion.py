@@ -30,9 +30,6 @@ class TestValidatorPostInit:
         from disseqt_sdk.validators.agentic_behavior.agent_goal_accuracy import (
             AgentGoalAccuracyValidator,
         )
-        from disseqt_sdk.validators.agentic_behavior.context_switching import (
-            ContextSwitchingValidator,
-        )
         from disseqt_sdk.validators.agentic_behavior.fallback_rate import (
             FallbackRateValidator,
         )
@@ -58,7 +55,6 @@ class TestValidatorPostInit:
 
         validators = [
             AgentGoalAccuracyValidator(data=data, config=config),
-            ContextSwitchingValidator(data=data, config=config),
             FallbackRateValidator(data=data, config=config),
             IntentResolutionValidator(data=data, config=config),
             PlanCoherenceValidator(data=data, config=config),

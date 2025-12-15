@@ -50,7 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Agentic Behavior**: 9/9 validators (100% COMPLETE) ✅
     - `TopicAdherenceValidator`, `ToolCallAccuracyValidator` (existing)
     - `ToolFailureRateValidator`, `PlanOptimalityValidator`, `AgentGoalAccuracyValidator` (new)
-    - `IntentResolutionValidator`, `PlanCoherenceValidator`, `FallbackRateValidator`, `ContextSwitchingValidator` (new)
+    - `IntentResolutionValidator`, `PlanCoherenceValidator`, `FallbackRateValidator` (new)
   - **MCP Security**: 3/3 validators (100% COMPLETE) ✅
     - `McpPromptInjectionValidator`, `DataLeakageValidator` (existing)
     - `InsecureOutputValidator` (new)

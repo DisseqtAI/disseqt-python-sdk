@@ -26,6 +26,7 @@ class InputValidation(Enum):
     INTERSECTIONALITY = "intersectionality"
     RACIAL_BIAS = "racial-bias"
     GENDER_BIAS = "gender-bias"
+    POLITICAL_BIAS = "political-bias"
     SELF_HARM = "self-harm"
     VIOLENCE = "violence"
     TERRORISM = "terrorism"
@@ -38,14 +39,37 @@ class InputValidation(Enum):
 class OutputValidation(Enum):
     """Output validation validator slugs."""
 
+    # Quality metrics
     FACTUAL_CONSISTENCY = "factual-consistency"
     ANSWER_RELEVANCE = "answer-relevance"
-    BIAS = "bias"
-    TOXICITY = "toxicity"
+    CONCEPTUAL_SIMILARITY = "conceptual-similarity"
+    GRAMMAR_CORRECTNESS = "grammatical-correctness"
+    RESPONSE_TONE = "response-tone"
     CLARITY = "clarity"
     COHERENCE = "coherence"
+    CREATIVITY = "creativity"
+    READABILITY = "readability"
+    DIVERSITY = "diversity"
+    NARRATIVE_CONTINUITY = "narrative-continuity"
+
+    # Safety & bias detection
+    BIAS = "bias"
+    GENDER_BIAS = "gender-bias"
+    RACIAL_BIAS = "racial-bias"
+    POLITICAL_BIAS = "political-bias"
+    TOXICITY = "toxicity"
+    NSFW = "nsfw"
+    TERRORISM = "terrorism"
+    VIOLENCE = "violence"
+    SELF_HARM = "self-harm"
+    SEXUAL_CONTENT = "sexual-content"
+    HATE_SPEECH = "hate-speech"
+
+    # Security
     DATA_LEAKAGE = "data-leakage"
     INSECURE_OUTPUT = "insecure-output"
+
+    # Scoring metrics
     BLEU_SCORE = "bleu-score"
     ROUGE_SCORE = "rouge-score"
     METEOR_SCORE = "meteor-score"
@@ -77,7 +101,6 @@ class AgenticBehavior(Enum):
     INTENT_RESOLUTION = "intent-resolution"
     PLAN_COHERENCE = "plan-coherence"
     FALLBACK_RATE = "fallback-rate"
-    CONTEXT_SWITCHING = "context-switching"
 
 
 class McpSecurity(Enum):

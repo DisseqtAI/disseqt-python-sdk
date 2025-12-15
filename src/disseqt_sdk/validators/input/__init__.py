@@ -6,6 +6,7 @@ from .hate_speech import HateSpeechValidator
 from .intersectionality import IntersectionalityValidator
 from .invisible_text import InvisibleTextValidator
 from .nsfw import NSFWValidator
+from .political_bias import PoliticalBiasValidator
 from .prompt_injection import InputPromptInjectionValidator
 from .racial_bias import RacialBiasValidator
 from .safety import ToxicityValidator
@@ -21,6 +22,7 @@ __all__ = [
     "IntersectionalityValidator",
     "RacialBiasValidator",
     "GenderBiasValidator",
+    "PoliticalBiasValidator",
     "SelfHarmValidator",
     "ViolenceValidator",
     "TerrorismValidator",

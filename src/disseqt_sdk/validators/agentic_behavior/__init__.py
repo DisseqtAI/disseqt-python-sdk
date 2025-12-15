@@ -1,7 +1,6 @@
 """Agentic behavior validators."""
 
 from .agent_goal_accuracy import AgentGoalAccuracyValidator
-from .context_switching import ContextSwitchingValidator
 from .fallback_rate import FallbackRateValidator
 from .intent_resolution import IntentResolutionValidator
 from .plan_coherence import PlanCoherenceValidator
@@ -19,5 +18,4 @@ __all__ = [
     "IntentResolutionValidator",
     "PlanCoherenceValidator",
     "FallbackRateValidator",
-    "ContextSwitchingValidator",
 ]
