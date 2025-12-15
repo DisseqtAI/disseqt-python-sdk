@@ -107,20 +107,106 @@ All validators return a normalized response:
 ## Available Validators
 
 ### Input Validation
-- **ToxicityValidator**: Detects toxic content in input text
-- **SecurityValidator**: Identifies security issues in input
 
-### Output Validation  
-- **FactualConsistencyValidator**: Checks factual accuracy of output
+Safety & content moderation for user inputs:
+
+- **ToxicityValidator** - Detects toxic content in input text
+- **BiasValidator** - Detects general bias in input
+- **InputPromptInjectionValidator** - Detects prompt injection attempts
+- **IntersectionalityValidator** - Analyzes intersectional bias
+- **RacialBiasValidator** - Detects racial bias
+- **GenderBiasValidator** - Detects gender bias
+- **PoliticalBiasValidator** - Detects political bias
+- **SelfHarmValidator** - Detects self-harm content
+- **ViolenceValidator** - Detects violent content
+- **TerrorismValidator** - Detects terrorism-related content
+- **SexualContentValidator** - Detects sexual content
+- **HateSpeechValidator** - Detects hate speech
+- **NSFWValidator** - Detects NSFW content
+- **InvisibleTextValidator** - Detects hidden/invisible text attacks
+
+### Output Validation
+
+**Quality Metrics:**
+- **FactualConsistencyValidator** - Checks factual accuracy of output
+- **AnswerRelevanceValidator** - Measures answer relevance to the question
+- **ClarityValidator** - Evaluates clarity of response
+- **CoherenceValidator** - Measures logical coherence
+- **ConceptualSimilarityValidator** - Measures conceptual similarity
+- **CreativityValidator** - Evaluates creativity of response
+- **DiversityValidator** - Measures response diversity
+- **GrammarCorrectnessValidator** - Checks grammar correctness
+- **NarrativeContinuityValidator** - Evaluates narrative flow
+- **ReadabilityValidator** - Measures readability level
+- **ResponseToneValidator** - Analyzes response tone
+
+**Safety & Bias Detection:**
+- **OutputToxicityValidator** - Detects toxic content in output
+- **OutputBiasValidator** - Detects bias in output
+- **OutputGenderBiasValidator** - Detects gender bias in output
+- **OutputRacialBiasValidator** - Detects racial bias in output
+- **OutputPoliticalBiasValidator** - Detects political bias in output
+- **OutputHateSpeechValidator** - Detects hate speech in output
+- **OutputNSFWValidator** - Detects NSFW content in output
+- **OutputSelfHarmValidator** - Detects self-harm content in output
+- **OutputSexualContentValidator** - Detects sexual content in output
+- **OutputTerrorismValidator** - Detects terrorism content in output
+- **OutputViolenceValidator** - Detects violent content in output
+
+**Security:**
+- **OutputDataLeakageValidator** - Detects data leakage in output
+- **OutputInsecureOutputValidator** - Detects insecure output patterns
+
+**Scoring Metrics:**
+- **BleuScoreValidator** - Calculates BLEU score
+- **RougeScoreValidator** - Calculates ROUGE score
+- **MeteorScoreValidator** - Calculates METEOR score
+- **CosineSimilarityValidator** - Calculates cosine similarity
+- **FuzzyScoreValidator** - Calculates fuzzy matching score
+- **CompressionScoreValidator** - Measures compression ratio
 
 ### RAG Grounding
-- **ContextRelevanceValidator**: Validates context relevance in RAG systems
+
+Validators for Retrieval-Augmented Generation systems:
+
+- **ContextRelevanceValidator** - Validates context relevance
+- **ContextRecallValidator** - Measures context recall
+- **ContextPrecisionValidator** - Measures context precision
+- **ContextEntitiesRecallValidator** - Measures entity recall from context
+- **NoiseSensitivityValidator** - Evaluates noise sensitivity
+- **ResponseRelevancyValidator** - Measures response relevancy to context
+- **FaithfulnessValidator** - Measures faithfulness to source context
 
 ### Agentic Behavior
-- **TopicAdherenceValidator**: Ensures agents stay on topic
+
+Validators for AI agent evaluation:
+
+- **TopicAdherenceValidator** - Ensures agents stay on topic
+- **ToolCallAccuracyValidator** - Measures tool call accuracy
+- **ToolFailureRateValidator** - Tracks tool failure rates
+- **PlanOptimalityValidator** - Evaluates plan optimality
+- **AgentGoalAccuracyValidator** - Measures goal achievement accuracy
+- **IntentResolutionValidator** - Evaluates intent resolution
+- **PlanCoherenceValidator** - Measures plan coherence
+- **FallbackRateValidator** - Tracks fallback rates
 
 ### MCP Security
-- **McpPromptInjectionValidator**: Detects prompt injection attempts
+
+Security validators for Model Context Protocol:
+
+- **McpPromptInjectionValidator** - Detects prompt injection attempts
+- **DataLeakageValidator** - Detects data leakage
+- **InsecureOutputValidator** - Detects insecure output patterns
+
+### Composite Score
+
+Multi-metric evaluation:
+
+- **CompositeScoreEvaluator** - Combines multiple validators for comprehensive scoring
+
+### Themes Classifier
+
+- **ClassifyValidator** - Classifies content into themes/categories
 
 ## Configuration
 
@@ -142,7 +228,7 @@ config = SDKConfigInput(
 client = Client(
     project_id="your_project_id",
     api_key="your_api_key",
-    base_url="https://dataset-api-eu.disseqt.ai",  # Default
+    base_url="https://production-monitoring-eu.disseqt.ai",  # Default
     timeout=30  # Default timeout in seconds
 )
 ```
@@ -156,6 +242,8 @@ Each validation domain has its own request model:
 - `RagGroundingRequest`: For RAG validation (prompt, context, response)
 - `AgenticBehaviourRequest`: For agentic validation (conversation_history, tool_calls, etc.)
 - `McpSecurityRequest`: For MCP security (prompt, optional context/response)
+- `CompositeScoreRequest`: For composite scoring (llm_input_query, llm_output, evaluation_mode, weights)
+- `ThemesClassifierRequest`: For theme classification (text, return_subthemes, max_themes)
 
 ## Error Handling
 

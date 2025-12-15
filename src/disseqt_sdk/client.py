@@ -38,7 +38,7 @@ class Client:
         self,
         project_id: str,
         api_key: str,
-        base_url: str = "https://dataset-api-eu.disseqt.ai",
+        base_url: str = "https://production-monitoring-eu.disseqt.ai",
         timeout: int = 30,
     ) -> None:
         """Initialize the Disseqt SDK client.

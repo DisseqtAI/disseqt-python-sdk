@@ -225,7 +225,7 @@ class TestClientCustomHandlerCoverage:
 
         with requests_mock.Mocker() as m:
             m.post(
-                "https://dataset-api-eu.disseqt.ai/api/v1/validators/composite/evaluate",
+                "https://production-monitoring-eu.disseqt.ai/api/v1/validators/composite/evaluate",
                 json={"overall_confidence": {"score": 0.7}},
             )
 
@@ -259,7 +259,7 @@ class TestClientCustomHandlerCoverage:
 
         with requests_mock.Mocker() as m:
             m.post(
-                "https://dataset-api-eu.disseqt.ai/api/v1/validators/composite/evaluate",
+                "https://production-monitoring-eu.disseqt.ai/api/v1/validators/composite/evaluate",
                 json=server_response,
             )
 
