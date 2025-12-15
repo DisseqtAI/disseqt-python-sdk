@@ -27,6 +27,58 @@ For detailed installation instructions including virtual environments and troubl
 
 ## Quick Start
 
+### Composite Score Evaluation
+
+The Composite Score Evaluator combines multiple validators for comprehensive LLM output evaluation:
+
+```python
+from disseqt_sdk import Client
+from disseqt_sdk.models.composite_score import CompositeScoreRequest
+from disseqt_sdk.validators.composite.evaluate import CompositeScoreEvaluator
+
+# Initialize client
+client = Client(project_id="your_project_id", api_key="your_api_key")
+
+# Simple composite evaluation
+evaluator = CompositeScoreEvaluator(
+    data=CompositeScoreRequest(
+        llm_input_query="What is the capital of France?",
+        llm_output="The capital of France is Paris.",
+    )
+)
+
+result = client.validate(evaluator)
+overall = result.get("overall_confidence", {})
+print(f"Score: {overall.get('score')}, Label: {overall.get('label')}")
+```
+
+For advanced usage with custom weights and thresholds:
+
+```python
+evaluator = CompositeScoreEvaluator(
+    data=CompositeScoreRequest(
+        llm_input_query="What are the health benefits of exercise?",
+        llm_input_context="Regular exercise improves cardiovascular health and mental well-being.",
+        llm_output="Exercise helps improve heart health and reduces stress.",
+        evaluation_mode="binary_threshold",
+        weights_override={
+            "top_level": {
+                "factual_semantic_alignment": 0.50,
+                "language": 0.25,
+                "safety_security_integrity": 0.25,
+            },
+        },
+        overall_confidence={
+            "custom_labels": ["Low", "Moderate", "High", "Excellent"],
+            "label_thresholds": [0.4, 0.6, 0.8],
+        },
+    )
+)
+result = client.validate(evaluator)
+```
+
+### Individual Validators
+
 ```python
 from disseqt_sdk import Client, SDKConfigInput
 from disseqt_sdk.models.input_validation import InputValidationRequest
