@@ -12,7 +12,6 @@ from ..base import InputValidator
 @register_validator(
     domain=ValidatorDomain.INPUT_VALIDATION,
     slug=InputValidation.SELF_HARM.value,
-
 )
 @dataclass(slots=True)
 class SelfHarmValidator(InputValidator):

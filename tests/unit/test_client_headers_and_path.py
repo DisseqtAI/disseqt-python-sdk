@@ -5,12 +5,11 @@ import uuid
 from unittest.mock import patch
 
 import pytest
-from requests_mock import ANY
-
 from disseqt_sdk.client import HTTPError
 from disseqt_sdk.validators.agentic_behavior.reliability import TopicAdherenceValidator
 from disseqt_sdk.validators.input.safety import ToxicityValidator
 from disseqt_sdk.validators.output.accuracy import FactualConsistencyValidator
+from requests_mock import ANY
 
 
 class TestClientHeaders:
@@ -74,7 +73,9 @@ class TestClientPaths:
         """Test agentic behavior URL path construction."""
         validator = TopicAdherenceValidator(data=agentic_behaviour_request, config=config)
 
-        expected_url = "https://test-api.disseqt.ai/api/v1/sdk/validators/agentic-behavior/topic-adherence"
+        expected_url = (
+            "https://test-api.disseqt.ai/api/v1/sdk/validators/agentic-behavior/topic-adherence"
+        )
         requests_mock.post(expected_url, json={"data": {}, "status": {"code": "200"}})
 
         client.validate(validator)
@@ -86,7 +87,9 @@ class TestClientPaths:
 class TestClientPayloads:
     """Test client payload construction."""
 
-    def test_request_payload_structure(self, requests_mock, client, config, input_validation_request):
+    def test_request_payload_structure(
+        self, requests_mock, client, config, input_validation_request
+    ):
         """Test that request payload has correct structure."""
         validator = ToxicityValidator(data=input_validation_request, config=config)
 
@@ -148,7 +151,9 @@ class TestClientErrorHandling:
         assert "API request failed" in str(exc_info.value)
         assert exc_info.value.response_body == "Bad Request"
 
-    def test_json_decode_error_handling(self, requests_mock, client, config, input_validation_request):
+    def test_json_decode_error_handling(
+        self, requests_mock, client, config, input_validation_request
+    ):
         """Test JSON decode error handling."""
         validator = ToxicityValidator(data=input_validation_request, config=config)
 
@@ -159,12 +164,13 @@ class TestClientErrorHandling:
 
         assert "Failed to decode JSON response" in str(exc_info.value)
 
-    @patch('requests.post')
+    @patch("requests.post")
     def test_network_error_handling(self, mock_post, client, config, input_validation_request):
         """Test network error handling."""
         validator = ToxicityValidator(data=input_validation_request, config=config)
 
         import requests
+
         mock_post.side_effect = requests.RequestException("Network error")
 
         with pytest.raises(HTTPError) as exc_info:
@@ -173,7 +179,9 @@ class TestClientErrorHandling:
         assert exc_info.value.status_code == 0
         assert "Network error" in str(exc_info.value)
 
-    def test_response_body_truncation(self, requests_mock, client, config, input_validation_request):
+    def test_response_body_truncation(
+        self, requests_mock, client, config, input_validation_request
+    ):
         """Test that response body is truncated in error messages."""
         validator = ToxicityValidator(data=input_validation_request, config=config)
 

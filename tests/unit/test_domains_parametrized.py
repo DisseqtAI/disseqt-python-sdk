@@ -1,7 +1,6 @@
 """Parametrized tests across all domains and validators."""
 
 import pytest
-
 from disseqt_sdk.enums import ValidatorDomain
 from disseqt_sdk.models.agentic_behaviour import AgenticBehaviourRequest
 from disseqt_sdk.models.input_validation import InputValidationRequest
@@ -19,20 +18,19 @@ from disseqt_sdk.validators.rag_grounding.grounding import ContextRelevanceValid
 class TestValidatorDomainProperties:
     """Test domain properties across all validators."""
 
-    @pytest.mark.parametrize("validator_class,expected_domain,expected_slug", [
-        (ToxicityValidator, ValidatorDomain.INPUT_VALIDATION, "toxicity"),
-        (BiasValidator, ValidatorDomain.INPUT_VALIDATION, "bias"),
-        (FactualConsistencyValidator, ValidatorDomain.OUTPUT_VALIDATION, "factual-consistency"),
-        (TopicAdherenceValidator, ValidatorDomain.AGENTIC_BEHAVIOR, "topic-adherence"),
-        (McpPromptInjectionValidator, ValidatorDomain.MCP_SECURITY, "prompt-injection"),
-        (ContextRelevanceValidator, ValidatorDomain.RAG_GROUNDING, "context-relevance"),
-    ])
+    @pytest.mark.parametrize(
+        "validator_class,expected_domain,expected_slug",
+        [
+            (ToxicityValidator, ValidatorDomain.INPUT_VALIDATION, "toxicity"),
+            (BiasValidator, ValidatorDomain.INPUT_VALIDATION, "bias"),
+            (FactualConsistencyValidator, ValidatorDomain.OUTPUT_VALIDATION, "factual-consistency"),
+            (TopicAdherenceValidator, ValidatorDomain.AGENTIC_BEHAVIOR, "topic-adherence"),
+            (McpPromptInjectionValidator, ValidatorDomain.MCP_SECURITY, "prompt-injection"),
+            (ContextRelevanceValidator, ValidatorDomain.RAG_GROUNDING, "context-relevance"),
+        ],
+    )
     def test_validator_domain_and_slug_properties(
-        self,
-        validator_class,
-        expected_domain,
-        expected_slug,
-        config
+        self, validator_class, expected_domain, expected_slug, config
     ):
         """Test that validators have correct domain and slug properties."""
         # Create appropriate request data based on validator type
@@ -54,14 +52,17 @@ class TestValidatorDomainProperties:
         assert validator.domain == expected_domain
         assert validator.slug == expected_slug
 
-    @pytest.mark.parametrize("validator_class", [
-        ToxicityValidator,
-        BiasValidator,
-        FactualConsistencyValidator,
-        TopicAdherenceValidator,
-        McpPromptInjectionValidator,
-        ContextRelevanceValidator,
-    ])
+    @pytest.mark.parametrize(
+        "validator_class",
+        [
+            ToxicityValidator,
+            BiasValidator,
+            FactualConsistencyValidator,
+            TopicAdherenceValidator,
+            McpPromptInjectionValidator,
+            ContextRelevanceValidator,
+        ],
+    )
     def test_validator_payload_structure(self, validator_class, config):
         """Test that all validators produce correct payload structure."""
         # Create appropriate request data
@@ -87,20 +88,18 @@ class TestValidatorDomainProperties:
         assert "threshold" in payload["config_input"]
         assert payload["config_input"]["threshold"] == config.threshold
 
-    @pytest.mark.parametrize("validator_class,expected_path_segment", [
-        (ToxicityValidator, "input-validation/toxicity"),
-        (BiasValidator, "input-validation/bias"),
-        (FactualConsistencyValidator, "output-validation/factual-consistency"),
-        (TopicAdherenceValidator, "agentic-behavior/topic-adherence"),
-        (McpPromptInjectionValidator, "mcp-security/prompt-injection"),
-        (ContextRelevanceValidator, "rag-grounding/context-relevance"),
-    ])
-    def test_validator_url_path_construction(
-        self,
-        validator_class,
-        expected_path_segment,
-        config
-    ):
+    @pytest.mark.parametrize(
+        "validator_class,expected_path_segment",
+        [
+            (ToxicityValidator, "input-validation/toxicity"),
+            (BiasValidator, "input-validation/bias"),
+            (FactualConsistencyValidator, "output-validation/factual-consistency"),
+            (TopicAdherenceValidator, "agentic-behavior/topic-adherence"),
+            (McpPromptInjectionValidator, "mcp-security/prompt-injection"),
+            (ContextRelevanceValidator, "rag-grounding/context-relevance"),
+        ],
+    )
+    def test_validator_url_path_construction(self, validator_class, expected_path_segment, config):
         """Test URL path construction for all validators."""
         # Create appropriate request data
         if validator_class in [ToxicityValidator, BiasValidator]:
@@ -118,8 +117,7 @@ class TestValidatorDomainProperties:
 
         # Test path template formatting
         path = validator._path_template.format(
-            domain=validator.domain.value,
-            validator=validator.slug
+            domain=validator.domain.value, validator=validator.slug
         )
 
         expected_path = f"/api/v1/sdk/validators/{expected_path_segment}"
@@ -141,21 +139,15 @@ class TestRequestModelFieldMapping:
             # Test with all fields
             if request_class == InputValidationRequest:
                 request = request_class(
-                    prompt="test prompt",
-                    context="test context",
-                    response="test response"
+                    prompt="test prompt", context="test context", response="test response"
                 )
             elif request_class == McpSecurityRequest:
                 request = request_class(
-                    prompt="test prompt",
-                    context="test context",
-                    response="test response"
+                    prompt="test prompt", context="test context", response="test response"
                 )
             elif request_class == RagGroundingRequest:
                 request = request_class(
-                    prompt="test prompt",
-                    context="test context",
-                    response="test response"
+                    prompt="test prompt", context="test context", response="test response"
                 )
 
             input_data = request.to_input_data()
@@ -170,7 +162,7 @@ class TestRequestModelFieldMapping:
             conversation_history=["user: hello", "agent: hi"],
             tool_calls=[{"name": "search", "args": {}}],
             agent_responses=["hi"],
-            reference_data={"topics": ["greeting"]}
+            reference_data={"topics": ["greeting"]},
         )
 
         input_data = request.to_input_data()
@@ -193,14 +185,17 @@ class TestRequestModelFieldMapping:
 class TestValidatorInitialization:
     """Test validator initialization across all types."""
 
-    @pytest.mark.parametrize("validator_class", [
-        ToxicityValidator,
-        BiasValidator,
-        FactualConsistencyValidator,
-        TopicAdherenceValidator,
-        McpPromptInjectionValidator,
-        ContextRelevanceValidator,
-    ])
+    @pytest.mark.parametrize(
+        "validator_class",
+        [
+            ToxicityValidator,
+            BiasValidator,
+            FactualConsistencyValidator,
+            TopicAdherenceValidator,
+            McpPromptInjectionValidator,
+            ContextRelevanceValidator,
+        ],
+    )
     def test_validator_post_init_sets_properties(self, validator_class, config):
         """Test that __post_init__ correctly sets domain and slug."""
         # Create appropriate request data

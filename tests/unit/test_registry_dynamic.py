@@ -1,7 +1,6 @@
 """Test dynamic registry system."""
 
 import pytest
-
 from disseqt_sdk.enums import InputValidation, OutputValidation, ValidatorDomain
 from disseqt_sdk.registry import (
     _VALIDATOR_REGISTRY,
@@ -20,6 +19,7 @@ class TestValidatorRegistry:
 
     def test_register_validator_decorator(self):
         """Test validator registration via decorator."""
+
         @register_validator(
             domain=ValidatorDomain.INPUT_VALIDATION,
             slug=InputValidation.TOXICITY.value,
@@ -40,6 +40,7 @@ class TestValidatorRegistry:
 
     def test_register_multiple_validators(self):
         """Test registering multiple validators."""
+
         @register_validator(
             domain=ValidatorDomain.INPUT_VALIDATION,
             slug=InputValidation.TOXICITY.value,
@@ -68,6 +69,7 @@ class TestValidatorRegistry:
 
     def test_get_validator_metadata_success(self):
         """Test successful retrieval of validator metadata."""
+
         @register_validator(
             domain=ValidatorDomain.INPUT_VALIDATION,
             slug=InputValidation.BIAS.value,
@@ -77,8 +79,7 @@ class TestValidatorRegistry:
             pass
 
         metadata = get_validator_metadata(
-            ValidatorDomain.INPUT_VALIDATION,
-            InputValidation.BIAS.value
+            ValidatorDomain.INPUT_VALIDATION, InputValidation.BIAS.value
         )
 
         assert metadata["class"] == BiasValidator
@@ -89,10 +90,7 @@ class TestValidatorRegistry:
     def test_get_validator_metadata_not_found(self):
         """Test error when validator metadata not found."""
         with pytest.raises(KeyError, match="Validator not registered"):
-            get_validator_metadata(
-                ValidatorDomain.INPUT_VALIDATION,
-                "nonexistent-validator"
-            )
+            get_validator_metadata(ValidatorDomain.INPUT_VALIDATION, "nonexistent-validator")
 
     def test_list_registered_validators_empty(self):
         """Test listing validators when registry is empty."""
@@ -101,6 +99,7 @@ class TestValidatorRegistry:
 
     def test_list_registered_validators_with_data(self):
         """Test listing validators with registered data."""
+
         @register_validator(
             domain=ValidatorDomain.INPUT_VALIDATION,
             slug=InputValidation.TOXICITY.value,
@@ -131,6 +130,7 @@ class TestValidatorRegistry:
 
     def test_decorator_returns_original_class(self):
         """Test that decorator returns the original class unchanged."""
+
         class OriginalValidator:
             def test_method(self):
                 return "test"
@@ -146,6 +146,7 @@ class TestValidatorRegistry:
 
     def test_default_path_template(self):
         """Test default path template is used when not specified."""
+
         @register_validator(
             domain=ValidatorDomain.INPUT_VALIDATION,
             slug=InputValidation.TOXICITY.value,
@@ -154,8 +155,7 @@ class TestValidatorRegistry:
             pass
 
         metadata = get_validator_metadata(
-            ValidatorDomain.INPUT_VALIDATION,
-            InputValidation.TOXICITY.value
+            ValidatorDomain.INPUT_VALIDATION, InputValidation.TOXICITY.value
         )
 
         assert metadata["path_template"] == "/api/v1/sdk/validators/{domain}/{validator}"
@@ -173,14 +173,14 @@ class TestValidatorRegistry:
             pass
 
         metadata = get_validator_metadata(
-            ValidatorDomain.INPUT_VALIDATION,
-            InputValidation.TOXICITY.value
+            ValidatorDomain.INPUT_VALIDATION, InputValidation.TOXICITY.value
         )
 
         assert metadata["path_template"] == custom_template
 
     def test_registry_key_format(self):
         """Test that registry keys follow expected format."""
+
         @register_validator(
             domain=ValidatorDomain.INPUT_VALIDATION,
             slug=InputValidation.TOXICITY.value,

@@ -12,7 +12,6 @@ from ..base import McpSecurityValidator
 @register_validator(
     domain=ValidatorDomain.MCP_SECURITY,
     slug=McpSecurity.PROMPT_INJECTION.value,
-
 )
 @dataclass(slots=True)
 class McpPromptInjectionValidator(McpSecurityValidator):

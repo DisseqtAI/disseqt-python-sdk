@@ -12,7 +12,6 @@ from ..base import AgenticBehaviourValidator
 @register_validator(
     domain=ValidatorDomain.AGENTIC_BEHAVIOR,
     slug=AgenticBehavior.TOPIC_ADHERENCE.value,
-
 )
 @dataclass(slots=True)
 class TopicAdherenceValidator(AgenticBehaviourValidator):

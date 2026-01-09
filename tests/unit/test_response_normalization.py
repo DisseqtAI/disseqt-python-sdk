@@ -1,7 +1,6 @@
 """Test response normalization."""
 
 import pytest
-
 from disseqt_sdk.response import normalize_server_payload, validate_actual_value_type
 
 
@@ -25,15 +24,8 @@ class TestResponseNormalization:
         result = normalize_server_payload(server_response)
 
         expected = {
-            "data": {
-                "metric_name": "test_metric",
-                "actual_value": 0.5,
-                "others": {}
-            },
-            "status": {
-                "code": "200",
-                "message": "Success"
-            }
+            "data": {"metric_name": "test_metric", "actual_value": 0.5, "others": {}},
+            "status": {"code": "200", "message": "Success"},
         }
 
         assert result == expected
@@ -49,10 +41,7 @@ class TestResponseNormalization:
                 "metric_labels": ["label1", "label2"],  # Known field
                 "another_unknown": [1, 2, 3],
             },
-            "status": {
-                "code": "201",
-                "message": "Created"
-            }
+            "status": {"code": "201", "message": "Created"},
         }
 
         result = normalize_server_payload(server_response)
@@ -74,24 +63,11 @@ class TestResponseNormalization:
 
     def test_normalize_response_missing_data_section(self):
         """Test normalization when data section is missing."""
-        server_response = {
-            "status": {
-                "code": "200",
-                "message": "Success"
-            }
-        }
+        server_response = {"status": {"code": "200", "message": "Success"}}
 
         result = normalize_server_payload(server_response)
 
-        expected = {
-            "data": {
-                "others": {}
-            },
-            "status": {
-                "code": "200",
-                "message": "Success"
-            }
-        }
+        expected = {"data": {"others": {}}, "status": {"code": "200", "message": "Success"}}
 
         assert result == expected
 
@@ -116,15 +92,7 @@ class TestResponseNormalization:
 
         result = normalize_server_payload(server_response)
 
-        expected = {
-            "data": {
-                "others": {}
-            },
-            "status": {
-                "code": "200",
-                "message": "Success"
-            }
-        }
+        expected = {"data": {"others": {}}, "status": {"code": "200", "message": "Success"}}
 
         assert result == expected
 
@@ -138,7 +106,7 @@ class TestResponseNormalization:
                 "metric_labels": ["Good", "Better", "Best"],
                 "threshold": ["Pass"],
                 "threshold_score": 0.8,
-                "extra_field": "goes_to_others"
+                "extra_field": "goes_to_others",
             }
         }
 
@@ -207,7 +175,7 @@ class TestNewAPIResponseFormat:
                 "threshold_score": 0.5,
                 "processing_time": 0.123,
                 "confidence": 0.85,
-                "top_label": "toxic"
+                "top_label": "toxic",
             },
             "category": "input-validation",
             "request_id": "d43426b3-bfd0-4dd8-b875-aa92cfa5f678",
@@ -215,8 +183,8 @@ class TestNewAPIResponseFormat:
                 "credits_deducted": 1.0,
                 "remaining_credits": 212.0,
                 "operation": "input-validation_validation_toxicity",
-                "credit_cost": 1.0
-            }
+                "credit_cost": 1.0,
+            },
         }
 
         result = normalize_server_payload(server_response)
@@ -236,7 +204,10 @@ class TestNewAPIResponseFormat:
 
         # Check others bag
         others = data["others"]
-        assert others["explanation"] == "Content failed toxicity validation with score 0.85 (threshold: 0.50). toxic"
+        assert (
+            others["explanation"]
+            == "Content failed toxicity validation with score 0.85 (threshold: 0.50). toxic"
+        )
         assert others["category"] == "input-validation"
         assert others["request_id"] == "d43426b3-bfd0-4dd8-b875-aa92cfa5f678"
         assert others["credits_info"]["credits_deducted"] == 1.0
@@ -262,8 +233,8 @@ class TestNewAPIResponseFormat:
                 "credits_deducted": 1,
                 "remaining_credits": 212,
                 "operation": "input-validation_validation_toxicity",
-                "credit_cost": 1
-            }
+                "credit_cost": 1,
+            },
         }
 
         result = normalize_server_payload(server_response)
@@ -289,12 +260,9 @@ class TestNewAPIResponseFormat:
             "label": "relevant",
             "passed": True,
             "explanation": "Content passed context-relevance validation",
-            "details": {
-                "metric_name": "context-relevance",
-                "threshold_score": 0.7
-            },
+            "details": {"metric_name": "context-relevance", "threshold_score": 0.7},
             "category": "rag-grounding",
-            "request_id": "test-request-456"
+            "request_id": "test-request-456",
         }
 
         result = normalize_server_payload(server_response)

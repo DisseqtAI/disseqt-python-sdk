@@ -101,7 +101,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Total Progress**: 52/64 validators (81.25% complete) 🚀
 - **Completed Domains**: 4/6 domains at 100%
   - ✅ Input Validation (14/14)
-  - ✅ Agentic Behavior (9/9) 
+  - ✅ Agentic Behavior (9/9)
   - ✅ MCP Security (3/3)
   - ✅ Themes Classifier (1/1)
 - **Nearly Complete**: RAG Grounding (7/8, missing only `answer-correctness`)
@@ -109,7 +109,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🎯 **MAJOR MILESTONE ACHIEVED**
 - **All Core Safety Validators**: Complete coverage of toxicity, bias, hate speech, violence, terrorism, self-harm detection
-- **All Agentic Behavior Validators**: Complete coverage of tool accuracy, plan optimality, goal accuracy, intent resolution  
+- **All Agentic Behavior Validators**: Complete coverage of tool accuracy, plan optimality, goal accuracy, intent resolution
 - **All Security Validators**: Complete coverage of prompt injection, data leakage, insecure output detection
 - **Production Ready**: SDK now supports 52 validators with robust, extensible architecture
 

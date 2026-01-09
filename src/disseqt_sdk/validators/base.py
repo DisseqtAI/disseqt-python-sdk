@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..enums import ValidatorDomain
 from ..models.base import SDKConfigInput
+from ..response import normalize_server_payload
 
 if TYPE_CHECKING:
     from ..models.agentic_behaviour import AgenticBehaviourRequest
@@ -43,7 +44,6 @@ class BaseValidator:
         raise NotImplementedError
 
 
-
 # Domain specializations (note the domain-specific request objects)
 
 
@@ -60,6 +60,19 @@ class InputValidator(BaseValidator):
             "config_input": self.config.to_dict(),
         }
 
+    def normalize_response(self, server_response: dict[str, Any]) -> dict[str, Any]:
+        """Normalize server response to SDK format.
+
+        Subclasses can override this method for custom normalization logic.
+
+        Args:
+            server_response: Raw response from the server
+
+        Returns:
+            Normalized response with fixed schema
+        """
+        return normalize_server_payload(server_response)
+
 
 @dataclass(slots=True)
 class OutputValidator(BaseValidator):
@@ -73,6 +86,19 @@ class OutputValidator(BaseValidator):
             "input_data": self.data.to_input_data(),
             "config_input": self.config.to_dict(),
         }
+
+    def normalize_response(self, server_response: dict[str, Any]) -> dict[str, Any]:
+        """Normalize server response to SDK format.
+
+        Subclasses can override this method for custom normalization logic.
+
+        Args:
+            server_response: Raw response from the server
+
+        Returns:
+            Normalized response with fixed schema
+        """
+        return normalize_server_payload(server_response)
 
 
 @dataclass(slots=True)
@@ -88,6 +114,19 @@ class RagGroundingValidator(BaseValidator):
             "config_input": self.config.to_dict(),
         }
 
+    def normalize_response(self, server_response: dict[str, Any]) -> dict[str, Any]:
+        """Normalize server response to SDK format.
+
+        Subclasses can override this method for custom normalization logic.
+
+        Args:
+            server_response: Raw response from the server
+
+        Returns:
+            Normalized response with fixed schema
+        """
+        return normalize_server_payload(server_response)
+
 
 @dataclass(slots=True)
 class AgenticBehaviourValidator(BaseValidator):
@@ -102,6 +141,19 @@ class AgenticBehaviourValidator(BaseValidator):
             "config_input": self.config.to_dict(),
         }
 
+    def normalize_response(self, server_response: dict[str, Any]) -> dict[str, Any]:
+        """Normalize server response to SDK format.
+
+        Subclasses can override this method for custom normalization logic.
+
+        Args:
+            server_response: Raw response from the server
+
+        Returns:
+            Normalized response with fixed schema
+        """
+        return normalize_server_payload(server_response)
+
 
 @dataclass(slots=True)
 class McpSecurityValidator(BaseValidator):
@@ -115,6 +167,19 @@ class McpSecurityValidator(BaseValidator):
             "input_data": self.data.to_input_data(),
             "config_input": self.config.to_dict(),
         }
+
+    def normalize_response(self, server_response: dict[str, Any]) -> dict[str, Any]:
+        """Normalize server response to SDK format.
+
+        Subclasses can override this method for custom normalization logic.
+
+        Args:
+            server_response: Raw response from the server
+
+        Returns:
+            Normalized response with fixed schema
+        """
+        return normalize_server_payload(server_response)
 
 
 @dataclass(slots=True)
@@ -142,4 +207,3 @@ class ThemesClassifierValidator:
         """Convert to API payload."""
         # Themes classifier doesn't use config_input, just the data directly
         return self.data.to_input_data()
-

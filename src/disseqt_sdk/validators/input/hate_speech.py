@@ -12,7 +12,6 @@ from ..base import InputValidator
 @register_validator(
     domain=ValidatorDomain.INPUT_VALIDATION,
     slug=InputValidation.HATE_SPEECH.value,
-
 )
 @dataclass(slots=True)
 class HateSpeechValidator(InputValidator):

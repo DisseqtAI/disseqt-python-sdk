@@ -12,7 +12,6 @@ from ..base import OutputValidator
 @register_validator(
     domain=ValidatorDomain.OUTPUT_VALIDATION,
     slug=OutputValidation.TOXICITY.value,
-
 )
 @dataclass(slots=True)
 class OutputToxicityValidator(OutputValidator):

@@ -12,7 +12,6 @@ from ..base import RagGroundingValidator
 @register_validator(
     domain=ValidatorDomain.RAG_GROUNDING,
     slug=RagGrounding.CONTEXT_RECALL.value,
-
 )
 @dataclass(slots=True)
 class ContextRecallValidator(RagGroundingValidator):

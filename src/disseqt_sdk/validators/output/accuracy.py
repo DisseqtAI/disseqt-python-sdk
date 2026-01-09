@@ -12,7 +12,6 @@ from ..base import OutputValidator
 @register_validator(
     domain=ValidatorDomain.OUTPUT_VALIDATION,
     slug=OutputValidation.FACTUAL_CONSISTENCY.value,
-
 )
 @dataclass(slots=True)
 class FactualConsistencyValidator(OutputValidator):
