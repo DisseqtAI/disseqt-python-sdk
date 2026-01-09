@@ -25,4 +25,3 @@ class ResponseToneValidator(OutputValidator):
         """Set domain and slug after initialization."""
         object.__setattr__(self, "_domain", ValidatorDomain.OUTPUT_VALIDATION)
         object.__setattr__(self, "_slug", OutputValidation.RESPONSE_TONE.value)
-

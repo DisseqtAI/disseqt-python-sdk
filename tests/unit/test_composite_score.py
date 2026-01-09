@@ -1,6 +1,5 @@
 """Test composite score evaluation feature."""
 
-import pytest
 
 from disseqt_sdk.enums import Composite, ValidatorDomain
 from disseqt_sdk.models.composite_score import CompositeScoreRequest
@@ -478,7 +477,7 @@ class TestCompositeScoreEdgeCases:
 
     def test_special_characters_in_text(self):
         """Test composite score with special characters."""
-        special_text = 'Special chars: @#$%^&*()_+-={}[]|\\:";\'<>?,./~`'
+        special_text = "Special chars: @#$%^&*()_+-={}[]|\\:\";'<>?,./~`"
 
         request = CompositeScoreRequest(
             llm_input_query=special_text,
@@ -537,8 +536,4 @@ class TestCompositeScoreEdgeCases:
 
         data = request.to_input_data()
         assert data["options"]["weights_override"]["top_level"]["cat1"] == 0.33
-        assert (
-            data["options"]["weights_override"]["submetrics"]["cat1"]["metric1"]
-            == 0.5
-        )
-
+        assert data["options"]["weights_override"]["submetrics"]["cat1"]["metric1"] == 0.5

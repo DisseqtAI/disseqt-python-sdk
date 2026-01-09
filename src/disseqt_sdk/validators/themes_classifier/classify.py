@@ -31,7 +31,6 @@ def themes_response_handler(server_response: dict[str, Any]) -> dict[str, Any]:
 @register_validator(
     domain=ValidatorDomain.THEMES_CLASSIFIER,
     slug=ThemesClassifier.CLASSIFY.value,
-
     request_handler=themes_request_handler,
     response_handler=themes_response_handler,
 )

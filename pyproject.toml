@@ -11,7 +11,7 @@ license = {text = "Proprietary"}
 authors = [
     {name = "Disseqt AI Limited", email = "support@disseqt.ai"},
 ]
-keywords = ["ai", "llm", "validation", "sdk", "machine-learning", "safety", "guardrails"]
+keywords = ["ai", "llm", "validation", "sdk", "machine-learning", "safety", "guardrails", "observability", "telemetry", "opentelemetry", "otel", "genai", "agentic", "tracing", "monitoring"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -36,7 +36,7 @@ Issues = "https://github.com/DisseqtAI/disseqt-python-sdk/issues"
 Changelog = "https://github.com/DisseqtAI/disseqt-python-sdk/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/disseqt_sdk"]
+packages = ["src/disseqt_sdk", "src/disseqt_agentic_sdk"]
 
 [tool.black]
 line-length = 100
@@ -112,6 +112,11 @@ markers = [
 [tool.coverage.run]
 source = ["src"]
 branch = true
+omit = [
+    "*/tests/*",
+    "*/test_*.py",
+    "*/validate_*.py",
+]
 
 [tool.coverage.report]
 exclude_lines = [
@@ -123,6 +128,7 @@ exclude_lines = [
     "raise NotImplementedError",
     "if 0:",
     "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
     "class .*\\bProtocol\\):",
     "@(abc\\.)?abstractmethod",
 ]

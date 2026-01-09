@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -55,4 +55,3 @@ class CompositeScoreRequest:
             "input_data": input_data,
             "options": options,
         }
-

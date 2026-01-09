@@ -12,7 +12,6 @@ from ..base import InputValidator
 @register_validator(
     domain=ValidatorDomain.INPUT_VALIDATION,
     slug=InputValidation.PROMPT_INJECTION.value,
-
 )
 @dataclass(slots=True)
 class InputPromptInjectionValidator(InputValidator):

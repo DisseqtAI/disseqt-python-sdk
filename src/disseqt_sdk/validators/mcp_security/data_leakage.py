@@ -12,7 +12,6 @@ from ..base import McpSecurityValidator
 @register_validator(
     domain=ValidatorDomain.MCP_SECURITY,
     slug=McpSecurity.DATA_LEAKAGE.value,
-
 )
 @dataclass(slots=True)
 class DataLeakageValidator(McpSecurityValidator):

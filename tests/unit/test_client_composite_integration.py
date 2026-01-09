@@ -3,7 +3,6 @@
 import pytest
 import requests
 import requests_mock
-
 from disseqt_sdk import Client
 from disseqt_sdk.client import HTTPError
 from disseqt_sdk.models.composite_score import CompositeScoreRequest
@@ -268,4 +267,3 @@ class TestClientCustomHandlerCoverage:
             # Verify response is returned as-is (custom handler preserves structure)
             assert result == server_response
             assert result["overall_confidence"]["custom_field"] == "custom_value"
-

@@ -2,7 +2,6 @@
 
 
 import pytest
-
 from disseqt_sdk import Client, SDKConfigInput
 from disseqt_sdk.models.agentic_behaviour import AgenticBehaviourRequest
 from disseqt_sdk.models.input_validation import InputValidationRequest
@@ -45,19 +44,14 @@ def input_validation_request():
 @pytest.fixture
 def output_validation_request():
     """Create a test output validation request."""
-    return OutputValidationRequest(
-        response="The Eiffel Tower was built in 1889."
-    )
+    return OutputValidationRequest(response="The Eiffel Tower was built in 1889.")
 
 
 @pytest.fixture
 def agentic_behaviour_request():
     """Create a test agentic behaviour request."""
     return AgenticBehaviourRequest(
-        conversation_history=[
-            "user: Tell me about deep learning.",
-            "agent: I like pizza."
-        ],
+        conversation_history=["user: Tell me about deep learning.", "agent: I like pizza."],
         tool_calls=[],
         agent_responses=["I like pizza."],
         reference_data={
@@ -65,7 +59,7 @@ def agentic_behaviour_request():
                 "machine learning",
                 "neural networks",
                 "artificial intelligence",
-                "deep learning"
+                "deep learning",
             ]
         },
     )
@@ -103,10 +97,7 @@ def mock_server_response():
             "threshold_score": 0.8,
             "extra_field": "should_go_to_others",
         },
-        "status": {
-            "code": "200",
-            "message": "Success"
-        }
+        "status": {"code": "200", "message": "Success"},
     }
 
 
@@ -121,12 +112,7 @@ def expected_normalized_response():
             "metric_labels": ["Always Off-Topic"],
             "threshold": ["Fail"],
             "threshold_score": 0.8,
-            "others": {
-                "extra_field": "should_go_to_others"
-            }
+            "others": {"extra_field": "should_go_to_others"},
         },
-        "status": {
-            "code": "200",
-            "message": "Success"
-        }
+        "status": {"code": "200", "message": "Success"},
     }

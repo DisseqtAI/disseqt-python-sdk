@@ -116,7 +116,9 @@ def main() -> None:
             print(f"\n  {category.replace('_', ' ').title()}:")
             print(f"    Score: {details.get('score', 0):.4f}")
             print(f"    Label: {details.get('label', 'N/A')}")
-            print(f"    Passed: {details.get('passed_metrics', 0)}/{details.get('total_metrics', 0)}")
+            print(
+                f"    Passed: {details.get('passed_metrics', 0)}/{details.get('total_metrics', 0)}"
+            )
 
             failed = details.get("failed_metrics", [])
             if failed:
@@ -125,7 +127,7 @@ def main() -> None:
         # Display credit information
         credits = result.get("credit_details", {})
         if credits:
-            print(f"\n💳 Credit Information:")
+            print("\n💳 Credit Information:")
             print(f"   Credits Deducted: {credits.get('credits_deducted', 0)}")
             print(f"   Credits Remaining: {credits.get('credits_remaining', 0)}")
             print(f"   Credit Type: {credits.get('credit_type', 'N/A')}")
@@ -159,4 +161,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

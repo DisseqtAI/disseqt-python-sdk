@@ -12,7 +12,6 @@ from ..base import RagGroundingValidator
 @register_validator(
     domain=ValidatorDomain.RAG_GROUNDING,
     slug=RagGrounding.RESPONSE_RELEVANCY.value,
-
 )
 @dataclass(slots=True)
 class ResponseRelevancyValidator(RagGroundingValidator):

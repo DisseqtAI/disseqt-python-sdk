@@ -1,6 +1,5 @@
 """Tests to complete coverage >95%."""
 
-import pytest
 
 from disseqt_sdk.enums import (
     AgenticBehavior,
@@ -9,12 +8,10 @@ from disseqt_sdk.enums import (
     McpSecurity,
     OutputValidation,
     RagGrounding,
-    ThemesClassifier,
     ValidatorDomain,
 )
 from disseqt_sdk.models.agentic_behaviour import AgenticBehaviourRequest
 from disseqt_sdk.models.base import SDKConfigInput
-from disseqt_sdk.models.composite_score import CompositeScoreRequest
 from disseqt_sdk.models.input_validation import InputValidationRequest
 from disseqt_sdk.models.mcp_security import McpSecurityRequest
 from disseqt_sdk.models.output_validation import OutputValidationRequest
@@ -309,4 +306,3 @@ class TestEnumCompleteness:
         """Test Composite enum is properly defined."""
         assert Composite.EVALUATE.value == "evaluate"
         assert len(list(Composite)) == 1
-

@@ -12,7 +12,6 @@ from ..base import InputValidator
 @register_validator(
     domain=ValidatorDomain.INPUT_VALIDATION,
     slug=InputValidation.VIOLENCE.value,
-
 )
 @dataclass(slots=True)
 class ViolenceValidator(InputValidator):

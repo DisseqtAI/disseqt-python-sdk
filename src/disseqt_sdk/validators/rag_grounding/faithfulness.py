@@ -12,7 +12,6 @@ from ..base import RagGroundingValidator
 @register_validator(
     domain=ValidatorDomain.RAG_GROUNDING,
     slug=RagGrounding.FAITHFULNESS.value,
-
 )
 @dataclass(slots=True)
 class FaithfulnessValidator(RagGroundingValidator):

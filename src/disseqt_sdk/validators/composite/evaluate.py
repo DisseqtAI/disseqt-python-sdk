@@ -103,4 +103,3 @@ class CompositeScoreEvaluator:
         We have a custom request handler, but provide this for completeness.
         """
         return self.data.to_input_data()
-

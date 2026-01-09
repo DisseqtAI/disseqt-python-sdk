@@ -12,7 +12,6 @@ from ..base import OutputValidator
 @register_validator(
     domain=ValidatorDomain.OUTPUT_VALIDATION,
     slug=OutputValidation.ANSWER_RELEVANCE.value,
-
 )
 @dataclass(slots=True)
 class AnswerRelevanceValidator(OutputValidator):

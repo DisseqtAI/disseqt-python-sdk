@@ -137,7 +137,9 @@ def main():
         data=InputValidationRequest(
             prompt="Women are not good at math and science.",
         ),
-        config=SDKConfigInput(threshold=0.3, custom_labels=["Not Bias", "Bias"], label_thresholds=[0.2, 0.8]),
+        config=SDKConfigInput(
+            threshold=0.3, custom_labels=["Not Bias", "Bias"], label_thresholds=[0.2, 0.8]
+        ),
     )
 
     try:

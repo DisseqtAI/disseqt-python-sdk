@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Any
+from typing import Any, cast
 
 import requests
 
@@ -132,15 +132,19 @@ class Client:
 
             # Parse JSON response
             try:
-                server_response = response.json()
-                if server_response is None:
+                server_response_raw = response.json()
+                if server_response_raw is None:
                     raise ValueError("Server returned null/empty JSON response")
+                server_response = cast(dict[str, Any], server_response_raw)
             except json.JSONDecodeError as e:
-                raise ValueError(f"Failed to decode JSON response: {e}. Response text: {response.text[:200]}") from e
+                raise ValueError(
+                    f"Failed to decode JSON response: {e}. Response text: {response.text[:200]}"
+                ) from e
 
             # Use custom response handler or default
             if response_handler:
-                return response_handler(server_response)
+                result = response_handler(server_response)
+                return cast(dict[str, Any], result)
             else:
                 # Use default response handling (no forced normalization)
                 return server_response

@@ -849,7 +849,7 @@ evaluator = CompositeScoreEvaluator(
         llm_input_context="Research shows that both men and women can be effective parents, with individual differences being more significant than gender-based differences.",
         llm_output="Women are naturally better at nurturing children than men.",
         evaluation_mode="binary_threshold",
-        
+
         # Custom weights for top-level categories and sub-metrics
         weights_override={
             "top_level": {
@@ -884,7 +884,7 @@ evaluator = CompositeScoreEvaluator(
                 }
             }
         },
-        
+
         # Custom labels and thresholds for each category
         labels_thresholds_override={
             "factual_semantic_alignment": {
@@ -900,7 +900,7 @@ evaluator = CompositeScoreEvaluator(
                 "label_thresholds": [0.6, 0.8, 0.95]
             }
         },
-        
+
         # Overall confidence configuration
         overall_confidence={
             "custom_labels": ["Low Confidence", "Moderate Confidence", "High Confidence", "Very High Confidence"],
@@ -977,7 +977,7 @@ for category, details in overall["breakdown"].items():
     print(f"  Score: {details['score']:.4f}")
     print(f"  Label: {details['label']}")
     print(f"  Passed: {details['passed_metrics']}/{details['total_metrics']}")
-    
+
     if details.get("failed_metrics"):
         print(f"  Failed: {', '.join(details['failed_metrics'])}")
 
@@ -1087,4 +1087,3 @@ from disseqt_sdk.models import (
     SDKConfigInput,
 )
 ```
-

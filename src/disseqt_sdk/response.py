@@ -57,8 +57,8 @@ def normalize_server_payload(server_response: dict[str, Any]) -> dict[str, Any]:
         data_section = server_response.get("data", {})
 
         # Build normalized data section
-        normalized_data: dict[str, Any] = {}
-        others: dict[str, Any] = {}
+        normalized_data = {}
+        others = {}
 
         # Known fields that should be preserved as-is
         known_fields = {

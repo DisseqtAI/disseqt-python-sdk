@@ -1296,4 +1296,3 @@ The `label_thresholds` define the boundaries between labels:
 - Score < 0.5 → "Low Risk"
 - 0.5 ≤ Score < 0.75 → "Medium Risk"
 - Score ≥ 0.75 → "High Risk"
-
