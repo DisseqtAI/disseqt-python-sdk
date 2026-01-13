@@ -102,23 +102,10 @@ class HTTPTransport:
                 "status": span_dict["status_code"],
             }
 
-            # Parse attributes_json and organize into genAi/agentic sections
+            # Put all attributes directly in attributes field
             attributes = json.loads(span_dict.get("attributes_json", "{}"))
-
-            # Extract agentic attributes
-            agentic_attrs = {}
-            gen_ai_attrs = {}
-
-            for key, value in attributes.items():
-                if key.startswith("agentic."):
-                    agentic_attrs[key] = value
-                elif key.startswith("gen_ai."):
-                    gen_ai_attrs[key] = value
-
-            if agentic_attrs:
-                custom_span["agentic"] = agentic_attrs
-            if gen_ai_attrs:
-                custom_span["genAi"] = gen_ai_attrs
+            if attributes:
+                custom_span["attributes"] = attributes
 
             traces_dict[trace_id_str].append(custom_span)
 
@@ -128,13 +115,10 @@ class HTTPTransport:
                     "service.name": span_dict.get("service_name", ""),
                     "service.version": span_dict.get("service_version", ""),
                     "deployment.environment": span_dict.get("environment", ""),
-                    "org.id": span_dict.get("org_id", ""),
                     "project.id": span_dict.get("project_id", ""),
-                    "ingestion_url": self.endpoint,  # Add endpoint URL to resource attributes
+                    "ingestion_url": self.endpoint,
+                    "api.key": self.api_key,
                 }
-                # Add API key to resource attributes if provided
-                if self.api_key:
-                    resource_attrs["api.key"] = self.api_key
 
         # Build Custom Format payload
         traces = []
@@ -150,15 +134,11 @@ class HTTPTransport:
             "resource": {"attributes": resource_attrs},
             "traces": traces,
         }
-
+        print(payload)
         # Prepare headers
         headers = {
             "Content-Type": "application/json",
         }
-
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
-
         try:
             response = self.session.post(
                 self.endpoint,

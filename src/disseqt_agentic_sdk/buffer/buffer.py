@@ -3,7 +3,7 @@ Buffer for batching spans before sending to backend.
 """
 
 import time
-from threading import Lock
+from threading import Lock, Thread
 
 from disseqt_agentic_sdk.models.span import EnrichedSpan
 from disseqt_agentic_sdk.transport import HTTPTransport
@@ -33,8 +33,8 @@ class TraceBuffer:
 
         Args:
             transport: HTTPTransport instance for sending
-            max_batch_size: Maximum number of spans per batch
-            flush_interval: Flush interval in seconds
+            max_batch_size: Maximum number of spans per batch (triggers immediate flush)
+            flush_interval: Flush interval in seconds (time-based flushing)
         """
         self.transport = transport
         self.max_batch_size = max_batch_size
@@ -43,6 +43,11 @@ class TraceBuffer:
         self.buffer: list[EnrichedSpan] = []
         self.last_flush_time = time.time()
         self.lock = Lock()
+        self._stop_flush_thread = False
+        self._flush_thread: Thread | None = None
+
+        # Start background thread for time-based flushing
+        self._start_flush_thread()
 
     def add_span(self, span: EnrichedSpan) -> None:
         """
@@ -113,3 +118,30 @@ class TraceBuffer:
             return (
                 len(self.buffer) > 0 and (time.time() - self.last_flush_time) >= self.flush_interval
             )
+
+    def _start_flush_thread(self) -> None:
+        """Start background thread for time-based flushing"""
+
+        def flush_worker():
+            while not self._stop_flush_thread:
+                time.sleep(self.flush_interval)
+                if self.should_flush():
+                    logger.debug("Time-based flush triggered")
+                    self.flush()
+
+        self._flush_thread = Thread(target=flush_worker, daemon=True, name="TraceBufferFlushThread")
+        self._flush_thread.start()
+        logger.debug(f"Started time-based flush thread (interval: {self.flush_interval}s)")
+
+    def stop(self) -> None:
+        """
+        Stop the buffer and flush all remaining spans.
+
+        Should be called during shutdown to ensure all spans are sent.
+        """
+        self._stop_flush_thread = True
+        if self._flush_thread and self._flush_thread.is_alive():
+            self._flush_thread.join(timeout=2.0)
+        # Final flush of any remaining spans
+        self.flush()
+        logger.debug("Buffer stopped and flushed")

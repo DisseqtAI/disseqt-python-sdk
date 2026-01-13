@@ -4,6 +4,7 @@ Unit tests for context management.
 
 import threading
 
+import pytest
 from disseqt_agentic_sdk.context import (
     clear_context,
     get_current_span,
@@ -18,6 +19,13 @@ from disseqt_agentic_sdk.trace import DisseqtTrace
 
 class TestContext:
     """Tests for context management."""
+
+    @pytest.fixture(autouse=True)
+    def cleanup_context(self):
+        """Clear context before each test."""
+        clear_context()
+        yield
+        clear_context()
 
     def test_trace_context(self):
         """Test trace context management."""

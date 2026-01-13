@@ -25,6 +25,3 @@ class SpanKind(str, Enum):
     SERVER = "SERVER"  # Server span
     PRODUCER = "PRODUCER"  # Producer span (messaging)
     CONSUMER = "CONSUMER"  # Consumer span (messaging)
-
-    # Additional kinds (if needed)
-    SPAN_KIND_UNSPECIFIED = "SPAN_KIND_UNSPECIFIED"  # Unspecified kind

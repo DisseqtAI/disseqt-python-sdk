@@ -8,7 +8,6 @@ from disseqt_agentic_sdk import DisseqtAgenticClient
 
 client = DisseqtAgenticClient(
     api_key="your-api-key",
-    org_id="org_123",
     project_id="proj_456",
     service_name="my-service",
     endpoint="http://localhost:8080/v1/traces"
