@@ -4,13 +4,19 @@ DisseqtTrace - Trace class for creating and managing traces.
 A trace is a collection of spans representing a complete workflow.
 """
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from disseqt_agentic_sdk.context import get_current_trace, set_current_trace
 from disseqt_agentic_sdk.enums import SpanKind
 from disseqt_agentic_sdk.models.span import EnrichedSpan
 from disseqt_agentic_sdk.span import DisseqtSpan
 from disseqt_agentic_sdk.utils import generate_trace_id, now_ns
+
+if TYPE_CHECKING:
+    from disseqt_agentic_sdk.client import DisseqtAgenticClient
+from disseqt_agentic_sdk.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class DisseqtTrace:
@@ -33,6 +39,7 @@ class DisseqtTrace:
         environment: str = "production",
         intent_id: str | None = None,
         workflow_id: str | None = None,
+        client: "DisseqtAgenticClient | None" = None,  # Optional client for incremental sending
     ):
         """
         Initialize a new trace.
@@ -70,6 +77,9 @@ class DisseqtTrace:
         # Span collection
         self.spans: list[DisseqtSpan] = []
         self.is_ended = False
+
+        # Client reference for incremental span sending (optional)
+        self._client = client
 
         # Set current trace in context
         set_current_trace(self)
@@ -109,13 +119,14 @@ class DisseqtTrace:
             kind=kind,
             span_id=span_id,
             parent_span_id=parent_span_id,
-            org_id=self.org_id,
             project_id=self.project_id,
             user_id=self.user_id,
             service_name=self.service_name,
             service_version=self.service_version,
             environment=self.environment,
+            client=self._client,  # Pass client for incremental sending
         )
+        logger.debug(f"Created span: {name} ({kind}) in trace {self.trace_id}")
 
         # Add intent_id and workflow_id to span attributes if provided
         if self.intent_id:

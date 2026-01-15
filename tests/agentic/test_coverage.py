@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from unittest.mock import Mock, patch
 
 import pytest
-
 from disseqt_agentic_sdk import DisseqtAgenticClient
 from disseqt_agentic_sdk.api.client import set_client
 from disseqt_agentic_sdk.api.trace import TraceWrapper
@@ -84,7 +83,6 @@ class TestTraceCoverage:
             trace_id="custom_id",
             org_id="o",
             project_id="p",
-            user_id="u",
             service_name="s",
             service_version="1.0",
             environment="dev",
@@ -99,7 +97,6 @@ class TestTraceCoverage:
         assert trace_dict["name"] == "test_trace"
         assert trace_dict["org_id"] == "o"
         assert trace_dict["project_id"] == "p"
-        assert trace_dict["user_id"] == "u"
         assert trace_dict["service_name"] == "s"
         assert trace_dict["service_version"] == "1.0"
         assert trace_dict["environment"] == "dev"
@@ -119,9 +116,7 @@ class TestTraceWrapperCoverage:
         with patch("disseqt_agentic_sdk.client.client.HTTPTransport"), patch(
             "disseqt_agentic_sdk.client.client.TraceBuffer"
         ):
-            self.client = DisseqtAgenticClient(
-                api_key="k", org_id="o", project_id="p", service_name="s"
-            )
+            self.client = DisseqtAgenticClient(api_key="k", project_id="p", service_name="s")
             set_client(self.client)
             yield
             try:
@@ -223,6 +218,11 @@ class TestBufferCoverage:
 
     def test_buffer_should_flush(self):
         """Test should_flush method."""
+        # Stop the background flush thread to test manually
+        self.buffer._stop_flush_thread = True
+        if self.buffer._flush_thread:
+            self.buffer._flush_thread.join(timeout=0.5)
+
         # Empty buffer should return False
         assert self.buffer.should_flush() is False
 
@@ -230,12 +230,14 @@ class TestBufferCoverage:
         span = EnrichedSpan(
             trace_id="t1", span_id="s1", name="test", org_id="o", project_id="p", service_name="s"
         )
+        # Reset last_flush_time to ensure proper timing
+        import time
+
+        self.buffer.last_flush_time = time.time()
         self.buffer.add_span(span)
 
         # Should return True after flush interval
-        import time
-
-        time.sleep(0.15)  # Wait longer than flush_interval
+        time.sleep(0.15)  # Wait longer than flush_interval (0.1s)
         assert self.buffer.should_flush() is True
 
 
@@ -269,14 +271,13 @@ class TestTransportCoverage:
 
             transport.send_spans([span])
 
-            # Check that genAi was included in payload
+            # Check that attributes are included in payload (no genAi/agentic separation)
             call_args = mock_post.call_args
             payload = call_args[1]["json"]
             spans = payload["traces"][0]["spans"]
-            assert "genAi" in spans[0]
-            assert spans[0]["genAi"]["gen_ai.test"] == "value"
-            assert "agentic" in spans[0]
-            assert spans[0]["agentic"]["agentic.test"] == "value2"
+            assert "attributes" in spans[0]
+            assert spans[0]["attributes"]["gen_ai.test"] == "value"
+            assert spans[0]["attributes"]["agentic.test"] == "value2"
 
             # Check that API key is in resource attributes
             assert "api.key" in payload["resource"]["attributes"]

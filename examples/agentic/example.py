@@ -1,5 +1,4 @@
 import google.generativeai as genai
-
 from disseqt_agentic_sdk import DisseqtAgenticClient, start_trace
 from disseqt_agentic_sdk.enums import SpanKind
 from disseqt_agentic_sdk.semantics import AgenticOperation
@@ -7,7 +6,6 @@ from disseqt_agentic_sdk.semantics import AgenticOperation
 # Initialize SDK client
 client = DisseqtAgenticClient(
     api_key="your-api-key",
-    org_id="org_123",
     project_id="proj_456",
     service_name="my-service",
     endpoint="http://localhost:8080/v1/traces",

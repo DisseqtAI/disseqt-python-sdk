@@ -41,15 +41,32 @@ def get_logger(name: str | None = None) -> logging.Logger:
     return logger
 
 
-def set_log_level(level: str) -> None:
+def set_log_level(level: str | int) -> None:
     """
     Set the logging level for the SDK.
 
     Args:
-        level: Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        level: Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL) as string or int
     """
-    logger = get_logger()
-    numeric_level = getattr(logging, level.upper(), logging.INFO)
-    logger.setLevel(numeric_level)
-    for handler in logger.handlers:
+    # Handle both string and int inputs
+    if isinstance(level, str):
+        numeric_level = getattr(logging, level.upper(), logging.INFO)
+    elif isinstance(level, int):
+        numeric_level = level
+    else:
+        # Default to INFO if invalid type
+        numeric_level = logging.INFO
+
+    # Set level on root SDK logger
+    root_logger = get_logger()
+    root_logger.setLevel(numeric_level)
+    for handler in root_logger.handlers:
         handler.setLevel(numeric_level)
+
+    # Also set level on all existing SDK loggers (since they have propagate=False)
+    for name in logging.root.manager.loggerDict:
+        if name.startswith(DEFAULT_LOGGER_NAME):
+            logger = logging.getLogger(name)
+            logger.setLevel(numeric_level)
+            for handler in logger.handlers:
+                handler.setLevel(numeric_level)

@@ -34,17 +34,33 @@ class TraceWrapper:
         # End trace (ends all spans)
         self.trace.__exit__(exc_type, exc_val, exc_tb)
 
-        # Send trace to backend
+        # Send any remaining spans that weren't sent incrementally
+        # (spans are sent incrementally in span.__exit__ if client is available)
         if self._client is not None:
-            logger.debug(
-                "Sending trace to backend",
-                extra={
-                    "trace_id": self.trace.trace_id,
-                    "trace_name": self.trace.name,
-                    "span_count": len(self.trace.spans),
-                },
-            )
-            self._client.send_trace(self.trace)
+            # Check if incremental sending was enabled (trace has client reference)
+            incremental_enabled = self.trace._client is not None
+
+            if incremental_enabled:
+                # Incremental sending was enabled - just log completion
+                logger.debug(
+                    "Trace completed with incremental span sending",
+                    extra={
+                        "trace_id": self.trace.trace_id,
+                        "trace_name": self.trace.name,
+                        "span_count": len(self.trace.spans),
+                    },
+                )
+            else:
+                # Fallback: send all spans at once (original behavior)
+                logger.debug(
+                    "Sending trace to backend (batch mode)",
+                    extra={
+                        "trace_id": self.trace.trace_id,
+                        "trace_name": self.trace.name,
+                        "span_count": len(self.trace.spans),
+                    },
+                )
+                self._client.send_trace(self.trace)
         else:
             logger.warning("No client available to send trace")
 
@@ -86,13 +102,13 @@ def start_trace(
         ...         span.set_agent_info("assistant", "agent_001")
         # Trace is automatically sent when exiting the 'with' block
     """
-    # Use user_id from trace if provided, otherwise use client default
-    trace_user_id = user_id if user_id is not None else client.user_id
+    # Use user_id from trace if provided, otherwise use empty string (client no longer has user_id)
+    trace_user_id = user_id if user_id is not None else ""
 
     trace = DisseqtTrace(
         name=name,
         trace_id=trace_id,
-        org_id=client.org_id,
+        org_id="",  # Set by backend middleware for localhost
         project_id=client.project_id,
         user_id=trace_user_id,
         service_name=client.service_name,
@@ -100,6 +116,7 @@ def start_trace(
         environment=client.environment,
         intent_id=intent_id,
         workflow_id=workflow_id,
+        client=client,  # Pass client for incremental span sending
     )
 
     return TraceWrapper(trace, client)

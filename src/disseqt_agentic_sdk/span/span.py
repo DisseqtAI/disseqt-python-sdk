@@ -6,7 +6,10 @@ Handles span lifecycle, attributes, and automatic parent-child relationships.
 
 import json
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from disseqt_agentic_sdk.client import DisseqtAgenticClient
 
 from disseqt_agentic_sdk.context import get_current_span, set_current_span
 from disseqt_agentic_sdk.enums import SpanKind, SpanStatus
@@ -35,12 +38,12 @@ class DisseqtSpan:
         kind: SpanKind,
         span_id: str | None = None,
         parent_span_id: str | None = None,
-        org_id: str = "",
         project_id: str = "",
         user_id: str = "",
         service_name: str = "",
         service_version: str = "1.0.0",
         environment: str = "production",
+        client: "DisseqtAgenticClient | None" = None,  # Optional client for incremental sending
     ):
         """
         Initialize a new span.
@@ -51,12 +54,14 @@ class DisseqtSpan:
             kind: Span kind (MODEL_EXEC, TOOL_EXEC, AGENT_EXEC, etc.)
             span_id: Optional span ID (auto-generated if not provided)
             parent_span_id: Optional parent span ID (auto-detected from context if not provided)
-            org_id: Organization ID
             project_id: Project ID
             user_id: User ID
             service_name: Service name
             service_version: Service version
             environment: Environment (production, staging, dev)
+
+        Note:
+            org_id is automatically set by backend middleware
         """
         # Generate span ID if not provided
         self.span_id = span_id or generate_span_id()
@@ -64,6 +69,7 @@ class DisseqtSpan:
         # Get parent from context if not explicitly provided
         # Only use context if parent_span_id was not passed (None means check context)
         # If parent_span_id was explicitly passed as None, use None (root span)
+        self._parent_span_context = None  # Store parent span for context restoration
         if parent_span_id is None:
             current_span = get_current_span()
             if current_span is not None:
@@ -73,6 +79,7 @@ class DisseqtSpan:
                 trace_id_str = str(trace_id)
                 if current_trace_id_str == trace_id_str:
                     parent_span_id = current_span.span_id
+                    self._parent_span_context = current_span  # Store parent for restoration
 
         # Determine if root span
         self.root = parent_span_id is None
@@ -86,12 +93,15 @@ class DisseqtSpan:
         self.trace_id = trace_id
         self.name = name
         self.kind = kind.value if isinstance(kind, SpanKind) else kind
-        self.org_id = org_id
+        self.org_id = ""  # Set by backend middleware
         self.project_id = project_id
         self.user_id = user_id
         self.service_name = service_name
         self.service_version = service_version
         self.environment = environment
+
+        # Client reference for incremental sending (optional)
+        self._client = client
 
         # Status
         self.status = SpanStatus.OK
@@ -281,10 +291,8 @@ class DisseqtSpan:
         if self.end_time_ns is None:
             self.end_time_ns = now_ns()
 
-        # Clear from context
-        current_span = get_current_span()
-        if current_span is self:
-            set_current_span(None)
+        # Don't clear context here - __exit__ will handle parent restoration
+        # This prevents race conditions where child spans can't find their parent
 
         return self
 
@@ -332,7 +340,22 @@ class DisseqtSpan:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit - automatically end span"""
+        """Context manager exit - automatically end span and restore parent context"""
         if exc_type:
             self.set_error(str(exc_val), error_type=exc_type.__name__)
         self.end()
+
+        # Send span to buffer immediately if client is available (incremental sending)
+        if self._client is not None:
+            try:
+                enriched_span = self.to_enriched_span()
+                self._client.buffer.add_span(enriched_span)
+            except Exception as e:
+                # Log error but don't fail the span completion
+                import logging
+
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Failed to send span {self.span_id} to buffer: {e}")
+
+        # Restore parent span to context so sibling spans can find their parent
+        set_current_span(self._parent_span_context)

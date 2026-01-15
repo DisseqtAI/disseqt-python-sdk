@@ -3,7 +3,6 @@ Unit tests for DisseqtSpan.
 """
 
 import pytest
-
 from disseqt_agentic_sdk.enums import SpanKind, SpanStatus
 from disseqt_agentic_sdk.semantics import AgenticAttributes
 from disseqt_agentic_sdk.span import DisseqtSpan
@@ -18,7 +17,6 @@ class TestDisseqtSpan:
             trace_id="test_trace_123",
             name="test_span",
             kind=SpanKind.INTERNAL,
-            org_id="org_1",
             project_id="proj_1",
             service_name="test_service",
         )
@@ -26,7 +24,7 @@ class TestDisseqtSpan:
         assert span.trace_id == "test_trace_123"
         assert span.name == "test_span"
         assert span.kind == "INTERNAL"
-        assert span.org_id == "org_1"
+        assert span.org_id == ""  # Set by backend middleware
         assert span.project_id == "proj_1"
         assert span.service_name == "test_service"
         assert span.status == SpanStatus.OK

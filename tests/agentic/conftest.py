@@ -6,7 +6,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
 from disseqt_agentic_sdk import DisseqtAgenticClient
 
 # Add src directory to Python path for src layout
@@ -30,7 +29,6 @@ def initialized_client(mock_trace_buffer, mock_http_transport):
     """Fixture providing initialized SDK client."""
     client = DisseqtAgenticClient(
         api_key="test_key",
-        org_id="test_org",
         project_id="test_proj",
         service_name="test_service",
         endpoint="http://localhost:8080/v1/traces",

@@ -5,7 +5,6 @@ Unit tests for helper functions.
 from unittest.mock import patch
 
 import pytest
-
 from disseqt_agentic_sdk import DisseqtAgenticClient, start_trace
 from disseqt_agentic_sdk.api.client import get_client, set_client
 from disseqt_agentic_sdk.api.helpers import (
@@ -29,7 +28,6 @@ class TestHelpers:
         ):
             self.client = DisseqtAgenticClient(
                 api_key="test_key",
-                org_id="test_org",
                 project_id="test_proj",
                 service_name="test_service",
             )
@@ -284,7 +282,6 @@ class TestClientHelpers:
         """Test get_client returns client when initialized."""
         client = DisseqtAgenticClient(
             api_key="test_key",
-            org_id="test_org",
             project_id="test_proj",
             service_name="test_service",
         )
@@ -292,7 +289,6 @@ class TestClientHelpers:
 
         retrieved_client = get_client()
         assert retrieved_client is not None
-        assert retrieved_client.org_id == "test_org"
         assert retrieved_client.project_id == "test_proj"
 
         client.shutdown()

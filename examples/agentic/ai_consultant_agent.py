@@ -6,18 +6,18 @@ from typing import Any
 
 import requests
 
+# Disseqt SDK
+from disseqt_agentic_sdk import DisseqtAgenticClient
+from disseqt_agentic_sdk.context import get_current_trace
+from disseqt_agentic_sdk.enums import SpanKind
+from disseqt_agentic_sdk.semantics import AgenticAttributes, AgenticOperation, AgenticProvider
+
 # Google ADK
 from google.adk.agents import LlmAgent
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
-
-# Disseqt SDK
-from disseqt_agentic_sdk import DisseqtAgenticClient
-from disseqt_agentic_sdk.context import get_current_trace
-from disseqt_agentic_sdk.enums import SpanKind
-from disseqt_agentic_sdk.semantics import AgenticAttributes, AgenticOperation, AgenticProvider
 
 # Define constants for the agent configuration
 MODEL_ID = "gemini-2.5-flash"
@@ -35,7 +35,6 @@ DISSEQT_CLIENT: DisseqtAgenticClient | None = None
 try:
     client = DisseqtAgenticClient(
         api_key=os.getenv("DISSEQT_API_KEY", "your-api-key"),
-        org_id=os.getenv("DISSEQT_ORG_ID", "org_123"),
         project_id=os.getenv("DISSEQT_PROJECT_ID", "proj_456"),
         service_name=APP_NAME,
         service_version="1.0.0",
@@ -480,9 +479,7 @@ Use all available tools including Perplexity search to provide comprehensive, we
 
 
 # ADK Callbacks for tracing LLM calls
-def before_model_callback(
-    callback_context: CallbackContext, llm_request
-) -> types.Content | None:
+def before_model_callback(callback_context: CallbackContext, llm_request) -> types.Content | None:
     """Callback before LLM request - start LLM span"""
     trace = get_current_trace()
     if trace:
@@ -514,9 +511,7 @@ def before_model_callback(
     return None  # Allow normal execution
 
 
-def after_model_callback(
-    callback_context: CallbackContext, llm_response
-) -> types.Content | None:
+def after_model_callback(callback_context: CallbackContext, llm_response) -> types.Content | None:
     """Callback after LLM response - complete LLM span"""
     state = callback_context.state.to_dict()
     span = state.get("llm_span")

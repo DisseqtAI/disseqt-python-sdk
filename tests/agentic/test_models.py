@@ -46,8 +46,8 @@ class TestEnrichedSpan:
         )
 
         # Should accept UUID objects
-        assert isinstance(span.trace_id, (UUID, str))
-        assert isinstance(span.span_id, (UUID, str))
+        assert isinstance(span.trace_id, UUID | str)
+        assert isinstance(span.span_id, UUID | str)
 
         # to_dict should convert to strings
         span_dict = span.to_dict()
