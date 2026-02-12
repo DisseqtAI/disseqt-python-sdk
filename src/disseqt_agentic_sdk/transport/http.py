@@ -134,7 +134,6 @@ class HTTPTransport:
             "resource": {"attributes": resource_attrs},
             "traces": traces,
         }
-        print(payload)
         # Prepare headers
         headers = {
             "Content-Type": "application/json",
