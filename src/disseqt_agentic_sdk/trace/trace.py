@@ -87,7 +87,7 @@ class DisseqtTrace:
     def start_span(
         self,
         name: str,
-        kind: SpanKind,
+        kind: SpanKind | str,
         span_id: str | None = None,
         parent_span_id: str | None = None,
     ) -> DisseqtSpan:
@@ -96,7 +96,9 @@ class DisseqtTrace:
 
         Args:
             name: Span name
-            kind: Span kind (MODEL_EXEC, TOOL_EXEC, AGENT_EXEC, etc.) or string like "MODEL_EXEC"
+            kind: Span kind (MODEL_EXEC, TOOL_EXEC, AGENT_EXEC, etc.) or custom string value.
+                  Can be a SpanKind enum value or any string for custom span kinds.
+                  Example: SpanKind.MODEL_EXEC or "CUSTOM_OPERATION"
             span_id: Optional span ID (auto-generated if not provided)
             parent_span_id: Optional parent span ID (auto-detected from context if not provided)
 
@@ -109,9 +111,13 @@ class DisseqtTrace:
         if self.is_ended:
             raise RuntimeError("Cannot start a new span on an ended trace.")
 
-        # Convert string to SpanKind if needed
+        # Convert string to SpanKind if it's a valid enum value, otherwise keep as string for custom kinds
         if isinstance(kind, str):
-            kind = SpanKind(kind)
+            try:
+                kind = SpanKind(kind)
+            except ValueError:
+                # Custom span kind - keep as string
+                kind = kind
 
         span = DisseqtSpan(
             trace_id=self.trace_id,

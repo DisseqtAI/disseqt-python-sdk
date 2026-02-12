@@ -127,6 +127,45 @@ class TestDisseqtSpan:
         assert span.attributes[AgenticAttributes.ERROR_MESSAGE] == "Something went wrong"
         assert span.attributes[AgenticAttributes.ERROR_TYPE] == "ValueError"
 
+    def test_span_error_without_error_type(self):
+        """Test setting error on span without error_type."""
+        span = DisseqtSpan(trace_id="test_trace", name="error_span", kind=SpanKind.INTERNAL)
+
+        span.set_error(error_message="Something went wrong")
+
+        assert span.status == SpanStatus.ERROR
+        assert span.attributes[AgenticAttributes.ERROR_MESSAGE] == "Something went wrong"
+        # ERROR_TYPE should not be set when not provided
+        assert AgenticAttributes.ERROR_TYPE not in span.attributes
+
+    def test_span_set_status_with_string(self):
+        """Test setting status with string value."""
+        span = DisseqtSpan(trace_id="test_trace", name="test_span", kind=SpanKind.INTERNAL)
+
+        span.set_status("ERROR", "Test error message")
+
+        assert span.status == SpanStatus.ERROR
+        assert span.status_message == "Test error message"
+
+    def test_span_set_status_with_enum(self):
+        """Test setting status with enum value."""
+        span = DisseqtSpan(trace_id="test_trace", name="test_span", kind=SpanKind.INTERNAL)
+
+        span.set_status(SpanStatus.ERROR, "Test error message")
+
+        assert span.status == SpanStatus.ERROR
+        assert span.status_message == "Test error message"
+
+    def test_span_set_status_without_message(self):
+        """Test setting status without message."""
+        span = DisseqtSpan(trace_id="test_trace", name="test_span", kind=SpanKind.INTERNAL)
+
+        span.set_status(SpanStatus.OK)
+
+        assert span.status == SpanStatus.OK
+        # status_message remains as empty string when no message is provided
+        assert span.status_message == ""
+
     def test_span_end(self):
         """Test ending a span."""
         span = DisseqtSpan(trace_id="test_trace", name="test_span", kind=SpanKind.INTERNAL)
@@ -158,3 +197,27 @@ class TestDisseqtSpan:
         # Span should be marked as error
         assert span.status == SpanStatus.ERROR
         assert span.end_time_ns is not None
+
+    def test_span_set_status_with_string_and_message(self):
+        """Test setting status with string value and message."""
+        span = DisseqtSpan(trace_id="test_trace", name="test_span", kind=SpanKind.INTERNAL)
+
+        span.set_status("OK", "Success message")
+
+        assert span.status == SpanStatus.OK
+        assert span.status_message == "Success message"
+
+    def test_span_to_enriched_span_with_custom_kind(self):
+        """Test converting span to enriched span with custom string kind."""
+        span = DisseqtSpan(
+            trace_id="test_trace",
+            name="test_span",
+            kind="CUSTOM_KIND",  # Custom string kind
+        )
+        span.end()
+
+        enriched = span.to_enriched_span()
+
+        assert enriched.kind == "CUSTOM_KIND"
+        assert enriched.trace_id == "test_trace"
+        assert enriched.span_id == span.span_id

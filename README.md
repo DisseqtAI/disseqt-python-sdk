@@ -1,17 +1,28 @@
 # Disseqt SDK for Python
 
-Python SDK for Disseqt validators via the Dataset API. Decorator-based dynamic registry. Enum-driven slugs. Normalized responses with a dynamic `others` bag.
+Python SDK for Disseqt AI observability and validation. This package includes two SDKs:
+
+1. **Validation SDK** (`disseqt_sdk`) - Validate LLM inputs, outputs, RAG, agentic behavior, and MCP security
+2. **Agentic SDK** (`disseqt_agentic_sdk`) - Trace and monitor agentic AI workflows with OpenTelemetry-compatible spans
 
 **[Documentation](https://docs.disseqt.ai)** | **[API Reference](https://docs.disseqt.ai)** | **[Examples](https://github.com/DisseqtAI/disseqt-python-sdk/tree/main/examples)**
 
 ## Features
 
+### Validation SDK
 - **Clean API**: Single `client.validate(request)` method for all validators
 - **Type Safety**: Full typing support with Python 3.10.14+
 - **Auto-Registration**: Decorator-based validator registration system
 - **Normalized Responses**: Consistent response format with dynamic `others` bag
 - **Domain-Specific Models**: Module-scoped request types for each validation domain
 - **Enum-Driven**: No raw strings in public API, everything uses enums
+
+### Agentic SDK
+- **OpenTelemetry Compatible**: Standard span-based tracing
+- **Multiple Span Kinds**: MODEL_EXEC, TOOL_EXEC, AGENT_EXEC, RAG_EXEC, MCP_EXEC, and custom kinds
+- **Automatic Batching**: Efficient span batching and flushing
+- **Context Management**: Thread-local context for nested traces
+- **Helper Functions**: Decorators and utilities for easy integration
 
 ## Installation
 
@@ -27,9 +38,131 @@ pip install git+https://github.com/DisseqtAI/disseqt-python-sdk.git
 
 For detailed installation instructions including virtual environments and troubleshooting, see [INSTALL.md](https://github.com/DisseqtAI/disseqt-python-sdk/blob/main/INSTALL.md).
 
+## When to Use Which SDK?
+
+### Use Agentic SDK (`disseqt_agentic_sdk`) when:
+- ✅ You want to **trace and monitor** your agentic AI workflows
+- ✅ You need **observability** for LLM calls, tool calls, and agent actions
+- ✅ You want to track **span hierarchies** (parent-child relationships)
+- ✅ You need **OpenTelemetry-compatible** tracing
+- ✅ You want to **visualize workflows** in the Disseqt dashboard
+- ✅ You're building **RAG systems** and need `RAG_EXEC` spans
+- ✅ You're using **MCP (Model Context Protocol)** and need `MCP_EXEC` spans
+
+### Use Validation SDK (`disseqt_sdk`) when:
+- ✅ You want to **validate** LLM inputs/outputs for safety and quality
+- ✅ You need to check for **toxicity, bias, prompt injection**, etc.
+- ✅ You want to evaluate **RAG grounding** (context relevance, faithfulness)
+- ✅ You need to assess **agentic behavior** (goal accuracy, tool call accuracy)
+- ✅ You want **MCP security** validation (data leakage, insecure output)
+- ✅ You need **composite scoring** across multiple metrics
+
 ## Quick Start
 
-### Composite Score Evaluation
+### Agentic SDK - Tracing Workflows
+
+Trace your agentic AI workflows for observability and monitoring:
+
+```python
+from disseqt_agentic_sdk import DisseqtAgenticClient, start_trace
+from disseqt_agentic_sdk.enums import SpanKind
+from disseqt_agentic_sdk.api.helpers import trace_llm_call, trace_tool_call
+
+# Initialize client
+client = DisseqtAgenticClient(
+    api_key="your-api-key",
+    project_id="proj_456",
+    service_name="my-service",
+    endpoint="http://localhost:8080/v1/traces"
+)
+
+# Create a trace with multiple spans
+with start_trace(client, name="agent_workflow") as trace:
+    # Agent execution span
+    with trace.start_span("agent_execution", SpanKind.AGENT_EXEC) as agent_span:
+        agent_span.set_agent_info("my_agent", "agent_001")
+        
+        # LLM call span
+        with trace.start_span("llm_call", SpanKind.MODEL_EXEC) as llm_span:
+            llm_span.set_model_info("gpt-4", "openai")
+            llm_span.set_messages(
+                input_messages=[{"role": "user", "content": "Hello"}],
+                output_messages=[{"role": "assistant", "content": "Hi there!"}]
+            )
+            llm_span.set_token_usage(input_tokens=10, output_tokens=5)
+        
+        # Tool call span
+        with trace.start_span("api_call", SpanKind.TOOL_EXEC) as tool_span:
+            tool_span.set_tool_info("get_weather", "call_001")
+            tool_span.set_attribute("tool.input.city", "Paris")
+
+# Trace automatically sent when exiting the 'with' block
+client.shutdown()
+```
+
+#### RAG Workflow Tracing
+
+For RAG (Retrieval Augmented Generation) workflows, use `RAG_EXEC` span kind:
+
+```python
+with start_trace(client, name="rag_workflow") as trace:
+    with trace.start_span("rag_retrieval", SpanKind.RAG_EXEC) as rag_span:
+        # Set context and messages for RAG validation
+        rag_span.set_attribute("agentic.input.context", "Retrieved context...")
+        rag_span.set_messages(
+            input_messages=[{"role": "user", "content": "What is AI?"}],
+            output_messages=[{"role": "assistant", "content": "AI is..."}]
+        )
+```
+
+#### MCP Workflow Tracing
+
+For MCP (Model Context Protocol) workflows, use `MCP_EXEC` span kind:
+
+```python
+with start_trace(client, name="mcp_workflow") as trace:
+    with trace.start_span("mcp_execution", SpanKind.MCP_EXEC) as mcp_span:
+        mcp_span.set_messages(
+            input_messages=[{"role": "user", "content": "Query"}],
+            output_messages=[{"role": "assistant", "content": "Response"}]
+        )
+        mcp_span.set_attribute("mcp.protocol.version", "1.0")
+```
+
+#### Custom Span Kinds
+
+You can use custom span kinds by passing any string:
+
+```python
+# Custom span kind
+with trace.start_span("data_processing", "DATA_PROCESSING") as span:
+    span.set_attribute("processing.type", "batch")
+
+# Or with decorator
+from disseqt_agentic_sdk.api.helpers import trace_function
+
+@trace_function(client, kind="CUSTOM_OPERATION")
+def my_function():
+    return "result"
+```
+
+#### Available Span Kinds
+
+| Span Kind | Description | Use Case |
+|-----------|-------------|----------|
+| `MODEL_EXEC` | LLM model execution | GPT-4, Claude, Gemini calls |
+| `TOOL_EXEC` | Tool/function execution | API calls, calculator, database queries |
+| `AGENT_EXEC` | Agent workflow execution | Main agent orchestration |
+| `RAG_EXEC` | RAG execution | Retrieval + generation workflows (required for RAG validations) |
+| `MCP_EXEC` | MCP protocol execution | Model Context Protocol interactions (required for MCP validations) |
+| `INTERNAL` | Internal operations | Internal processing, data transformation |
+| `CLIENT` | Client-side operations | Standard OTLP client span |
+| `SERVER` | Server-side operations | Standard OTLP server span |
+| Custom strings | Any custom category | `"DATA_PROCESSING"`, `"CUSTOM_OPERATION"`, etc. |
+
+For more Agentic SDK examples, see the **[agentic examples](https://github.com/DisseqtAI/disseqt-python-sdk/tree/main/examples/agentic)** directory.
+
+### Validation SDK - Composite Score Evaluation
 
 The Composite Score Evaluator combines multiple validators for comprehensive LLM output evaluation:
 
@@ -165,7 +298,17 @@ print(result)
 
 ## Examples
 
-For more detailed examples and use cases, see the **[examples](https://github.com/DisseqtAI/disseqt-python-sdk/tree/main/examples)** directory on GitHub:
+### Agentic SDK Examples
+
+For Agentic SDK (tracing/observability) examples, see the **[agentic examples](https://github.com/DisseqtAI/disseqt-python-sdk/tree/main/examples/agentic)** directory:
+
+- **[example.py](https://github.com/DisseqtAI/disseqt-python-sdk/blob/main/examples/agentic/example.py)** - Complete example with multiple spans using context managers
+- **[example_without_with.py](https://github.com/DisseqtAI/disseqt-python-sdk/blob/main/examples/agentic/example_without_with.py)** - Manual span management without `with` statements
+- **[ai_consultant_agent.py](https://github.com/DisseqtAI/disseqt-python-sdk/blob/main/examples/agentic/ai_consultant_agent.py)** - Full AI agent integration example
+
+### Validation SDK Examples
+
+For Validation SDK examples, see the **[examples](https://github.com/DisseqtAI/disseqt-python-sdk/tree/main/examples)** directory:
 
 - **[example.py](https://github.com/DisseqtAI/disseqt-python-sdk/blob/main/examples/example.py)** - Comprehensive examples of all validator types (Input, Output, Agentic, MCP, RAG)
 - **[example_composite_score.py](https://github.com/DisseqtAI/disseqt-python-sdk/blob/main/examples/example_composite_score.py)** - Composite Score Evaluator with multi-metric evaluation

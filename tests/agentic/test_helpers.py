@@ -272,6 +272,26 @@ class TestHelpers:
         result = test_func()
         assert result == "result"
 
+    def test_trace_function_decorator_custom_span_kind(self):
+        """Test trace_function decorator with custom span kind string."""
+
+        @trace_function(self.client, name="func", kind="CUSTOM_OPERATION")
+        def test_func():
+            return "result"
+
+        result = test_func()
+        assert result == "result"
+
+    def test_trace_function_decorator_invalid_enum_keeps_string(self):
+        """Test trace_function decorator keeps invalid enum as string for custom kinds."""
+
+        @trace_function(self.client, name="func", kind="DATA_PROCESSING")
+        def test_func():
+            return "result"
+
+        result = test_func()
+        assert result == "result"
+
 
 class TestClientHelpers:
     """Tests for client helper functions."""

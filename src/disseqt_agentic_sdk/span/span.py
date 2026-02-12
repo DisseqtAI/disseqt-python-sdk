@@ -35,7 +35,7 @@ class DisseqtSpan:
         self,
         trace_id: str,
         name: str,
-        kind: SpanKind,
+        kind: SpanKind | str,
         span_id: str | None = None,
         parent_span_id: str | None = None,
         project_id: str = "",

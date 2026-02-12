@@ -183,7 +183,7 @@ def trace_function(
     Args:
         client: DisseqtAgenticClient instance (required)
         name: Optional span name (defaults to function name)
-        kind: Span kind (default: INTERNAL)
+        kind: Span kind (default: INTERNAL). Can be a SpanKind enum value or custom string.
         **span_attrs: Additional span attributes
 
     Example:
@@ -195,6 +195,10 @@ def trace_function(
         >>> @trace_function(client, kind=SpanKind.AGENT_EXEC, agent_name="assistant")
         ... def agent_function():
         ...     return "result"
+
+        >>> @trace_function(client, kind="CUSTOM_OPERATION")
+        ... def custom_function():
+        ...     return "result"
     """
 
     def decorator(func: Callable) -> Callable:
@@ -204,8 +208,15 @@ def trace_function(
 
             span_name = name or func.__name__
 
-            # Convert string to SpanKind if needed
-            span_kind = SpanKind(kind) if isinstance(kind, str) else kind
+            # Convert string to SpanKind if it's a valid enum value, otherwise keep as string for custom kinds
+            if isinstance(kind, str):
+                try:
+                    span_kind = SpanKind(kind)
+                except ValueError:
+                    # Custom span kind - keep as string
+                    span_kind = kind
+            else:
+                span_kind = kind
 
             with start_trace(client, f"{span_name}_trace") as trace:
                 with trace.start_span(span_name, span_kind) as span:

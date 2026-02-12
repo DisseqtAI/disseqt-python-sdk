@@ -73,3 +73,37 @@ class TestLogging:
                 assert "%(levelname)s" in formatter._fmt
                 assert "%(name)s" in formatter._fmt
                 assert "%(message)s" in formatter._fmt
+
+    def test_set_log_level_with_int(self):
+        """Test setting log level with integer."""
+        logger = get_logger()
+
+        set_log_level(logging.DEBUG)
+        assert logger.level == logging.DEBUG
+
+        set_log_level(logging.INFO)
+        assert logger.level == logging.INFO
+
+        set_log_level(logging.WARNING)
+        assert logger.level == logging.WARNING
+
+        set_log_level(logging.ERROR)
+        assert logger.level == logging.ERROR
+
+    def test_set_log_level_with_invalid_type(self):
+        """Test set_log_level defaults to INFO for invalid type."""
+        logger = get_logger()
+
+        # Set to a known level first
+        set_log_level("DEBUG")
+        assert logger.level == logging.DEBUG
+
+        # Pass invalid type (e.g., None, list, dict)
+        set_log_level(None)
+        assert logger.level == logging.INFO  # Should default to INFO
+
+        set_log_level([])
+        assert logger.level == logging.INFO
+
+        set_log_level({})
+        assert logger.level == logging.INFO
