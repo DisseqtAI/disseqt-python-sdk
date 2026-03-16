@@ -1,7 +1,6 @@
 """Test client headers and path construction."""
 
 import json
-import uuid
 from unittest.mock import patch
 
 import pytest
@@ -22,22 +21,15 @@ class TestClientHeaders:
         assert "X-API-Key" in headers
         assert "X-Project-Id" in headers
         assert "Content-Type" in headers
-        assert "X-Request-Id" in headers
 
         assert headers["X-API-Key"] == "test_key_xyz"
         assert headers["X-Project-Id"] == "test_project_123"
         assert headers["Content-Type"] == "application/json"
 
-        # Validate X-Request-Id is a valid UUID
-        request_id = headers["X-Request-Id"]
-        uuid.UUID(request_id)  # Will raise ValueError if invalid
-
-    def test_build_headers_generates_unique_request_ids(self, client):
-        """Test that each call generates a unique request ID."""
-        headers1 = client._build_headers()
-        headers2 = client._build_headers()
-
-        assert headers1["X-Request-Id"] != headers2["X-Request-Id"]
+    def test_no_request_id_header(self, client):
+        """Test that X-Request-Id is NOT included (handled by Kong)."""
+        headers = client._build_headers()
+        assert "X-Request-Id" not in headers
 
 
 class TestClientPaths:
@@ -129,10 +121,7 @@ class TestClientPayloads:
         assert request_headers["X-API-Key"] == "test_key_xyz"
         assert request_headers["X-Project-Id"] == "test_project_123"
         assert request_headers["Content-Type"] == "application/json"
-        assert "X-Request-Id" in request_headers
-
-        # Validate X-Request-Id is a valid UUID
-        uuid.UUID(request_headers["X-Request-Id"])
+        assert "X-Request-Id" not in request_headers
 
 
 class TestClientErrorHandling:

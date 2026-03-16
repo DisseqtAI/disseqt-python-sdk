@@ -12,14 +12,16 @@ from .base import _LLMTextFieldsMixin
 class OutputValidationRequest(_LLMTextFieldsMixin):
     """Request model for output validation validators.
 
-    Different validators have different field requirements:
-    - Response only: grammar_correctness, response_tone, bias, toxicity, clarity,
-      coherence, data_leakage, insecure_output, narrative_continuity, diversity,
-      readability, nsfw, gender_bias, racial_bias, political_bias, self_harm,
-      terrorism, violence, sexual_content, hate_speech
-    - Prompt + Response: answer_relevance, conceptual_similarity
-    - Context + Response: factual_consistency, creativity, compression_score,
-      fuzzy_score, rouge_score, bleu_score, meteor_score, cosine_similarity
+    Field requirements per validator (from ``input_requirements`` / ``evaluation_parameters``):
+
+    - **Response only** (R): grammar_correctness, response_tone, bias, toxicity,
+      clarity, coherence, data_leakage, insecure_output, narrative_continuity,
+      diversity, readability, nsfw, gender_bias, racial_bias, political_bias,
+      intersectionality, self_harm, terrorism, violence, sexual_content, hate_speech
+    - **Query + Response** (Q_R): answer_relevance, conceptual_similarity, child_safety
+    - **Context + Response** (C_R): creativity, compression_score, fuzzy_score,
+      rouge_score, bleu_score, meteor_score, cosine_similarity
+    - **Query + Context + Response** (C_Q_R): factual_consistency
     """
 
     # All fields are optional since different validators need different combinations

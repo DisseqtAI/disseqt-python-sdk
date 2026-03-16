@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import uuid
 from typing import Any, cast
 
 import requests
@@ -64,7 +63,6 @@ class Client:
             "X-API-Key": self.api_key,
             "X-Project-Id": self.project_id,
             "Content-Type": "application/json",
-            "X-Request-Id": str(uuid.uuid4()),
         }
 
     def validate(
@@ -90,7 +88,7 @@ class Client:
             request._path_template,
         )
 
-        print(f"URL: {url}")
+        # print(f"URL: {url}")
 
         # Get validator metadata from registry
         try:

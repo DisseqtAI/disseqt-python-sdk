@@ -34,6 +34,7 @@ class InputValidation(Enum):
     HATE_SPEECH = "hate-speech"
     NSFW = "nsfw"
     INVISIBLE_TEXT = "invisible-text"
+    CHILD_SAFETY = "child-safety"
 
 
 class OutputValidation(Enum):
@@ -57,6 +58,7 @@ class OutputValidation(Enum):
     GENDER_BIAS = "gender-bias"
     RACIAL_BIAS = "racial-bias"
     POLITICAL_BIAS = "political-bias"
+    INTERSECTIONALITY = "intersectionality"
     TOXICITY = "toxicity"
     NSFW = "nsfw"
     TERRORISM = "terrorism"
@@ -64,6 +66,7 @@ class OutputValidation(Enum):
     SELF_HARM = "self-harm"
     SEXUAL_CONTENT = "sexual-content"
     HATE_SPEECH = "hate-speech"
+    CHILD_SAFETY = "child-safety"
 
     # Security
     DATA_LEAKAGE = "data-leakage"
