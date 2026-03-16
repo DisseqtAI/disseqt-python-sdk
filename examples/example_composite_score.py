@@ -10,9 +10,13 @@ def main() -> None:
     """Demonstrate composite score evaluation."""
     # Initialize client
     client = Client(
-        project_id="e14f79b1-c839-44dc-96c8-f1166ed45a63",
-        api_key="3a2e8d8b-3bd1-4300-a13a-58122f49b0a6",
-        base_url="https://production-monitoring-eu.disseqt.ai",
+        # project_id="e14f79b1-c839-44dc-96c8-f1166ed45a63",
+        # api_key="3a2e8d8b-3bd1-4300-a13a-58122f49b0a6",
+        # base_url="https://production-monitoring-eu.disseqt.ai",
+        project_id="df60e677-0ca0-4f4f-80b5-2b271d9ebd5e",
+        api_key="dsk_908df7468a563ce11962acd1e1c9356019a014f90f537d601092ba15e951bc27",
+        # base_url="https://production-monitoring-eu.disseqt.ai",
+        base_url="http://localhost:8081",
     )
 
     print("🔍 Composite Score Evaluation Example\n")

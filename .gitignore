@@ -167,3 +167,6 @@ cython_debug/
 # uv
 # Note: .python-version can be committed for team consistency
 # Note: uv.lock should be committed for reproducible builds
+
+# Architecture diagrams (local-only, not for distribution)
+architecture/

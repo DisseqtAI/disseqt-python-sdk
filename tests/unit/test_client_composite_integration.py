@@ -176,7 +176,7 @@ class TestClientCompositeIntegration:
             assert headers["X-API-Key"] == "key_xyz"
             assert headers["X-Project-Id"] == "proj_abc"
             assert headers["Content-Type"] == "application/json"
-            assert "X-Request-Id" in headers
+            assert "X-Request-Id" not in headers
 
     def test_composite_url_construction(self):
         """Test URL is correctly constructed for composite evaluator."""

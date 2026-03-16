@@ -2,6 +2,7 @@
 
 # Quality metrics
 from .accuracy import FactualConsistencyValidator
+from .child_safety import OutputChildSafetyValidator
 from .answer_relevance import AnswerRelevanceValidator
 
 # Safety & bias detection
@@ -22,6 +23,7 @@ from .diversity import DiversityValidator
 from .fuzzy_score import FuzzyScoreValidator
 from .gender_bias import OutputGenderBiasValidator
 from .grammar_correctness import GrammarCorrectnessValidator
+from .intersectionality import OutputIntersectionalityValidator
 from .hate_speech import OutputHateSpeechValidator
 from .insecure_output import OutputInsecureOutputValidator
 from .meteor_score import MeteorScoreValidator
@@ -55,6 +57,7 @@ __all__ = [
     "OutputBiasValidator",
     "OutputGenderBiasValidator",
     "OutputHateSpeechValidator",
+    "OutputIntersectionalityValidator",
     "OutputNSFWValidator",
     "OutputPoliticalBiasValidator",
     "OutputRacialBiasValidator",
@@ -63,6 +66,7 @@ __all__ = [
     "OutputTerrorismValidator",
     "OutputToxicityValidator",
     "OutputViolenceValidator",
+    "OutputChildSafetyValidator",
     # Security
     "OutputDataLeakageValidator",
     "OutputInsecureOutputValidator",

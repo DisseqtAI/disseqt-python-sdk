@@ -1,5 +1,6 @@
 """Input validation validators."""
 
+from .child_safety import ChildSafetyValidator
 from .bias import BiasValidator
 from .gender_bias import GenderBiasValidator
 from .hate_speech import HateSpeechValidator
@@ -30,4 +31,5 @@ __all__ = [
     "HateSpeechValidator",
     "NSFWValidator",
     "InvisibleTextValidator",
+    "ChildSafetyValidator",
 ]
