@@ -20,8 +20,8 @@ def main():
     """Demonstrate SDK usage with various validators."""
     # Initialize client (replace with your actual credentials)
     client = Client(
-        project_id="df60e677-0ca0-4f4f-80b5-2b271d9ebd5e",
-        api_key="dsk_908df7468a563ce11962acd1e1c9356019a014f90f537d601092ba15e951bc27",
+        project_id="<ENTER_YOUR_PROJECT_ID_HERE>",
+        api_key="<ENTER_YOUR_API_KEY_HERE>",
         # base_url="https://production-monitoring-eu.disseqt.ai",
         base_url="http://localhost:8081",
         # base_url="https://stage-production-monitoring.disseqt.ai",
