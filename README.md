@@ -465,7 +465,7 @@ config = SDKConfigInput(
 client = Client(
     project_id="your_project_id",
     api_key="your_api_key",
-    base_url="https://production-monitoring-eu.disseqt.ai",  # Default
+    base_url="https://api.disseqt.ai/realtime-validations",  # Default
     timeout=30  # Default timeout in seconds
 )
 ```

@@ -22,7 +22,7 @@ def main():
     client = Client(
         project_id="<ENTER_YOUR_PROJECT_ID_HERE>",
         api_key="<ENTER_YOUR_API_KEY_HERE>",
-        # base_url="https://production-monitoring-eu.disseqt.ai",
+        # base_url="https://api.disseqt.ai/realtime-validations",
         base_url="http://localhost:8081",
         # base_url="https://stage-production-monitoring.disseqt.ai",
         timeout=30,

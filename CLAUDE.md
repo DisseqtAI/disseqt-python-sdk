@@ -81,7 +81,7 @@ OpenTelemetry-inspired tracing with:
 - Dataclasses with `slots=True` for validators and models
 - `requests` library for HTTP (no async)
 - Auth via `X-API-Key` and `X-Project-Id` headers
-- API base URL defaults: validation SDK uses `production-monitoring-eu.disseqt.ai`, Prompt Packs uses `localhost:8000`
+- API base URL defaults: validation SDK uses `api.disseqt.ai/realtime-validations`, Prompt Packs uses `localhost:8000`
 - Line length: 100 (black + ruff)
 - Pre-commit hooks: black, ruff (with `--fix`), trailing-whitespace, end-of-file-fixer, debug-statements
 - `architecture/` directory is gitignored (local-only diagrams)
