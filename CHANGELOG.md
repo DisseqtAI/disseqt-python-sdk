@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-26
+
+### Changed
+- **Default validation API endpoint**: `Client` default `base_url` updated from
+  `https://production-monitoring-eu.disseqt.ai` to
+  `https://api.disseqt.ai/realtime-validations`. Callers using the default will
+  now target the new endpoint on upgrade. Pass `base_url=` explicitly to opt out.
+  Examples, tests, and docs updated to match.
+
 ## [0.2.0] - 2025-12-01
 
 ### Changed
