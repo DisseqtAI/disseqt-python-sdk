@@ -3,6 +3,7 @@
 import pytest
 import requests
 import requests_mock
+
 from disseqt_sdk import Client
 from disseqt_sdk.client import HTTPError
 from disseqt_sdk.models.composite_score import CompositeScoreRequest

@@ -1,7 +1,7 @@
 """Test configuration and fixtures."""
 
-
 import pytest
+
 from disseqt_sdk import Client, SDKConfigInput
 from disseqt_sdk.models.agentic_behaviour import AgenticBehaviourRequest
 from disseqt_sdk.models.input_validation import InputValidationRequest

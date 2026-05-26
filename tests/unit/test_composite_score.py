@@ -1,6 +1,5 @@
 """Test composite score evaluation feature."""
 
-
 from disseqt_sdk.enums import Composite, ValidatorDomain
 from disseqt_sdk.models.composite_score import CompositeScoreRequest
 from disseqt_sdk.validators.composite.evaluate import (

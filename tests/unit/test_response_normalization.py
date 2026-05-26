@@ -1,6 +1,7 @@
 """Test response normalization."""
 
 import pytest
+
 from disseqt_sdk.response import normalize_server_payload, validate_actual_value_type
 
 

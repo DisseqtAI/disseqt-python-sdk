@@ -4,7 +4,6 @@ start_trace() - Create and start a new trace.
 High-level function for creating traces using a DisseqtAgenticClient instance.
 """
 
-
 from disseqt_agentic_sdk.client import DisseqtAgenticClient
 from disseqt_agentic_sdk.trace import DisseqtTrace
 from disseqt_agentic_sdk.utils.logging import get_logger

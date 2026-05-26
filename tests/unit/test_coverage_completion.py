@@ -1,6 +1,5 @@
 """Tests to complete coverage >95%."""
 
-
 from disseqt_sdk.enums import (
     AgenticBehavior,
     Composite,

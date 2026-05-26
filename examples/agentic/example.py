@@ -1,4 +1,5 @@
 import google.generativeai as genai
+
 from disseqt_agentic_sdk import DisseqtAgenticClient, start_trace
 from disseqt_agentic_sdk.enums import SpanKind
 from disseqt_agentic_sdk.semantics import AgenticOperation

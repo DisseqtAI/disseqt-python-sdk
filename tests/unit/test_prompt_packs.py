@@ -5,7 +5,8 @@ from unittest.mock import patch
 
 import pytest
 import requests as req_lib
-from disseqt_sdk.api_client import DisseqtAPIClient, _PROMPT_PACKS_BASE
+
+from disseqt_sdk.api_client import _PROMPT_PACKS_BASE, DisseqtAPIClient
 from disseqt_sdk.client import HTTPError
 from disseqt_sdk.models.prompt_packs import (
     CreateOutputValidationRequest,
@@ -18,7 +19,6 @@ from disseqt_sdk.models.prompt_packs import (
     PromptPackOutputValidationCategory,
     PromptPackOutputValidationRequest,
 )
-
 
 # ------------------------------------------------------------------
 # Fixtures
@@ -194,7 +194,9 @@ class TestCreateOutputValidationRequestDeprecated:
 
     def test_to_payload_maps_to_new_shape(self):
         """Deprecated request maps to prompt_pack_output_validation_run_name + metric_evaluations."""
-        req = CreateOutputValidationRequest(validation_type="automated", metrics=["toxicity", "bias"])
+        req = CreateOutputValidationRequest(
+            validation_type="automated", metrics=["toxicity", "bias"]
+        )
         payload = req.to_payload()
         assert "prompt_pack_output_validation_run_name" in payload
         assert payload["prompt_pack_output_validation_run_name"] == "automated"
@@ -243,9 +245,7 @@ class TestDisseqtAPIClientInit:
 
     def test_trailing_slash_stripped(self):
         """Test that trailing slash is stripped from base_url."""
-        client = DisseqtAPIClient(
-            project_id="p", api_key="k", base_url="http://localhost:8000/"
-        )
+        client = DisseqtAPIClient(project_id="p", api_key="k", base_url="http://localhost:8000/")
         assert client.base_url == "http://localhost:8000"
 
 
@@ -288,9 +288,7 @@ class TestDisseqtAPIClientURLs:
 class TestGeneratePromptPack:
     """Test generate_prompt_pack endpoint."""
 
-    def test_generate_prompt_pack_success(
-        self, requests_mock, api_client, generate_request
-    ):
+    def test_generate_prompt_pack_success(self, requests_mock, api_client, generate_request):
         """Test successful prompt pack generation."""
         mock_response = {"id": "pack-abc-123", "pack_name": "Security Pack"}
         requests_mock.post(f"{PREFIX}/generate", json=mock_response)
@@ -322,9 +320,7 @@ class TestDownloadPackCsv:
 
     PACK_ID = "pack-export-123"
 
-    def test_download_pack_csv_returns_csv_string(
-        self, requests_mock, api_client
-    ):
+    def test_download_pack_csv_returns_csv_string(self, requests_mock, api_client):
         """When server returns text/csv, returns CSV string."""
         csv_body = "prompt_text,category,severity\nTest prompt,safety,High"
         requests_mock.get(
@@ -340,9 +336,7 @@ class TestDownloadPackCsv:
         req = requests_mock.request_history[0]
         assert req.path_url.endswith(f"/{self.PACK_ID}/download")
 
-    def test_download_pack_csv_returns_json_when_app_json(
-        self, requests_mock, api_client
-    ):
+    def test_download_pack_csv_returns_json_when_app_json(self, requests_mock, api_client):
         """When server returns application/json (e.g. download URL), returns dict."""
         mock_response = {"download_url": "https://example.com/pack.csv"}
         requests_mock.get(
@@ -383,9 +377,7 @@ class TestRunEndpoints:
     def test_create_run(self, requests_mock, api_client, create_run_request):
         """Test creating a run."""
         mock_response = {"id": self.RUN_ID, "run_name": "Test Run"}
-        requests_mock.post(
-            f"{PREFIX}/{self.PACK_ID}/runs", json=mock_response
-        )
+        requests_mock.post(f"{PREFIX}/{self.PACK_ID}/runs", json=mock_response)
 
         result = api_client.create_run(self.PACK_ID, create_run_request)
 
@@ -398,9 +390,7 @@ class TestRunEndpoints:
     def test_list_runs_default_pagination(self, requests_mock, api_client):
         """Test listing runs with default pagination."""
         mock_response = {"data": [], "total": 0}
-        requests_mock.get(
-            f"{PREFIX}/{self.PACK_ID}/runs", json=mock_response
-        )
+        requests_mock.get(f"{PREFIX}/{self.PACK_ID}/runs", json=mock_response)
 
         result = api_client.list_runs(self.PACK_ID)
 
@@ -412,13 +402,9 @@ class TestRunEndpoints:
     def test_list_runs_custom_pagination(self, requests_mock, api_client):
         """Test listing runs with custom pagination."""
         mock_response = {"data": [], "total": 0}
-        requests_mock.get(
-            f"{PREFIX}/{self.PACK_ID}/runs", json=mock_response
-        )
+        requests_mock.get(f"{PREFIX}/{self.PACK_ID}/runs", json=mock_response)
 
-        api_client.list_runs(
-            self.PACK_ID, pagination=PaginationParams(limit=25, offset=50)
-        )
+        api_client.list_runs(self.PACK_ID, pagination=PaginationParams(limit=25, offset=50))
 
         qs = requests_mock.request_history[0].qs
         assert qs["limit"] == ["25"]
@@ -427,9 +413,7 @@ class TestRunEndpoints:
     def test_get_run(self, requests_mock, api_client):
         """Test getting a single run."""
         mock_response = {"id": self.RUN_ID, "status": "completed"}
-        requests_mock.get(
-            f"{PREFIX}/runs/{self.RUN_ID}", json=mock_response
-        )
+        requests_mock.get(f"{PREFIX}/runs/{self.RUN_ID}", json=mock_response)
 
         result = api_client.get_run(self.RUN_ID)
 
@@ -440,9 +424,7 @@ class TestRunEndpoints:
     def test_get_run_without_outputs(self, requests_mock, api_client):
         """Test getting a run without outputs."""
         mock_response = {"id": self.RUN_ID}
-        requests_mock.get(
-            f"{PREFIX}/runs/{self.RUN_ID}", json=mock_response
-        )
+        requests_mock.get(f"{PREFIX}/runs/{self.RUN_ID}", json=mock_response)
 
         api_client.get_run(self.RUN_ID, include_outputs=False)
 
@@ -451,9 +433,7 @@ class TestRunEndpoints:
 
     def test_delete_run(self, requests_mock, api_client):
         """Test deleting a run."""
-        requests_mock.delete(
-            f"{PREFIX}/runs/{self.RUN_ID}", status_code=204
-        )
+        requests_mock.delete(f"{PREFIX}/runs/{self.RUN_ID}", status_code=204)
 
         result = api_client.delete_run(self.RUN_ID)
 
@@ -462,9 +442,7 @@ class TestRunEndpoints:
     def test_get_run_outputs(self, requests_mock, api_client):
         """Test getting run outputs."""
         mock_response = {"data": [{"prompt": "test", "output": "response"}]}
-        requests_mock.get(
-            f"{PREFIX}/runs/{self.RUN_ID}/outputs", json=mock_response
-        )
+        requests_mock.get(f"{PREFIX}/runs/{self.RUN_ID}/outputs", json=mock_response)
 
         result = api_client.get_run_outputs(self.RUN_ID)
 
@@ -473,9 +451,7 @@ class TestRunEndpoints:
     def test_get_run_outputs_csv(self, requests_mock, api_client):
         """Test getting run outputs as CSV."""
         mock_response = {"csv_url": "https://example.com/outputs.csv"}
-        requests_mock.get(
-            f"{PREFIX}/runs/{self.RUN_ID}/outputs/csv", json=mock_response
-        )
+        requests_mock.get(f"{PREFIX}/runs/{self.RUN_ID}/outputs/csv", json=mock_response)
 
         result = api_client.get_run_outputs_csv(self.RUN_ID)
 
@@ -494,9 +470,7 @@ class TestOutputValidationEndpoints:
     PACK_ID = "pack-abc-123"
     VALIDATION_ID = "val-def-789"
 
-    def test_create_output_validation(
-        self, requests_mock, api_client, create_validation_request
-    ):
+    def test_create_output_validation(self, requests_mock, api_client, create_validation_request):
         """Test creating an output validation."""
         mock_response = {"id": self.VALIDATION_ID, "status": "pending"}
         requests_mock.post(
@@ -504,9 +478,7 @@ class TestOutputValidationEndpoints:
             json=mock_response,
         )
 
-        result = api_client.create_output_validation(
-            self.RUN_ID, create_validation_request
-        )
+        result = api_client.create_output_validation(self.RUN_ID, create_validation_request)
 
         assert result == mock_response
         sent = json.loads(requests_mock.request_history[0].text)
@@ -571,9 +543,7 @@ class TestOutputValidationEndpoints:
         assert qs["limit"] == ["5"]
         assert qs["offset"] == ["10"]
 
-    def test_get_output_validation_grouped_outputs(
-        self, requests_mock, api_client
-    ):
+    def test_get_output_validation_grouped_outputs(self, requests_mock, api_client):
         """Test getting grouped outputs."""
         mock_response = {"groups": []}
         requests_mock.get(
@@ -581,15 +551,11 @@ class TestOutputValidationEndpoints:
             json=mock_response,
         )
 
-        result = api_client.get_output_validation_grouped_outputs(
-            self.VALIDATION_ID
-        )
+        result = api_client.get_output_validation_grouped_outputs(self.VALIDATION_ID)
 
         assert result == mock_response
 
-    def test_get_output_validation_results_csv(
-        self, requests_mock, api_client
-    ):
+    def test_get_output_validation_results_csv(self, requests_mock, api_client):
         """Test getting validation results as CSV."""
         mock_response = {"csv_url": "https://example.com/results.csv"}
         requests_mock.get(
@@ -597,9 +563,7 @@ class TestOutputValidationEndpoints:
             json=mock_response,
         )
 
-        result = api_client.get_output_validation_results_csv(
-            self.VALIDATION_ID
-        )
+        result = api_client.get_output_validation_results_csv(self.VALIDATION_ID)
 
         assert result == mock_response
 
@@ -637,9 +601,7 @@ class TestDisseqtAPIClientErrors:
 
     def test_http_error_on_400(self, requests_mock, api_client, generate_request):
         """Test HTTPError raised on 400 response."""
-        requests_mock.post(
-            f"{PREFIX}/generate", status_code=400, text="Bad Request"
-        )
+        requests_mock.post(f"{PREFIX}/generate", status_code=400, text="Bad Request")
 
         with pytest.raises(HTTPError) as exc_info:
             api_client.generate_prompt_pack(generate_request)
@@ -698,14 +660,10 @@ class TestDisseqtAPIClientErrors:
         assert exc_info.value.status_code == 0
         assert "Network error" in str(exc_info.value)
 
-    def test_response_body_truncation(
-        self, requests_mock, api_client, generate_request
-    ):
+    def test_response_body_truncation(self, requests_mock, api_client, generate_request):
         """Test that long response bodies are truncated to 512 chars."""
         long_body = "X" * 1000
-        requests_mock.post(
-            f"{PREFIX}/generate", status_code=500, text=long_body
-        )
+        requests_mock.post(f"{PREFIX}/generate", status_code=500, text=long_body)
 
         with pytest.raises(HTTPError) as exc_info:
             api_client.generate_prompt_pack(generate_request)

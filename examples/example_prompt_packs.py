@@ -24,9 +24,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 # Default for local example runs; override with OPENAI_API_KEY env var
 DEFAULT_OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "sk-your-openai-api-key-here")
 
-from disseqt_sdk import DisseqtAPIClient
-from disseqt_sdk.client import HTTPError
-from disseqt_sdk.models.prompt_packs import (
+from disseqt_sdk import DisseqtAPIClient  # noqa: E402 — sys.path tweaked above
+from disseqt_sdk.client import HTTPError  # noqa: E402
+from disseqt_sdk.models.prompt_packs import (  # noqa: E402
     CreateRunRequest,
     GeneratePromptPackRequest,
     MetricEvaluation,
@@ -131,18 +131,27 @@ def main():
                 break
             except HTTPError as e:
                 _print_full_http_error(e, "Create Run")
-                if e.status_code == 400 and "no prompts to evaluate" in (e.response_body or "").lower():
+                if (
+                    e.status_code == 400
+                    and "no prompts to evaluate" in (e.response_body or "").lower()
+                ):
                     if attempt < max_wait_sec // poll_interval_sec:
                         if attempt == 0:
-                            print("Pack is still generating prompts; waiting for generation to complete...")
+                            print(
+                                "Pack is still generating prompts; waiting for generation to complete..."
+                            )
                         print(f"  Waiting {poll_interval_sec}s before retry ({attempt + 1})...")
                         time.sleep(poll_interval_sec)
                     else:
-                        print("Hint: Pack generation may still be in progress. Try again in a minute.")
+                        print(
+                            "Hint: Pack generation may still be in progress. Try again in a minute."
+                        )
                         return
                 else:
                     if "invalid API key" in (e.response_body or "").lower():
-                        print("Hint: Ensure OPENAI_API_KEY (or LLM_API_KEY) is a valid key for the provider.")
+                        print(
+                            "Hint: Ensure OPENAI_API_KEY (or LLM_API_KEY) is a valid key for the provider."
+                        )
                     return
             except Exception as e:
                 print(f"Error creating run: {type(e).__name__}: {e}")

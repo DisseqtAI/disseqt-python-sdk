@@ -17,6 +17,7 @@ parent_span_id for child spans because:
 """
 
 import google.generativeai as genai
+
 from disseqt_agentic_sdk import DisseqtAgenticClient
 from disseqt_agentic_sdk.enums import SpanKind, SpanStatus
 from disseqt_agentic_sdk.semantics import AgenticOperation

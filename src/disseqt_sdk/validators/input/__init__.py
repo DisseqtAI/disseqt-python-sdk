@@ -1,7 +1,7 @@
 """Input validation validators."""
 
-from .child_safety import ChildSafetyValidator
 from .bias import BiasValidator
+from .child_safety import ChildSafetyValidator
 from .gender_bias import GenderBiasValidator
 from .hate_speech import HateSpeechValidator
 from .intersectionality import IntersectionalityValidator

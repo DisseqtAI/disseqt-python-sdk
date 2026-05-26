@@ -5,6 +5,7 @@ Unit tests for helper functions.
 from unittest.mock import patch
 
 import pytest
+
 from disseqt_agentic_sdk import DisseqtAgenticClient, start_trace
 from disseqt_agentic_sdk.api.client import get_client, set_client
 from disseqt_agentic_sdk.api.helpers import (
@@ -23,8 +24,9 @@ class TestHelpers:
     @pytest.fixture(autouse=True)
     def setup_and_teardown(self):
         """Setup and teardown for each test."""
-        with patch("disseqt_agentic_sdk.client.client.HTTPTransport"), patch(
-            "disseqt_agentic_sdk.client.client.TraceBuffer"
+        with (
+            patch("disseqt_agentic_sdk.client.client.HTTPTransport"),
+            patch("disseqt_agentic_sdk.client.client.TraceBuffer"),
         ):
             self.client = DisseqtAgenticClient(
                 api_key="test_key",

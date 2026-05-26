@@ -8,8 +8,8 @@ from disseqt_sdk.validators.composite.evaluate import CompositeScoreEvaluator
 
 def main() -> None:
     """Demonstrate composite score evaluation."""
-    PROJECT_ID="<ENTER_YOUR_PROJECT_ID_HERE>",
-    API_KEY="<ENTER_YOUR_API_KEY_HERE>",
+    PROJECT_ID = ("<ENTER_YOUR_PROJECT_ID_HERE>",)
+    API_KEY = ("<ENTER_YOUR_API_KEY_HERE>",)
     # Initialize client
     client = Client(
         # project_id="e14f79b1-c839-44dc-96c8-f1166ed45a63",

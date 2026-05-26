@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from unittest.mock import Mock, patch
 
 import pytest
+
 from disseqt_agentic_sdk import DisseqtAgenticClient
 from disseqt_agentic_sdk.api.client import set_client
 from disseqt_agentic_sdk.api.trace import TraceWrapper
@@ -113,8 +114,9 @@ class TestTraceWrapperCoverage:
     @pytest.fixture(autouse=True)
     def setup(self):
         """Setup fixture with mocked dependencies."""
-        with patch("disseqt_agentic_sdk.client.client.HTTPTransport"), patch(
-            "disseqt_agentic_sdk.client.client.TraceBuffer"
+        with (
+            patch("disseqt_agentic_sdk.client.client.HTTPTransport"),
+            patch("disseqt_agentic_sdk.client.client.TraceBuffer"),
         ):
             self.client = DisseqtAgenticClient(api_key="k", project_id="p", service_name="s")
             set_client(self.client)

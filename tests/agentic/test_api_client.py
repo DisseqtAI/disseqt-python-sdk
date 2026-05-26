@@ -5,11 +5,12 @@ Unit tests for API client helper functions.
 from unittest.mock import MagicMock, patch
 
 import pytest
+
 from disseqt_agentic_sdk import DisseqtAgenticClient
 from disseqt_agentic_sdk.api.client import (
     flush,
-    get_current_client,
     get_client,
+    get_current_client,
     is_initialized,
     set_client,
     shutdown,
@@ -21,8 +22,9 @@ class TestAPIClientHelpers:
 
     def test_get_current_client_when_initialized(self):
         """Test get_current_client returns client when initialized."""
-        with patch("disseqt_agentic_sdk.client.client.HTTPTransport"), patch(
-            "disseqt_agentic_sdk.client.client.TraceBuffer"
+        with (
+            patch("disseqt_agentic_sdk.client.client.HTTPTransport"),
+            patch("disseqt_agentic_sdk.client.client.TraceBuffer"),
         ):
             client = DisseqtAgenticClient(
                 api_key="test_key",
@@ -47,8 +49,9 @@ class TestAPIClientHelpers:
 
     def test_flush_when_initialized(self):
         """Test flush works when client is initialized."""
-        with patch("disseqt_agentic_sdk.client.client.HTTPTransport"), patch(
-            "disseqt_agentic_sdk.client.client.TraceBuffer"
+        with (
+            patch("disseqt_agentic_sdk.client.client.HTTPTransport"),
+            patch("disseqt_agentic_sdk.client.client.TraceBuffer"),
         ):
             client = DisseqtAgenticClient(
                 api_key="test_key",
@@ -75,8 +78,9 @@ class TestAPIClientHelpers:
 
     def test_shutdown_when_initialized(self):
         """Test shutdown works when client is initialized."""
-        with patch("disseqt_agentic_sdk.client.client.HTTPTransport"), patch(
-            "disseqt_agentic_sdk.client.client.TraceBuffer"
+        with (
+            patch("disseqt_agentic_sdk.client.client.HTTPTransport"),
+            patch("disseqt_agentic_sdk.client.client.TraceBuffer"),
         ):
             client = DisseqtAgenticClient(
                 api_key="test_key",
@@ -103,8 +107,9 @@ class TestAPIClientHelpers:
 
     def test_is_initialized_true(self):
         """Test is_initialized returns True when client is set."""
-        with patch("disseqt_agentic_sdk.client.client.HTTPTransport"), patch(
-            "disseqt_agentic_sdk.client.client.TraceBuffer"
+        with (
+            patch("disseqt_agentic_sdk.client.client.HTTPTransport"),
+            patch("disseqt_agentic_sdk.client.client.TraceBuffer"),
         ):
             client = DisseqtAgenticClient(
                 api_key="test_key",
@@ -123,4 +128,3 @@ class TestAPIClientHelpers:
         set_client(None)
 
         assert is_initialized() is False
-

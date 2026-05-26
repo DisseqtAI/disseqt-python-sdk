@@ -11,7 +11,9 @@ All 7 validators require Query + Context + Response (C_Q_R).
 
 from disseqt_sdk import Client, SDKConfigInput
 from disseqt_sdk.models.rag_grounding import RagGroundingRequest
-from disseqt_sdk.validators.rag_grounding.context_entities_recall import ContextEntitiesRecallValidator
+from disseqt_sdk.validators.rag_grounding.context_entities_recall import (
+    ContextEntitiesRecallValidator,
+)
 from disseqt_sdk.validators.rag_grounding.context_precision import ContextPrecisionValidator
 from disseqt_sdk.validators.rag_grounding.context_recall import ContextRecallValidator
 from disseqt_sdk.validators.rag_grounding.faithfulness import FaithfulnessValidator
@@ -70,80 +72,118 @@ def main() -> None:
 
     # 1. Context Relevance
     # Measures how well the retrieved context addresses the query.
-    _run(client, ContextRelevanceValidator(
-        data=RagGroundingRequest(prompt=QUERY, context=CONTEXT, response=RESPONSE),
-        config=SDKConfigInput(
-            threshold=0.65,
-            custom_labels=["Irrelevant", "Partially Relevant", "Relevant", "Highly Relevant"],
-            label_thresholds=[0.3, 0.55, 0.75],
+    _run(
+        client,
+        ContextRelevanceValidator(
+            data=RagGroundingRequest(prompt=QUERY, context=CONTEXT, response=RESPONSE),
+            config=SDKConfigInput(
+                threshold=0.65,
+                custom_labels=["Irrelevant", "Partially Relevant", "Relevant", "Highly Relevant"],
+                label_thresholds=[0.3, 0.55, 0.75],
+            ),
         ),
-    ), "1. Context Relevance")
+        "1. Context Relevance",
+    )
 
     # 2. Context Precision
     # Measures how relevant the retrieved context chunks are to the query.
-    _run(client, ContextPrecisionValidator(
-        data=RagGroundingRequest(prompt=QUERY, context=CONTEXT, response=RESPONSE),
-        config=SDKConfigInput(
-            threshold=0.6,
-            custom_labels=["Irrelevant", "Somewhat Relevant", "Relevant", "Highly Relevant"],
-            label_thresholds=[0.3, 0.5, 0.75],
+    _run(
+        client,
+        ContextPrecisionValidator(
+            data=RagGroundingRequest(prompt=QUERY, context=CONTEXT, response=RESPONSE),
+            config=SDKConfigInput(
+                threshold=0.6,
+                custom_labels=["Irrelevant", "Somewhat Relevant", "Relevant", "Highly Relevant"],
+                label_thresholds=[0.3, 0.5, 0.75],
+            ),
         ),
-    ), "2. Context Precision")
+        "2. Context Precision",
+    )
 
     # 3. Context Recall
     # Measures how well the context covers all information needed to answer the query.
-    _run(client, ContextRecallValidator(
-        data=RagGroundingRequest(prompt=QUERY, context=CONTEXT, response=RESPONSE),
-        config=SDKConfigInput(
-            threshold=0.65,
-            custom_labels=["Poor Coverage", "Partial Coverage", "Good Coverage", "Complete Coverage"],
-            label_thresholds=[0.4, 0.5, 0.75],
+    _run(
+        client,
+        ContextRecallValidator(
+            data=RagGroundingRequest(prompt=QUERY, context=CONTEXT, response=RESPONSE),
+            config=SDKConfigInput(
+                threshold=0.65,
+                custom_labels=[
+                    "Poor Coverage",
+                    "Partial Coverage",
+                    "Good Coverage",
+                    "Complete Coverage",
+                ],
+                label_thresholds=[0.4, 0.5, 0.75],
+            ),
         ),
-    ), "3. Context Recall")
+        "3. Context Recall",
+    )
 
     # 4. Context Entities Recall
     # Measures how well the context captures important named entities from the query/response.
-    _run(client, ContextEntitiesRecallValidator(
-        data=RagGroundingRequest(prompt=QUERY, context=CONTEXT, response=RESPONSE),
-        config=SDKConfigInput(
-            threshold=0.6,
-            custom_labels=["Missing Entities", "Few Entities", "Most Entities", "All Entities"],
-            label_thresholds=[0.25, 0.5, 0.8],
+    _run(
+        client,
+        ContextEntitiesRecallValidator(
+            data=RagGroundingRequest(prompt=QUERY, context=CONTEXT, response=RESPONSE),
+            config=SDKConfigInput(
+                threshold=0.6,
+                custom_labels=["Missing Entities", "Few Entities", "Most Entities", "All Entities"],
+                label_thresholds=[0.25, 0.5, 0.8],
+            ),
         ),
-    ), "4. Context Entities Recall")
+        "4. Context Entities Recall",
+    )
 
     # 5. Noise Sensitivity
     # Measures robustness to irrelevant/noisy content in the context.
-    _run(client, NoiseSensitivityValidator(
-        data=RagGroundingRequest(prompt=QUERY, context=NOISY_CONTEXT, response=RESPONSE),
-        config=SDKConfigInput(
-            threshold=0.6,
-            custom_labels=["Highly Sensitive", "Moderately Sensitive", "Robust", "Very Robust"],
-            label_thresholds=[0.4, 0.6, 0.8],
+    _run(
+        client,
+        NoiseSensitivityValidator(
+            data=RagGroundingRequest(prompt=QUERY, context=NOISY_CONTEXT, response=RESPONSE),
+            config=SDKConfigInput(
+                threshold=0.6,
+                custom_labels=["Highly Sensitive", "Moderately Sensitive", "Robust", "Very Robust"],
+                label_thresholds=[0.4, 0.6, 0.8],
+            ),
         ),
-    ), "5. Noise Sensitivity")
+        "5. Noise Sensitivity",
+    )
 
     # 6. Response Relevancy
     # Measures how relevant the generated response is to the query.
-    _run(client, ResponseRelevancyValidator(
-        data=RagGroundingRequest(prompt=QUERY, context=CONTEXT, response=RESPONSE),
-        config=SDKConfigInput(
-            threshold=0.6,
-            custom_labels=["Off-topic", "Somewhat Relevant", "Relevant", "Highly Relevant"],
-            label_thresholds=[0.3, 0.5, 0.8],
+    _run(
+        client,
+        ResponseRelevancyValidator(
+            data=RagGroundingRequest(prompt=QUERY, context=CONTEXT, response=RESPONSE),
+            config=SDKConfigInput(
+                threshold=0.6,
+                custom_labels=["Off-topic", "Somewhat Relevant", "Relevant", "Highly Relevant"],
+                label_thresholds=[0.3, 0.5, 0.8],
+            ),
         ),
-    ), "6. Response Relevancy")
+        "6. Response Relevancy",
+    )
 
     # 7. Faithfulness
     # Measures how faithful the response is to the context (no hallucinations).
-    _run(client, FaithfulnessValidator(
-        data=RagGroundingRequest(prompt=QUERY, context=CONTEXT, response=RESPONSE),
-        config=SDKConfigInput(
-            threshold=0.7,
-            custom_labels=["Contradictory", "Partially Faithful", "Faithful", "Highly Faithful"],
-            label_thresholds=[0.3, 0.6, 0.85],
+    _run(
+        client,
+        FaithfulnessValidator(
+            data=RagGroundingRequest(prompt=QUERY, context=CONTEXT, response=RESPONSE),
+            config=SDKConfigInput(
+                threshold=0.7,
+                custom_labels=[
+                    "Contradictory",
+                    "Partially Faithful",
+                    "Faithful",
+                    "Highly Faithful",
+                ],
+                label_thresholds=[0.3, 0.6, 0.85],
+            ),
         ),
-    ), "7. Faithfulness")
+        "7. Faithfulness",
+    )
 
     print("\n=== RAG Grounding Examples Complete ===")
 
