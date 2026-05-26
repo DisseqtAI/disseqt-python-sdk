@@ -2,7 +2,6 @@
 Client helper functions for accessing the global client instance.
 """
 
-
 from disseqt_agentic_sdk.client import DisseqtAgenticClient
 from disseqt_agentic_sdk.utils.logging import get_logger
 

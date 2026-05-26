@@ -6,18 +6,18 @@ from typing import Any
 
 import requests
 
-# Disseqt SDK
-from disseqt_agentic_sdk import DisseqtAgenticClient
-from disseqt_agentic_sdk.context import get_current_trace
-from disseqt_agentic_sdk.enums import SpanKind
-from disseqt_agentic_sdk.semantics import AgenticAttributes, AgenticOperation, AgenticProvider
-
 # Google ADK
 from google.adk.agents import LlmAgent
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
+
+# Disseqt SDK
+from disseqt_agentic_sdk import DisseqtAgenticClient
+from disseqt_agentic_sdk.context import get_current_trace
+from disseqt_agentic_sdk.enums import SpanKind
+from disseqt_agentic_sdk.semantics import AgenticAttributes, AgenticOperation, AgenticProvider
 
 # Define constants for the agent configuration
 MODEL_ID = "gemini-2.5-flash"

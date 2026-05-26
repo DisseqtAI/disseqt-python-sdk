@@ -4,11 +4,12 @@ import json
 from unittest.mock import patch
 
 import pytest
+from requests_mock import ANY
+
 from disseqt_sdk.client import HTTPError
 from disseqt_sdk.validators.agentic_behavior.reliability import TopicAdherenceValidator
 from disseqt_sdk.validators.input.safety import ToxicityValidator
 from disseqt_sdk.validators.output.accuracy import FactualConsistencyValidator
-from requests_mock import ANY
 
 
 class TestClientHeaders:

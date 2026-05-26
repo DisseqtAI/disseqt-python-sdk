@@ -5,6 +5,7 @@ Unit tests for context management.
 import threading
 
 import pytest
+
 from disseqt_agentic_sdk.context import (
     clear_context,
     get_current_span,

@@ -3,6 +3,7 @@
 import pytest
 import requests
 import requests_mock
+
 from disseqt_sdk import Client
 from disseqt_sdk.client import HTTPError
 from disseqt_sdk.models.composite_score import CompositeScoreRequest
@@ -183,7 +184,7 @@ class TestClientCompositeIntegration:
         client = Client(
             project_id="test_project",
             api_key="test_key",
-            base_url="https://production-monitoring-eu.disseqt.ai",
+            base_url="https://api.disseqt.ai/realtime-validations",
         )
 
         evaluator = CompositeScoreEvaluator(
@@ -195,7 +196,7 @@ class TestClientCompositeIntegration:
 
         with requests_mock.Mocker() as m:
             m.post(
-                "https://production-monitoring-eu.disseqt.ai/api/v1/validators/composite/evaluate",
+                "https://api.disseqt.ai/realtime-validations/api/v1/validators/composite/evaluate",
                 json={"overall_confidence": {"score": 0.8}, "success": True},
             )
 
@@ -204,7 +205,7 @@ class TestClientCompositeIntegration:
             assert m.called
             assert (
                 m.last_request.url
-                == "https://production-monitoring-eu.disseqt.ai/api/v1/validators/composite/evaluate"
+                == "https://api.disseqt.ai/realtime-validations/api/v1/validators/composite/evaluate"
             )
 
 
@@ -224,7 +225,7 @@ class TestClientCustomHandlerCoverage:
 
         with requests_mock.Mocker() as m:
             m.post(
-                "https://production-monitoring-eu.disseqt.ai/api/v1/validators/composite/evaluate",
+                "https://api.disseqt.ai/realtime-validations/api/v1/validators/composite/evaluate",
                 json={"overall_confidence": {"score": 0.7}},
             )
 
@@ -258,7 +259,7 @@ class TestClientCustomHandlerCoverage:
 
         with requests_mock.Mocker() as m:
             m.post(
-                "https://production-monitoring-eu.disseqt.ai/api/v1/validators/composite/evaluate",
+                "https://api.disseqt.ai/realtime-validations/api/v1/validators/composite/evaluate",
                 json=server_response,
             )
 

@@ -9,5 +9,5 @@ from .api_client import DisseqtAPIClient
 from .client import Client
 from .models.base import SDKConfigInput
 
-__version__ = "0.2.8"
+__version__ = "0.3.0"
 __all__ = ["Client", "DisseqtAPIClient", "SDKConfigInput"]

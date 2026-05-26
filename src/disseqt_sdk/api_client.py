@@ -148,8 +148,7 @@ class DisseqtAPIClient:
                 return cast(dict[str, Any], raw)
             except json.JSONDecodeError as e:
                 raise ValueError(
-                    f"Failed to decode JSON response: {e}. "
-                    f"Response text: {response.text[:200]}"
+                    f"Failed to decode JSON response: {e}. " f"Response text: {response.text[:200]}"
                 ) from e
 
         except requests.RequestException as e:
@@ -164,7 +163,7 @@ class DisseqtAPIClient:
     ) -> tuple[int, dict[str, str], str]:
         """Perform a GET and return status, headers, and body text (for CSV etc.)."""
         url = self._url(path)
-        headers = {k: v for k, v in self._build_headers().items()}
+        headers = dict(self._build_headers())
         headers.pop("Content-Type", None)
         try:
             response = requests.request(
@@ -186,9 +185,7 @@ class DisseqtAPIClient:
     # Generation
     # ------------------------------------------------------------------
 
-    def generate_prompt_pack(
-        self, request: GeneratePromptPackRequest
-    ) -> dict[str, Any]:
+    def generate_prompt_pack(self, request: GeneratePromptPackRequest) -> dict[str, Any]:
         """Generate a new prompt pack.
 
         Args:
@@ -234,9 +231,7 @@ class DisseqtAPIClient:
     # Runs
     # ------------------------------------------------------------------
 
-    def create_run(
-        self, pack_id: str, request: CreateRunRequest
-    ) -> dict[str, Any]:
+    def create_run(self, pack_id: str, request: CreateRunRequest) -> dict[str, Any]:
         """Create a new run for a prompt pack.
 
         Args:
@@ -246,9 +241,7 @@ class DisseqtAPIClient:
         Returns:
             Created run data (includes run_id / id)
         """
-        return self._request(
-            "POST", f"/{pack_id}/runs", json_payload=request.to_payload()
-        )
+        return self._request("POST", f"/{pack_id}/runs", json_payload=request.to_payload())
 
     def list_runs(
         self,
@@ -351,9 +344,7 @@ class DisseqtAPIClient:
             json_payload=request.to_payload(),
         )
 
-    def list_run_output_validations(
-        self, run_id: str
-    ) -> dict[str, Any]:
+    def list_run_output_validations(self, run_id: str) -> dict[str, Any]:
         """List output validations for a specific run.
 
         Args:
@@ -364,9 +355,7 @@ class DisseqtAPIClient:
         """
         return self._request("GET", f"/runs/{run_id}/output-validations")
 
-    def get_output_validation(
-        self, validation_id: str
-    ) -> dict[str, Any]:
+    def get_output_validation(self, validation_id: str) -> dict[str, Any]:
         """Get details of a specific output validation.
 
         Args:
@@ -375,13 +364,9 @@ class DisseqtAPIClient:
         Returns:
             Output validation details
         """
-        return self._request(
-            "GET", f"/output-validations/{validation_id}"
-        )
+        return self._request("GET", f"/output-validations/{validation_id}")
 
-    def get_output_validation_summary(
-        self, validation_id: str
-    ) -> dict[str, Any]:
+    def get_output_validation_summary(self, validation_id: str) -> dict[str, Any]:
         """Get summary of an output validation.
 
         Args:
@@ -390,9 +375,7 @@ class DisseqtAPIClient:
         Returns:
             Validation summary
         """
-        return self._request(
-            "GET", f"/output-validations/{validation_id}/summary"
-        )
+        return self._request("GET", f"/output-validations/{validation_id}/summary")
 
     def get_output_validation_results(
         self,
@@ -436,9 +419,7 @@ class DisseqtAPIClient:
             params=params,
         )
 
-    def get_output_validation_results_csv(
-        self, validation_id: str
-    ) -> dict[str, Any]:
+    def get_output_validation_results_csv(self, validation_id: str) -> dict[str, Any]:
         """Get output validation results in CSV format.
 
         Args:
@@ -447,13 +428,9 @@ class DisseqtAPIClient:
         Returns:
             CSV data (or download URL)
         """
-        return self._request(
-            "GET", f"/output-validations/{validation_id}/results/csv"
-        )
+        return self._request("GET", f"/output-validations/{validation_id}/results/csv")
 
-    def delete_output_validation(
-        self, validation_id: str
-    ) -> dict[str, Any]:
+    def delete_output_validation(self, validation_id: str) -> dict[str, Any]:
         """Delete an output validation.
 
         Args:
@@ -462,9 +439,7 @@ class DisseqtAPIClient:
         Returns:
             Deletion confirmation
         """
-        return self._request(
-            "DELETE", f"/output-validations/{validation_id}"
-        )
+        return self._request("DELETE", f"/output-validations/{validation_id}")
 
     def list_pack_output_validations(
         self,

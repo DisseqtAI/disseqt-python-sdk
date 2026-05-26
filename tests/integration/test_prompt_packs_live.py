@@ -10,12 +10,12 @@ Requires Kong and the prompt-packs backend to be running locally.
 from __future__ import annotations
 
 import os
+
 import pytest
+
 from disseqt_sdk import DisseqtAPIClient
 from disseqt_sdk.client import HTTPError
 from disseqt_sdk.models.prompt_packs import (
-    CreateOutputValidationRequest,
-    CreateRunRequest,
     GeneratePromptPackRequest,
     PaginationParams,
     PromptPackCategory,
@@ -72,7 +72,9 @@ class TestPromptPacksLive:
         try:
             result = api_client.generate_prompt_pack(request)
             assert isinstance(result, dict)
-            pack_id = result.get("id") or result.get("pack_id") or (result.get("data") or {}).get("id")
+            pack_id = (
+                result.get("id") or result.get("pack_id") or (result.get("data") or {}).get("id")
+            )
             assert pack_id, f"Expected pack id in response: {result}"
         except HTTPError as e:
             if e.status_code in (502, 503):
@@ -83,7 +85,9 @@ class TestPromptPacksLive:
         """GET /{pack_id}/runs returns 2xx (empty list ok), 404, 400, or 502/503."""
         fake_pack_id = "00000000-0000-0000-0000-000000000001"
         try:
-            result = api_client.list_runs(fake_pack_id, pagination=PaginationParams(limit=5, offset=0))
+            result = api_client.list_runs(
+                fake_pack_id, pagination=PaginationParams(limit=5, offset=0)
+            )
             assert isinstance(result, dict)
         except HTTPError as e:
             if e.status_code in (502, 503):

@@ -13,12 +13,10 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import logging
-import os
 import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 # Ensure local src/ is used over any installed package
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -31,14 +29,19 @@ LOG_FORMAT = "%(asctime)s [%(levelname)-8s] %(name)s — %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
-def setup_logging(level: str = "INFO", log_file: Optional[str] = None) -> logging.Logger:
+def setup_logging(level: str = "INFO", log_file: str | None = None) -> logging.Logger:
     handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
     if log_file:
         Path(log_file).parent.mkdir(parents=True, exist_ok=True)
         handlers.append(logging.FileHandler(log_file))
 
-    logging.basicConfig(level=getattr(logging, level.upper()), format=LOG_FORMAT,
-                        datefmt=DATE_FORMAT, handlers=handlers, force=True)
+    logging.basicConfig(
+        level=getattr(logging, level.upper()),
+        format=LOG_FORMAT,
+        datefmt=DATE_FORMAT,
+        handlers=handlers,
+        force=True,
+    )
     return logging.getLogger("disseqt.examples")
 
 
@@ -96,12 +99,13 @@ EXAMPLES: dict[str, dict] = {
 # Result tracking
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ExampleResult:
     key: str
     label: str
     file: str
-    status: str = "pending"      # pending | ok | error | skipped
+    status: str = "pending"  # pending | ok | error | skipped
     elapsed_s: float = 0.0
     error: str = ""
     notes: list[str] = field(default_factory=list)
@@ -111,6 +115,7 @@ class ExampleResult:
 # Runner
 # ---------------------------------------------------------------------------
 
+
 def load_and_run(path: Path, log: logging.Logger) -> tuple[bool, str]:
     """Import and execute `main()` from the given example file."""
     spec = importlib.util.spec_from_file_location("_example_mod", path)
@@ -119,7 +124,7 @@ def load_and_run(path: Path, log: logging.Logger) -> tuple[bool, str]:
 
     mod = importlib.util.module_from_spec(spec)
     try:
-        spec.loader.exec_module(mod)           # module-level code / imports
+        spec.loader.exec_module(mod)  # module-level code / imports
     except Exception as e:
         return False, f"Import error: {e}"
 
@@ -167,19 +172,20 @@ def run_example(key: str, meta: dict, log: logging.Logger) -> ExampleResult:
 # Summary
 # ---------------------------------------------------------------------------
 
+
 def print_summary(results: list[ExampleResult], log: logging.Logger, total_s: float) -> None:
     log.info("")
     log.info("=" * 60)
     log.info("SUMMARY  —  %d examples  (%.2fs total)", len(results), total_s)
     log.info("=" * 60)
 
-    ok      = [r for r in results if r.status == "ok"]
-    errors  = [r for r in results if r.status == "error"]
+    ok = [r for r in results if r.status == "ok"]
+    errors = [r for r in results if r.status == "error"]
     skipped = [r for r in results if r.status == "skipped"]
 
     for r in results:
         icon = {"ok": "✓", "error": "✗", "skipped": "⊘"}.get(r.status, "?")
-        msg  = f"  {icon}  {r.label:<28} {r.elapsed_s:>6.2f}s"
+        msg = f"  {icon}  {r.label:<28} {r.elapsed_s:>6.2f}s"
         if r.error:
             msg += f"  →  {r.error}"
         if r.status == "ok":
@@ -202,35 +208,38 @@ def print_summary(results: list[ExampleResult], log: logging.Logger, total_s: fl
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run all (or selected) Disseqt SDK examples with structured logging.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="\n".join(
-            [f"  {k:<15} {v['description']}" for k, v in EXAMPLES.items()]
-        ),
+        epilog="\n".join([f"  {k:<15} {v['description']}" for k, v in EXAMPLES.items()]),
     )
     parser.add_argument(
-        "--examples", "-e",
+        "--examples",
+        "-e",
         nargs="*",
         choices=list(EXAMPLES.keys()),
         metavar="NAME",
         help="Examples to run (default: all). Choices: " + ", ".join(EXAMPLES.keys()),
     )
     parser.add_argument(
-        "--log-level", "-l",
+        "--log-level",
+        "-l",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Log verbosity (default: INFO)",
     )
     parser.add_argument(
-        "--log-file", "-f",
+        "--log-file",
+        "-f",
         default=None,
         metavar="PATH",
         help="Also write logs to this file (e.g. logs/run.log)",
     )
     parser.add_argument(
-        "--stop-on-error", "-x",
+        "--stop-on-error",
+        "-x",
         action="store_true",
         help="Stop immediately on first failure",
     )

@@ -2,18 +2,8 @@
 """Example usage of the Disseqt SDK."""
 
 from disseqt_sdk import Client, SDKConfigInput
-from disseqt_sdk.models.agentic_behaviour import AgenticBehaviourRequest
 from disseqt_sdk.models.input_validation import InputValidationRequest
-from disseqt_sdk.models.mcp_security import McpSecurityRequest
-from disseqt_sdk.models.output_validation import OutputValidationRequest
-from disseqt_sdk.models.rag_grounding import RagGroundingRequest
-from disseqt_sdk.validators.agentic_behavior.reliability import TopicAdherenceValidator
-from disseqt_sdk.validators.input.bias import BiasValidator
 from disseqt_sdk.validators.input.prompt_injection import InputPromptInjectionValidator
-from disseqt_sdk.validators.input.safety import ToxicityValidator
-from disseqt_sdk.validators.mcp_security.security import McpPromptInjectionValidator
-from disseqt_sdk.validators.output.accuracy import FactualConsistencyValidator
-from disseqt_sdk.validators.rag_grounding.grounding import ContextRelevanceValidator
 
 
 def main():
@@ -22,7 +12,7 @@ def main():
     client = Client(
         project_id="<ENTER_YOUR_PROJECT_ID_HERE>",
         api_key="<ENTER_YOUR_API_KEY_HERE>",
-        # base_url="https://production-monitoring-eu.disseqt.ai",
+        # base_url="https://api.disseqt.ai/realtime-validations",
         base_url="http://localhost:8081",
         # base_url="https://stage-production-monitoring.disseqt.ai",
         timeout=30,
@@ -114,7 +104,7 @@ def main():
     # )
 
     try:
-        result = client.validate(topic_validator)
+        result = client.validate(topic_validator)  # noqa: F821 — block above is commented out
         print(f"Result: {result}")
     except Exception as e:
         print(f"Error: {e}")

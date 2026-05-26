@@ -182,7 +182,9 @@ class CreateOutputValidationRequest:
         """Convert to new API payload shape for backward compatibility."""
         run_name = self.validation_type or "Validation"
         metric_evaluations = [
-            MetricEvaluation(metric_name=m, category=PromptPackOutputValidationCategory.OUTPUT_VALIDATION.value)
+            MetricEvaluation(
+                metric_name=m, category=PromptPackOutputValidationCategory.OUTPUT_VALIDATION.value
+            )
             for m in self.metrics
         ]
         return PromptPackOutputValidationRequest(

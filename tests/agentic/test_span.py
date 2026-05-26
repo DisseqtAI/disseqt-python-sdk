@@ -3,6 +3,7 @@ Unit tests for DisseqtSpan.
 """
 
 import pytest
+
 from disseqt_agentic_sdk.enums import SpanKind, SpanStatus
 from disseqt_agentic_sdk.semantics import AgenticAttributes
 from disseqt_agentic_sdk.span import DisseqtSpan

@@ -1,6 +1,7 @@
 """Test dynamic registry system."""
 
 import pytest
+
 from disseqt_sdk.enums import InputValidation, OutputValidation, ValidatorDomain
 from disseqt_sdk.registry import (
     _VALIDATOR_REGISTRY,

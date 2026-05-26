@@ -1,6 +1,5 @@
 """Test request payload mapping to match Postman specifications."""
 
-
 from disseqt_sdk.models.agentic_behaviour import AgenticBehaviourRequest
 from disseqt_sdk.models.base import SDKConfigInput
 from disseqt_sdk.models.input_validation import InputValidationRequest

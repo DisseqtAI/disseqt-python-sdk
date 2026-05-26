@@ -8,16 +8,16 @@ from disseqt_sdk.validators.composite.evaluate import CompositeScoreEvaluator
 
 def main() -> None:
     """Demonstrate composite score evaluation."""
-    PROJECT_ID="<ENTER_YOUR_PROJECT_ID_HERE>",
-    API_KEY="<ENTER_YOUR_API_KEY_HERE>",
+    PROJECT_ID = ("<ENTER_YOUR_PROJECT_ID_HERE>",)
+    API_KEY = ("<ENTER_YOUR_API_KEY_HERE>",)
     # Initialize client
     client = Client(
         # project_id="e14f79b1-c839-44dc-96c8-f1166ed45a63",
         # api_key="3a2e8d8b-3bd1-4300-a13a-58122f49b0a6",
-        # base_url="https://production-monitoring-eu.disseqt.ai",
+        # base_url="https://api.disseqt.ai/realtime-validations",
         project_id=PROJECT_ID,
         api_key=API_KEY,
-        # base_url="https://production-monitoring-eu.disseqt.ai",
+        # base_url="https://api.disseqt.ai/realtime-validations",
         base_url="https://stage-production-monitoring.disseqt.ai",
         # base_url="http://localhost:8081",
     )

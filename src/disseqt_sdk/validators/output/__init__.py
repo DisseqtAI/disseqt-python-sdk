@@ -2,7 +2,6 @@
 
 # Quality metrics
 from .accuracy import FactualConsistencyValidator
-from .child_safety import OutputChildSafetyValidator
 from .answer_relevance import AnswerRelevanceValidator
 
 # Safety & bias detection
@@ -10,6 +9,7 @@ from .bias import OutputBiasValidator
 
 # Scoring metrics
 from .bleu_score import BleuScoreValidator
+from .child_safety import OutputChildSafetyValidator
 from .clarity import ClarityValidator
 from .coherence import CoherenceValidator
 from .compression_score import CompressionScoreValidator
@@ -23,9 +23,9 @@ from .diversity import DiversityValidator
 from .fuzzy_score import FuzzyScoreValidator
 from .gender_bias import OutputGenderBiasValidator
 from .grammar_correctness import GrammarCorrectnessValidator
-from .intersectionality import OutputIntersectionalityValidator
 from .hate_speech import OutputHateSpeechValidator
 from .insecure_output import OutputInsecureOutputValidator
+from .intersectionality import OutputIntersectionalityValidator
 from .meteor_score import MeteorScoreValidator
 from .narrative_continuity import NarrativeContinuityValidator
 from .nsfw import OutputNSFWValidator

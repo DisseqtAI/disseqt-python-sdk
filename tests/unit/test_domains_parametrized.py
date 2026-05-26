@@ -1,6 +1,7 @@
 """Parametrized tests across all domains and validators."""
 
 import pytest
+
 from disseqt_sdk.enums import ValidatorDomain
 from disseqt_sdk.models.agentic_behaviour import AgenticBehaviourRequest
 from disseqt_sdk.models.input_validation import InputValidationRequest

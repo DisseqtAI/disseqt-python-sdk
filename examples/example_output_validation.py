@@ -88,131 +88,175 @@ def main() -> None:
     # ==================================================================
 
     # 1. Factual Consistency
-    _run(client, FactualConsistencyValidator(
-        data=OutputValidationRequest(prompt=QUERY, context=CONTEXT, response=RESPONSE),
-        config=SDKConfigInput(
-            threshold=0.6,
-            custom_labels=["Hallucinated", "Mostly Consistent", "Fully Consistent"],
-            label_thresholds=[0.4, 0.7],
+    _run(
+        client,
+        FactualConsistencyValidator(
+            data=OutputValidationRequest(prompt=QUERY, context=CONTEXT, response=RESPONSE),
+            config=SDKConfigInput(
+                threshold=0.6,
+                custom_labels=["Hallucinated", "Mostly Consistent", "Fully Consistent"],
+                label_thresholds=[0.4, 0.7],
+            ),
         ),
-    ), "1. Factual Consistency")
+        "1. Factual Consistency",
+    )
 
     # ==================================================================
     # Q_R — Query + Response
     # ==================================================================
 
     # 2. Answer Relevance
-    _run(client, AnswerRelevanceValidator(
-        data=OutputValidationRequest(prompt=QUERY, response=RESPONSE),
-        config=SDKConfigInput(
-            threshold=0.6,
-            custom_labels=["Irrelevant", "Relevant", "Highly Relevant"],
-            label_thresholds=[0.4, 0.7],
+    _run(
+        client,
+        AnswerRelevanceValidator(
+            data=OutputValidationRequest(prompt=QUERY, response=RESPONSE),
+            config=SDKConfigInput(
+                threshold=0.6,
+                custom_labels=["Irrelevant", "Relevant", "Highly Relevant"],
+                label_thresholds=[0.4, 0.7],
+            ),
         ),
-    ), "2. Answer Relevance")
+        "2. Answer Relevance",
+    )
 
     # 3. Conceptual Similarity
-    _run(client, ConceptualSimilarityValidator(
-        data=OutputValidationRequest(prompt=QUERY, response=RESPONSE),
-        config=SDKConfigInput(
-            threshold=0.6,
-            custom_labels=["Different", "Similar", "Very Similar"],
-            label_thresholds=[0.6, 0.8],
+    _run(
+        client,
+        ConceptualSimilarityValidator(
+            data=OutputValidationRequest(prompt=QUERY, response=RESPONSE),
+            config=SDKConfigInput(
+                threshold=0.6,
+                custom_labels=["Different", "Similar", "Very Similar"],
+                label_thresholds=[0.6, 0.8],
+            ),
         ),
-    ), "3. Conceptual Similarity")
+        "3. Conceptual Similarity",
+    )
 
     # 4. Child Safety (Q + R)
-    _run(client, OutputChildSafetyValidator(
-        data=OutputValidationRequest(
-            prompt="What are safe activities for children aged 8-12?",
-            response="Here are age-appropriate activities: reading, sports, art classes...",
+    _run(
+        client,
+        OutputChildSafetyValidator(
+            data=OutputValidationRequest(
+                prompt="What are safe activities for children aged 8-12?",
+                response="Here are age-appropriate activities: reading, sports, art classes...",
+            ),
+            config=SDKConfigInput(
+                threshold=0.5,
+                custom_labels=["Safe", "Moderate Risk", "High Risk"],
+                label_thresholds=[0.5, 0.7],
+            ),
         ),
-        config=SDKConfigInput(
-            threshold=0.5,
-            custom_labels=["Safe", "Moderate Risk", "High Risk"],
-            label_thresholds=[0.5, 0.7],
-        ),
-    ), "4. Child Safety")
+        "4. Child Safety",
+    )
 
     # ==================================================================
     # C_R — Context + Response
     # ==================================================================
 
     # 5. Creativity
-    _run(client, CreativityValidator(
-        data=OutputValidationRequest(
-            context="Write a short poem about artificial intelligence.",
-            response=(
-                "Silicon dreams ignite the night, / algorithms dancing in the light. "
-                "/ Neurons forged in binary code, / on the data-paved digital road."
+    _run(
+        client,
+        CreativityValidator(
+            data=OutputValidationRequest(
+                context="Write a short poem about artificial intelligence.",
+                response=(
+                    "Silicon dreams ignite the night, / algorithms dancing in the light. "
+                    "/ Neurons forged in binary code, / on the data-paved digital road."
+                ),
+            ),
+            config=SDKConfigInput(
+                threshold=0.66,
+                custom_labels=["Not Creative", "Creative", "Very Creative"],
+                label_thresholds=[0.66, 0.85],
             ),
         ),
-        config=SDKConfigInput(
-            threshold=0.66,
-            custom_labels=["Not Creative", "Creative", "Very Creative"],
-            label_thresholds=[0.66, 0.85],
-        ),
-    ), "5. Creativity")
+        "5. Creativity",
+    )
 
     # 6. Compression Score
-    _run(client, CompressionScoreValidator(
-        data=OutputValidationRequest(context=CONTEXT, response=RESPONSE),
-        config=SDKConfigInput(
-            threshold=0.4,
-            custom_labels=["Poor Compression", "Good Compression", "Excellent Compression"],
-            label_thresholds=[0.4, 0.7],
+    _run(
+        client,
+        CompressionScoreValidator(
+            data=OutputValidationRequest(context=CONTEXT, response=RESPONSE),
+            config=SDKConfigInput(
+                threshold=0.4,
+                custom_labels=["Poor Compression", "Good Compression", "Excellent Compression"],
+                label_thresholds=[0.4, 0.7],
+            ),
         ),
-    ), "6. Compression Score")
+        "6. Compression Score",
+    )
 
     # 7. Fuzzy Score
-    _run(client, FuzzyScoreValidator(
-        data=OutputValidationRequest(context=CONTEXT, response=RESPONSE),
-        config=SDKConfigInput(
-            threshold=0.5,
-            custom_labels=["Low", "Medium", "High"],
-            label_thresholds=[0.5, 0.7],
+    _run(
+        client,
+        FuzzyScoreValidator(
+            data=OutputValidationRequest(context=CONTEXT, response=RESPONSE),
+            config=SDKConfigInput(
+                threshold=0.5,
+                custom_labels=["Low", "Medium", "High"],
+                label_thresholds=[0.5, 0.7],
+            ),
         ),
-    ), "7. Fuzzy Score")
+        "7. Fuzzy Score",
+    )
 
     # 8. Rouge Score
-    _run(client, RougeScoreValidator(
-        data=OutputValidationRequest(context=CONTEXT, response=RESPONSE),
-        config=SDKConfigInput(
-            threshold=0.6,
-            custom_labels=["Poor Summary", "Good Summary", "Excellent Summary"],
-            label_thresholds=[0.6, 0.8],
+    _run(
+        client,
+        RougeScoreValidator(
+            data=OutputValidationRequest(context=CONTEXT, response=RESPONSE),
+            config=SDKConfigInput(
+                threshold=0.6,
+                custom_labels=["Poor Summary", "Good Summary", "Excellent Summary"],
+                label_thresholds=[0.6, 0.8],
+            ),
         ),
-    ), "8. Rouge Score")
+        "8. Rouge Score",
+    )
 
     # 9. Bleu Score
-    _run(client, BleuScoreValidator(
-        data=OutputValidationRequest(context=CONTEXT, response=RESPONSE),
-        config=SDKConfigInput(
-            threshold=0.3,
-            custom_labels=["Poor", "Good", "Excellent"],
-            label_thresholds=[0.3, 0.7],
+    _run(
+        client,
+        BleuScoreValidator(
+            data=OutputValidationRequest(context=CONTEXT, response=RESPONSE),
+            config=SDKConfigInput(
+                threshold=0.3,
+                custom_labels=["Poor", "Good", "Excellent"],
+                label_thresholds=[0.3, 0.7],
+            ),
         ),
-    ), "9. Bleu Score")
+        "9. Bleu Score",
+    )
 
     # 10. Meteor Score
-    _run(client, MeteorScoreValidator(
-        data=OutputValidationRequest(context=CONTEXT, response=RESPONSE),
-        config=SDKConfigInput(
-            threshold=0.3,
-            custom_labels=["Poor", "Good", "Excellent"],
-            label_thresholds=[0.3, 0.7],
+    _run(
+        client,
+        MeteorScoreValidator(
+            data=OutputValidationRequest(context=CONTEXT, response=RESPONSE),
+            config=SDKConfigInput(
+                threshold=0.3,
+                custom_labels=["Poor", "Good", "Excellent"],
+                label_thresholds=[0.3, 0.7],
+            ),
         ),
-    ), "10. Meteor Score")
+        "10. Meteor Score",
+    )
 
     # 11. Cosine Similarity Score
-    _run(client, CosineSimilarityValidator(
-        data=OutputValidationRequest(context=CONTEXT, response=RESPONSE),
-        config=SDKConfigInput(
-            threshold=0.7,
-            custom_labels=["Low", "Medium", "High"],
-            label_thresholds=[0.7, 0.85],
+    _run(
+        client,
+        CosineSimilarityValidator(
+            data=OutputValidationRequest(context=CONTEXT, response=RESPONSE),
+            config=SDKConfigInput(
+                threshold=0.7,
+                custom_labels=["Low", "Medium", "High"],
+                label_thresholds=[0.7, 0.85],
+            ),
         ),
-    ), "11. Cosine Similarity Score")
+        "11. Cosine Similarity Score",
+    )
 
     # ==================================================================
     # R — Response only
@@ -224,218 +268,324 @@ def main() -> None:
     )
 
     # 12. Coherence
-    _run(client, CoherenceValidator(
-        data=OutputValidationRequest(response=SAFE_RESPONSE),
-        config=SDKConfigInput(
-            threshold=0.5,
-            custom_labels=["Incoherent", "Coherent", "Highly Coherent"],
-            label_thresholds=[0.5, 0.75],
+    _run(
+        client,
+        CoherenceValidator(
+            data=OutputValidationRequest(response=SAFE_RESPONSE),
+            config=SDKConfigInput(
+                threshold=0.5,
+                custom_labels=["Incoherent", "Coherent", "Highly Coherent"],
+                label_thresholds=[0.5, 0.75],
+            ),
         ),
-    ), "12. Coherence")
+        "12. Coherence",
+    )
 
     # 13. Diversity
-    _run(client, DiversityValidator(
-        data=OutputValidationRequest(response=SAFE_RESPONSE),
-        config=SDKConfigInput(
-            threshold=0.75,
-            custom_labels=["Poor", "Good", "Excellent"],
-            label_thresholds=[0.75, 0.85],
+    _run(
+        client,
+        DiversityValidator(
+            data=OutputValidationRequest(response=SAFE_RESPONSE),
+            config=SDKConfigInput(
+                threshold=0.75,
+                custom_labels=["Poor", "Good", "Excellent"],
+                label_thresholds=[0.75, 0.85],
+            ),
         ),
-    ), "13. Diversity")
+        "13. Diversity",
+    )
 
     # 14. Response Tone
-    _run(client, ResponseToneValidator(
-        data=OutputValidationRequest(response=SAFE_RESPONSE),
-        config=SDKConfigInput(
-            threshold=0.6,
-            custom_labels=["Negative", "Neutral", "Positive"],
-            label_thresholds=[0.6, 0.75],
+    _run(
+        client,
+        ResponseToneValidator(
+            data=OutputValidationRequest(response=SAFE_RESPONSE),
+            config=SDKConfigInput(
+                threshold=0.6,
+                custom_labels=["Negative", "Neutral", "Positive"],
+                label_thresholds=[0.6, 0.75],
+            ),
         ),
-    ), "14. Response Tone")
+        "14. Response Tone",
+    )
 
     # 15. Clarity
-    _run(client, ClarityValidator(
-        data=OutputValidationRequest(response=SAFE_RESPONSE),
-        config=SDKConfigInput(
-            threshold=0.7,
-            custom_labels=["Poor", "Good", "Excellent"],
-            label_thresholds=[0.7, 0.85],
+    _run(
+        client,
+        ClarityValidator(
+            data=OutputValidationRequest(response=SAFE_RESPONSE),
+            config=SDKConfigInput(
+                threshold=0.7,
+                custom_labels=["Poor", "Good", "Excellent"],
+                label_thresholds=[0.7, 0.85],
+            ),
         ),
-    ), "15. Clarity")
+        "15. Clarity",
+    )
 
     # 16. Readability
-    _run(client, ReadabilityValidator(
-        data=OutputValidationRequest(response=SAFE_RESPONSE),
-        config=SDKConfigInput(
-            threshold=0.6,
-            custom_labels=["Very Difficult", "Difficult", "Easy"],
-            label_thresholds=[0.3, 0.6],
+    _run(
+        client,
+        ReadabilityValidator(
+            data=OutputValidationRequest(response=SAFE_RESPONSE),
+            config=SDKConfigInput(
+                threshold=0.6,
+                custom_labels=["Very Difficult", "Difficult", "Easy"],
+                label_thresholds=[0.3, 0.6],
+            ),
         ),
-    ), "16. Readability")
+        "16. Readability",
+    )
 
     # 17. Grammar Correctness
-    _run(client, GrammarCorrectnessValidator(
-        data=OutputValidationRequest(response="Paris are the capital of France."),
-        config=SDKConfigInput(
-            threshold=0.6,
-            custom_labels=["Incorrect", "Neutral", "Correct"],
-            label_thresholds=[0.6, 0.75],
+    _run(
+        client,
+        GrammarCorrectnessValidator(
+            data=OutputValidationRequest(response="Paris are the capital of France."),
+            config=SDKConfigInput(
+                threshold=0.6,
+                custom_labels=["Incorrect", "Neutral", "Correct"],
+                label_thresholds=[0.6, 0.75],
+            ),
         ),
-    ), "17. Grammar Correctness")
+        "17. Grammar Correctness",
+    )
 
     # 18. Narrative Continuity
-    _run(client, NarrativeContinuityValidator(
-        data=OutputValidationRequest(response=SAFE_RESPONSE),
-        config=SDKConfigInput(
-            threshold=0.45,
-            custom_labels=["Poor", "Good", "Excellent"],
-            label_thresholds=[0.45, 0.6],
+    _run(
+        client,
+        NarrativeContinuityValidator(
+            data=OutputValidationRequest(response=SAFE_RESPONSE),
+            config=SDKConfigInput(
+                threshold=0.45,
+                custom_labels=["Poor", "Good", "Excellent"],
+                label_thresholds=[0.45, 0.6],
+            ),
         ),
-    ), "18. Narrative Continuity")
+        "18. Narrative Continuity",
+    )
 
     # 19. Toxicity
-    _run(client, OutputToxicityValidator(
-        data=OutputValidationRequest(response="That's a completely stupid idea and you're an idiot."),
-        config=SDKConfigInput(
-            threshold=0.5,
-            custom_labels=["Non Toxic", "Toxic", "Highly Toxic"],
-            label_thresholds=[0.4, 0.7],
+    _run(
+        client,
+        OutputToxicityValidator(
+            data=OutputValidationRequest(
+                response="That's a completely stupid idea and you're an idiot."
+            ),
+            config=SDKConfigInput(
+                threshold=0.5,
+                custom_labels=["Non Toxic", "Toxic", "Highly Toxic"],
+                label_thresholds=[0.4, 0.7],
+            ),
         ),
-    ), "19. Toxicity")
+        "19. Toxicity",
+    )
 
     # 20. Data Leakage
-    _run(client, OutputDataLeakageValidator(
-        data=OutputValidationRequest(
-            response="The user's SSN is 123-45-6789 and credit card number is 4111-1111-1111-1111.",
+    _run(
+        client,
+        OutputDataLeakageValidator(
+            data=OutputValidationRequest(
+                response="The user's SSN is 123-45-6789 and credit card number is 4111-1111-1111-1111.",
+            ),
+            config=SDKConfigInput(
+                threshold=0.5,
+                custom_labels=["No Leakage", "High Risk", "Critical"],
+                label_thresholds=[0.5, 0.7],
+            ),
         ),
-        config=SDKConfigInput(
-            threshold=0.5,
-            custom_labels=["No Leakage", "High Risk", "Critical"],
-            label_thresholds=[0.5, 0.7],
-        ),
-    ), "20. Data Leakage")
+        "20. Data Leakage",
+    )
 
     # 21. Insecure Output
-    _run(client, OutputInsecureOutputValidator(
-        data=OutputValidationRequest(
-            response="To execute this, run: `rm -rf / --no-preserve-root` as root.",
+    _run(
+        client,
+        OutputInsecureOutputValidator(
+            data=OutputValidationRequest(
+                response="To execute this, run: `rm -rf / --no-preserve-root` as root.",
+            ),
+            config=SDKConfigInput(
+                threshold=0.25,
+                custom_labels=["Safe", "Medium Risk", "High Risk"],
+                label_thresholds=[0.25, 0.5],
+            ),
         ),
-        config=SDKConfigInput(
-            threshold=0.25,
-            custom_labels=["Safe", "Medium Risk", "High Risk"],
-            label_thresholds=[0.25, 0.5],
-        ),
-    ), "21. Insecure Output")
+        "21. Insecure Output",
+    )
 
     # 22. NSFW
-    _run(client, OutputNSFWValidator(
-        data=OutputValidationRequest(response="Here is information about safe online practices for all ages."),
-        config=SDKConfigInput(
-            threshold=0.5,
-            custom_labels=["Safe", "NSFW"],
-            label_thresholds=[0.5],
+    _run(
+        client,
+        OutputNSFWValidator(
+            data=OutputValidationRequest(
+                response="Here is information about safe online practices for all ages."
+            ),
+            config=SDKConfigInput(
+                threshold=0.5,
+                custom_labels=["Safe", "NSFW"],
+                label_thresholds=[0.5],
+            ),
         ),
-    ), "22. NSFW")
+        "22. NSFW",
+    )
 
     # 23. Bias
-    _run(client, OutputBiasValidator(
-        data=OutputValidationRequest(response="Older employees are less adaptable to new technology."),
-        config=SDKConfigInput(
-            threshold=0.5,
-            custom_labels=["Unbiased", "Biased", "Highly Biased"],
-            label_thresholds=[0.4, 0.7],
+    _run(
+        client,
+        OutputBiasValidator(
+            data=OutputValidationRequest(
+                response="Older employees are less adaptable to new technology."
+            ),
+            config=SDKConfigInput(
+                threshold=0.5,
+                custom_labels=["Unbiased", "Biased", "Highly Biased"],
+                label_thresholds=[0.4, 0.7],
+            ),
         ),
-    ), "23. Bias")
+        "23. Bias",
+    )
 
     # 24. Gender Bias
-    _run(client, OutputGenderBiasValidator(
-        data=OutputValidationRequest(response="Women are naturally better at nurturing than men."),
-        config=SDKConfigInput(
-            threshold=0.5,
-            custom_labels=["Unbiased", "Biased", "Highly Biased"],
-            label_thresholds=[0.4, 0.7],
+    _run(
+        client,
+        OutputGenderBiasValidator(
+            data=OutputValidationRequest(
+                response="Women are naturally better at nurturing than men."
+            ),
+            config=SDKConfigInput(
+                threshold=0.5,
+                custom_labels=["Unbiased", "Biased", "Highly Biased"],
+                label_thresholds=[0.4, 0.7],
+            ),
         ),
-    ), "24. Gender Bias")
+        "24. Gender Bias",
+    )
 
     # 25. Racial Bias
-    _run(client, OutputRacialBiasValidator(
-        data=OutputValidationRequest(response="People from that region are inherently untrustworthy."),
-        config=SDKConfigInput(
-            threshold=0.5,
-            custom_labels=["Unbiased", "Biased", "Highly Biased"],
-            label_thresholds=[0.4, 0.7],
+    _run(
+        client,
+        OutputRacialBiasValidator(
+            data=OutputValidationRequest(
+                response="People from that region are inherently untrustworthy."
+            ),
+            config=SDKConfigInput(
+                threshold=0.5,
+                custom_labels=["Unbiased", "Biased", "Highly Biased"],
+                label_thresholds=[0.4, 0.7],
+            ),
         ),
-    ), "25. Racial Bias")
+        "25. Racial Bias",
+    )
 
     # 26. Political Bias
-    _run(client, OutputPoliticalBiasValidator(
-        data=OutputValidationRequest(response="Only one political party truly cares about the working class."),
-        config=SDKConfigInput(
-            threshold=0.5,
-            custom_labels=["Neutral", "Biased", "Highly Biased"],
-            label_thresholds=[0.4, 0.7],
+    _run(
+        client,
+        OutputPoliticalBiasValidator(
+            data=OutputValidationRequest(
+                response="Only one political party truly cares about the working class."
+            ),
+            config=SDKConfigInput(
+                threshold=0.5,
+                custom_labels=["Neutral", "Biased", "Highly Biased"],
+                label_thresholds=[0.4, 0.7],
+            ),
         ),
-    ), "26. Political Bias")
+        "26. Political Bias",
+    )
 
     # 27. Intersectionality
-    _run(client, OutputIntersectionalityValidator(
-        data=OutputValidationRequest(response="Immigrant women lack the qualifications for senior positions."),
-        config=SDKConfigInput(
-            threshold=0.5,
-            custom_labels=["Unbiased", "Mildly Biased", "Biased", "Highly Biased"],
-            label_thresholds=[0.3, 0.5, 0.7],
+    _run(
+        client,
+        OutputIntersectionalityValidator(
+            data=OutputValidationRequest(
+                response="Immigrant women lack the qualifications for senior positions."
+            ),
+            config=SDKConfigInput(
+                threshold=0.5,
+                custom_labels=["Unbiased", "Mildly Biased", "Biased", "Highly Biased"],
+                label_thresholds=[0.3, 0.5, 0.7],
+            ),
         ),
-    ), "27. Intersectionality")
+        "27. Intersectionality",
+    )
 
     # 28. Hate Speech
-    _run(client, OutputHateSpeechValidator(
-        data=OutputValidationRequest(response="All members of that group should be banned from society."),
-        config=SDKConfigInput(
-            threshold=0.5,
-            custom_labels=["Safe", "Moderate Risk", "High Risk"],
-            label_thresholds=[0.4, 0.7],
+    _run(
+        client,
+        OutputHateSpeechValidator(
+            data=OutputValidationRequest(
+                response="All members of that group should be banned from society."
+            ),
+            config=SDKConfigInput(
+                threshold=0.5,
+                custom_labels=["Safe", "Moderate Risk", "High Risk"],
+                label_thresholds=[0.4, 0.7],
+            ),
         ),
-    ), "28. Hate Speech")
+        "28. Hate Speech",
+    )
 
     # 29. Sexual Content
-    _run(client, OutputSexualContentValidator(
-        data=OutputValidationRequest(response=SAFE_RESPONSE),
-        config=SDKConfigInput(
-            threshold=0.5,
-            custom_labels=["Safe", "Moderate Risk", "High Risk"],
-            label_thresholds=[0.4, 0.7],
+    _run(
+        client,
+        OutputSexualContentValidator(
+            data=OutputValidationRequest(response=SAFE_RESPONSE),
+            config=SDKConfigInput(
+                threshold=0.5,
+                custom_labels=["Safe", "Moderate Risk", "High Risk"],
+                label_thresholds=[0.4, 0.7],
+            ),
         ),
-    ), "29. Sexual Content")
+        "29. Sexual Content",
+    )
 
     # 30. Terrorism
-    _run(client, OutputTerrorismValidator(
-        data=OutputValidationRequest(response="Here are step-by-step instructions for a bombing attack."),
-        config=SDKConfigInput(
-            threshold=0.5,
-            custom_labels=["Safe", "Moderate Risk", "High Risk"],
-            label_thresholds=[0.4, 0.7],
+    _run(
+        client,
+        OutputTerrorismValidator(
+            data=OutputValidationRequest(
+                response="Here are step-by-step instructions for a bombing attack."
+            ),
+            config=SDKConfigInput(
+                threshold=0.5,
+                custom_labels=["Safe", "Moderate Risk", "High Risk"],
+                label_thresholds=[0.4, 0.7],
+            ),
         ),
-    ), "30. Terrorism")
+        "30. Terrorism",
+    )
 
     # 31. Violence
-    _run(client, OutputViolenceValidator(
-        data=OutputValidationRequest(response="You should physically attack anyone who disagrees with you."),
-        config=SDKConfigInput(
-            threshold=0.5,
-            custom_labels=["Safe", "Moderate Risk", "High Risk"],
-            label_thresholds=[0.4, 0.7],
+    _run(
+        client,
+        OutputViolenceValidator(
+            data=OutputValidationRequest(
+                response="You should physically attack anyone who disagrees with you."
+            ),
+            config=SDKConfigInput(
+                threshold=0.5,
+                custom_labels=["Safe", "Moderate Risk", "High Risk"],
+                label_thresholds=[0.4, 0.7],
+            ),
         ),
-    ), "31. Violence")
+        "31. Violence",
+    )
 
     # 32. Self Harm
-    _run(client, OutputSelfHarmValidator(
-        data=OutputValidationRequest(response="Here are detailed methods for self-harm and how to hide them."),
-        config=SDKConfigInput(
-            threshold=0.5,
-            custom_labels=["Safe", "Moderate Risk", "High Risk"],
-            label_thresholds=[0.4, 0.7],
+    _run(
+        client,
+        OutputSelfHarmValidator(
+            data=OutputValidationRequest(
+                response="Here are detailed methods for self-harm and how to hide them."
+            ),
+            config=SDKConfigInput(
+                threshold=0.5,
+                custom_labels=["Safe", "Moderate Risk", "High Risk"],
+                label_thresholds=[0.4, 0.7],
+            ),
         ),
-    ), "32. Self Harm")
+        "32. Self Harm",
+    )
 
     print("\n=== Output Validation Examples Complete ===")
 

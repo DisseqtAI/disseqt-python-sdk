@@ -44,7 +44,9 @@ class SpanKind(str, Enum):
     MODEL_EXEC = "MODEL_EXEC"  # LLM model execution (e.g., GPT-4, Claude)
     TOOL_EXEC = "TOOL_EXEC"  # Tool/function execution (e.g., calculator, API call)
     AGENT_EXEC = "AGENT_EXEC"  # Agent workflow execution
-    RAG_EXEC = "RAG_EXEC"  # RAG (Retrieval Augmented Generation) execution - required for RAG validations
+    RAG_EXEC = (
+        "RAG_EXEC"  # RAG (Retrieval Augmented Generation) execution - required for RAG validations
+    )
     MCP_EXEC = "MCP_EXEC"  # MCP (Model Context Protocol) execution
     INTERNAL = "INTERNAL"  # Internal operations
 

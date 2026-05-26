@@ -5,6 +5,7 @@ Unit tests for public API.
 from unittest.mock import MagicMock, patch
 
 import pytest
+
 from disseqt_agentic_sdk import DisseqtAgenticClient, start_trace
 from disseqt_agentic_sdk.enums import SpanKind
 

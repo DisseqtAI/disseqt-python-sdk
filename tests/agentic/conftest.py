@@ -1,11 +1,13 @@
 """
 Pytest configuration and fixtures.
 """
+
 import sys
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+
 from disseqt_agentic_sdk import DisseqtAgenticClient
 
 # Add src directory to Python path for src layout
