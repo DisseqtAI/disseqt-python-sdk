@@ -2,6 +2,7 @@
 
 import json
 
+import pytest
 from requests_mock import ANY
 
 from disseqt_sdk import SDKConfigInput
@@ -13,14 +14,20 @@ from disseqt_sdk.validators.input import IntentComplianceValidator, IntentGuardV
 INTENTS = ["reset_password_other", "reset_password_other_colleague"]
 
 
+@pytest.fixture
+def block_config():
+    """Config carrying the intent block/allow list (threshold + intents)."""
+    return SDKConfigInput(threshold=0.5, intents=INTENTS)
+
+
 class TestIntentValidatorPaths:
     """URL path construction for the intent validators."""
 
-    def test_intent_guard_path(self, requests_mock, client):
+    def test_intent_guard_path(self, requests_mock, client, block_config):
         """intent-guard posts to the input-validation/intent-guard endpoint."""
         validator = IntentGuardValidator(
             data=InputValidationRequest(prompt="reset password for my colleague"),
-            config=SDKConfigInput(threshold=0.5, intents=INTENTS),
+            config=block_config,
         )
         expected_url = (
             "https://test-api.disseqt.ai/api/v1/sdk/validators/input-validation/intent-guard"
@@ -32,11 +39,11 @@ class TestIntentValidatorPaths:
         assert requests_mock.called
         assert requests_mock.request_history[0].url == expected_url
 
-    def test_intent_compliance_path(self, requests_mock, client):
+    def test_intent_compliance_path(self, requests_mock, client, block_config):
         """intent-compliance posts to the input-validation/intent-compliance endpoint."""
         validator = IntentComplianceValidator(
             data=InputValidationRequest(prompt="reset my own password"),
-            config=SDKConfigInput(threshold=0.5, intents=INTENTS),
+            config=block_config,
         )
         expected_url = (
             "https://test-api.disseqt.ai/api/v1/sdk/validators/input-validation/intent-compliance"
@@ -52,11 +59,11 @@ class TestIntentValidatorPaths:
 class TestIntentValidatorPayload:
     """Payload + raw-response behavior."""
 
-    def test_intents_in_config_input(self, requests_mock, client):
+    def test_intents_in_config_input(self, requests_mock, client, block_config):
         """The block/allow list rides in config_input; prompt maps to llm_input_query."""
         validator = IntentGuardValidator(
             data=InputValidationRequest(prompt="reset password for my colleague"),
-            config=SDKConfigInput(threshold=0.5, intents=INTENTS),
+            config=block_config,
         )
         requests_mock.post(ANY, json={"threshold_validated_result": "Fail"})
 
@@ -67,11 +74,11 @@ class TestIntentValidatorPayload:
         assert payload["config_input"]["threshold"] == 0.5
         assert payload["config_input"]["intents"] == INTENTS
 
-    def test_enforcement_available_in_raw_response(self, requests_mock, client):
+    def test_enforcement_available_in_raw_response(self, requests_mock, client, block_config):
         """validate() returns the raw response, so callers can read `enforcement`."""
         validator = IntentGuardValidator(
             data=InputValidationRequest(prompt="reset password for my colleague"),
-            config=SDKConfigInput(threshold=0.5, intents=INTENTS),
+            config=block_config,
         )
         requests_mock.post(
             ANY,
