@@ -25,6 +25,8 @@ from .gender_bias import OutputGenderBiasValidator
 from .grammar_correctness import GrammarCorrectnessValidator
 from .hate_speech import OutputHateSpeechValidator
 from .insecure_output import OutputInsecureOutputValidator
+from .intent_compliance import OutputIntentComplianceValidator
+from .intent_guard import OutputIntentGuardValidator
 from .intersectionality import OutputIntersectionalityValidator
 from .meteor_score import MeteorScoreValidator
 from .narrative_continuity import NarrativeContinuityValidator
@@ -70,6 +72,9 @@ __all__ = [
     # Security
     "OutputDataLeakageValidator",
     "OutputInsecureOutputValidator",
+    # Intent guardrails
+    "OutputIntentGuardValidator",
+    "OutputIntentComplianceValidator",
     # Scoring metrics
     "BleuScoreValidator",
     "CompressionScoreValidator",

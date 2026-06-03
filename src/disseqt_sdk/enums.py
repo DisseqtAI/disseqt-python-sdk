@@ -35,6 +35,8 @@ class InputValidation(Enum):
     NSFW = "nsfw"
     INVISIBLE_TEXT = "invisible-text"
     CHILD_SAFETY = "child-safety"
+    INTENT_GUARD = "intent-guard"
+    INTENT_COMPLIANCE = "intent-compliance"
 
 
 class OutputValidation(Enum):
@@ -71,6 +73,10 @@ class OutputValidation(Enum):
     # Security
     DATA_LEAKAGE = "data-leakage"
     INSECURE_OUTPUT = "insecure-output"
+
+    # Intent guardrails
+    INTENT_GUARD = "intent-guard"
+    INTENT_COMPLIANCE = "intent-compliance"
 
     # Scoring metrics
     BLEU_SCORE = "bleu-score"

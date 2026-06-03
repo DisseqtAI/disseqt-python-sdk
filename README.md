@@ -361,6 +361,12 @@ Safety & content moderation for user inputs:
 - **HateSpeechValidator** - Detects hate speech
 - **NSFWValidator** - Detects NSFW content
 - **InvisibleTextValidator** - Detects hidden/invisible text attacks
+- **ChildSafetyValidator** - Detects child-safety risks in input
+
+Per-project intent guardrails (configurable block/allow lists):
+
+- **IntentGuardValidator** - Blocks disallowed intents (block list; response `enforcement` "blocking")
+- **IntentComplianceValidator** - Flags intents outside the allow list (`enforcement` "advisory")
 
 ### Output Validation
 
@@ -389,10 +395,16 @@ Safety & content moderation for user inputs:
 - **OutputSexualContentValidator** - Detects sexual content in output
 - **OutputTerrorismValidator** - Detects terrorism content in output
 - **OutputViolenceValidator** - Detects violent content in output
+- **OutputIntersectionalityValidator** - Detects intersectional bias in output
+- **OutputChildSafetyValidator** - Detects child-safety risks in output
 
 **Security:**
 - **OutputDataLeakageValidator** - Detects data leakage in output
 - **OutputInsecureOutputValidator** - Detects insecure output patterns
+
+**Intent Guardrails:**
+- **OutputIntentGuardValidator** - Blocks disallowed intents in the model's output (block list; `enforcement` "blocking")
+- **OutputIntentComplianceValidator** - Flags output intents outside the allow list (`enforcement` "advisory")
 
 **Scoring Metrics:**
 - **BleuScoreValidator** - Calculates BLEU score

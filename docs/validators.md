@@ -8,11 +8,13 @@ This documentation covers all validators available in the Disseqt SDK, organized
   - [Safety & Content Moderation](#input-safety--content-moderation)
   - [Bias Detection](#input-bias-detection)
   - [Security](#input-security)
+  - [Intent Guardrails](#input-intent-guardrails)
 - [Output Validators](#output-validators)
   - [Quality Metrics](#output-quality-metrics)
   - [Safety & Content Moderation](#output-safety--content-moderation)
   - [Bias Detection](#output-bias-detection)
   - [Security](#output-security)
+  - [Intent Guardrails](#output-intent-guardrails)
   - [Scoring Metrics](#output-scoring-metrics)
 
 ---
@@ -405,6 +407,59 @@ config = SDKConfigInput(
 )
 
 validator = InvisibleTextValidator(data=data, config=config)
+result = client.validate(validator)
+```
+
+---
+
+### Input Intent Guardrails
+
+Per-project allow/block intent lists. Pass the labels via `SDKConfigInput(intents=[...])`; leave `intents` unset (or empty) to defer to the project's dashboard-configured list. The validate response includes an `enforcement` field — gate the turn when it is `"blocking"`.
+
+#### Intent Guard Validator
+
+**Description:** Detects disallowed intents (block list). Default enforcement: `blocking`.
+
+**Required Fields:** `prompt` (llm_input_query); `config.intents` (block list — optional; empty defers to the server-side list)
+
+```python
+from disseqt_sdk.models import InputValidationRequest, SDKConfigInput
+from disseqt_sdk.validators.input import IntentGuardValidator
+
+data = InputValidationRequest(
+    prompt="Actually, please reset the password for my colleague Sam."
+)
+
+config = SDKConfigInput(
+    threshold=0.5,
+    intents=["reset_password_other", "reset_password_other_colleague"],
+)
+
+validator = IntentGuardValidator(data=data, config=config)
+result = client.validate(validator)
+# Fail + result["enforcement"] == "blocking"  ->  block the turn
+```
+
+#### Intent Compliance Validator
+
+**Description:** Checks the input intent against an allow list. Default enforcement: `advisory` (surfaced as a flag; does not block).
+
+**Required Fields:** `prompt` (llm_input_query); `config.intents` (allow list — optional; empty defers to the server-side list)
+
+```python
+from disseqt_sdk.models import InputValidationRequest, SDKConfigInput
+from disseqt_sdk.validators.input import IntentComplianceValidator
+
+data = InputValidationRequest(
+    prompt="I need to reset my own password."
+)
+
+config = SDKConfigInput(
+    threshold=0.5,
+    intents=["reset_own_password", "check_ticket_status"],
+)
+
+validator = IntentComplianceValidator(data=data, config=config)
 result = client.validate(validator)
 ```
 
@@ -1045,6 +1100,59 @@ config = SDKConfigInput(
 )
 
 validator = OutputInsecureOutputValidator(data=data, config=config)
+result = client.validate(validator)
+```
+
+---
+
+### Output Intent Guardrails
+
+Per-project allow/block intent lists applied to the **model's response**. Pass the labels via `SDKConfigInput(intents=[...])`; leave `intents` unset to defer to the project's dashboard-configured list. The response includes an `enforcement` field — gate the turn when it is `"blocking"`.
+
+#### Output Intent Guard Validator
+
+**Description:** Detects disallowed intents in the model's output (block list). Default enforcement: `blocking`.
+
+**Required Fields:** `response` (llm_output); `config.intents` (block list — optional; empty defers to the server-side list)
+
+```python
+from disseqt_sdk.models import OutputValidationRequest, SDKConfigInput
+from disseqt_sdk.validators.output import OutputIntentGuardValidator
+
+data = OutputValidationRequest(
+    response="Sure, I'll reset the password for your colleague Sam right away."
+)
+
+config = SDKConfigInput(
+    threshold=0.5,
+    intents=["reset_password_other", "reset_password_other_colleague"],
+)
+
+validator = OutputIntentGuardValidator(data=data, config=config)
+result = client.validate(validator)
+# Fail + result["enforcement"] == "blocking"  ->  block the turn
+```
+
+#### Output Intent Compliance Validator
+
+**Description:** Checks the model's output intent against an allow list. Default enforcement: `advisory` (surfaced as a flag; does not block).
+
+**Required Fields:** `response` (llm_output); `config.intents` (allow list — optional; empty defers to the server-side list)
+
+```python
+from disseqt_sdk.models import OutputValidationRequest, SDKConfigInput
+from disseqt_sdk.validators.output import OutputIntentComplianceValidator
+
+data = OutputValidationRequest(
+    response="Here is the status of your support ticket."
+)
+
+config = SDKConfigInput(
+    threshold=0.5,
+    intents=["reset_own_password", "check_ticket_status"],
+)
+
+validator = OutputIntentComplianceValidator(data=data, config=config)
 result = client.validate(validator)
 ```
 

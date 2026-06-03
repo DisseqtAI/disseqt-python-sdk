@@ -4,7 +4,7 @@ A quick reference guide for all Disseqt SDK validators.
 
 > **Note:** For advanced validators (Agentic, RAG, MCP, Themes, Composite), see [advanced-validators.md](./advanced-validators.md)
 
-## Input Validators (14 total)
+## Input Validators (17 total)
 
 ### Safety & Content Moderation
 
@@ -17,6 +17,7 @@ A quick reference guide for all Disseqt SDK validators.
 | `TerrorismValidator` | terrorism | Detects terrorism-related content |
 | `SelfHarmValidator` | self-harm | Detects self-harm content |
 | `SexualContentValidator` | sexual-content | Detects sexual content |
+| `ChildSafetyValidator` | child-safety | Detects child-safety risks |
 
 ### Bias Detection
 
@@ -35,9 +36,18 @@ A quick reference guide for all Disseqt SDK validators.
 | `InputPromptInjectionValidator` | prompt-injection | Detects prompt injection attacks |
 | `InvisibleTextValidator` | invisible-text | Detects hidden/invisible text |
 
+### Intent Guardrails
+
+Per-project configurable allow/block intent lists. Pass labels via `SDKConfigInput(intents=[...])` (empty → use the project's dashboard-configured list); the response carries an `enforcement` field.
+
+| Validator | Slug | Description |
+|-----------|------|-------------|
+| `IntentGuardValidator` | intent-guard | Blocks disallowed intents (block list; enforcement: blocking) |
+| `IntentComplianceValidator` | intent-compliance | Flags intents outside the allow list (enforcement: advisory) |
+
 ---
 
-## Output Validators (30 total)
+## Output Validators (34 total)
 
 ### Quality Metrics
 
@@ -66,6 +76,7 @@ A quick reference guide for all Disseqt SDK validators.
 | `OutputTerrorismValidator` | terrorism | response | Detects terrorism content |
 | `OutputSelfHarmValidator` | self-harm | response | Detects self-harm content |
 | `OutputSexualContentValidator` | sexual-content | response | Detects sexual content |
+| `OutputChildSafetyValidator` | child-safety | response | Detects child-safety risks |
 
 ### Bias Detection
 
@@ -75,6 +86,7 @@ A quick reference guide for all Disseqt SDK validators.
 | `OutputGenderBiasValidator` | gender-bias | response | Gender-based bias |
 | `OutputRacialBiasValidator` | racial-bias | response | Racial/ethnic bias |
 | `OutputPoliticalBiasValidator` | political-bias | response | Political bias |
+| `OutputIntersectionalityValidator` | intersectionality | response | Intersectional bias |
 
 ### Security
 
@@ -82,6 +94,13 @@ A quick reference guide for all Disseqt SDK validators.
 |-----------|------|-----------------|-------------|
 | `OutputDataLeakageValidator` | data-leakage | response | Detects data leakage |
 | `OutputInsecureOutputValidator` | insecure-output | response | Detects insecure code |
+
+### Intent Guardrails
+
+| Validator | Slug | Required Fields | Description |
+|-----------|------|-----------------|-------------|
+| `OutputIntentGuardValidator` | intent-guard | response | Blocks disallowed intents in output (enforcement: blocking) |
+| `OutputIntentComplianceValidator` | intent-compliance | response | Flags output intents outside the allow list (advisory) |
 
 ### Scoring Metrics
 
