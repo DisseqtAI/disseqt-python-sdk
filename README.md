@@ -361,6 +361,7 @@ Safety & content moderation for user inputs:
 - **HateSpeechValidator** - Detects hate speech
 - **NSFWValidator** - Detects NSFW content
 - **InvisibleTextValidator** - Detects hidden/invisible text attacks
+- **ChildSafetyValidator** - Detects child-safety risks in input
 
 Per-project intent guardrails (configurable block/allow lists):
 
@@ -394,6 +395,8 @@ Per-project intent guardrails (configurable block/allow lists):
 - **OutputSexualContentValidator** - Detects sexual content in output
 - **OutputTerrorismValidator** - Detects terrorism content in output
 - **OutputViolenceValidator** - Detects violent content in output
+- **OutputIntersectionalityValidator** - Detects intersectional bias in output
+- **OutputChildSafetyValidator** - Detects child-safety risks in output
 
 **Security:**
 - **OutputDataLeakageValidator** - Detects data leakage in output

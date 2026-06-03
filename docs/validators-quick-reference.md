@@ -4,7 +4,7 @@ A quick reference guide for all Disseqt SDK validators.
 
 > **Note:** For advanced validators (Agentic, RAG, MCP, Themes, Composite), see [advanced-validators.md](./advanced-validators.md)
 
-## Input Validators (16 total)
+## Input Validators (17 total)
 
 ### Safety & Content Moderation
 
@@ -17,6 +17,7 @@ A quick reference guide for all Disseqt SDK validators.
 | `TerrorismValidator` | terrorism | Detects terrorism-related content |
 | `SelfHarmValidator` | self-harm | Detects self-harm content |
 | `SexualContentValidator` | sexual-content | Detects sexual content |
+| `ChildSafetyValidator` | child-safety | Detects child-safety risks |
 
 ### Bias Detection
 
@@ -46,7 +47,7 @@ Per-project configurable allow/block intent lists. Pass labels via `SDKConfigInp
 
 ---
 
-## Output Validators (32 total)
+## Output Validators (34 total)
 
 ### Quality Metrics
 
@@ -75,6 +76,7 @@ Per-project configurable allow/block intent lists. Pass labels via `SDKConfigInp
 | `OutputTerrorismValidator` | terrorism | response | Detects terrorism content |
 | `OutputSelfHarmValidator` | self-harm | response | Detects self-harm content |
 | `OutputSexualContentValidator` | sexual-content | response | Detects sexual content |
+| `OutputChildSafetyValidator` | child-safety | response | Detects child-safety risks |
 
 ### Bias Detection
 
@@ -84,6 +86,7 @@ Per-project configurable allow/block intent lists. Pass labels via `SDKConfigInp
 | `OutputGenderBiasValidator` | gender-bias | response | Gender-based bias |
 | `OutputRacialBiasValidator` | racial-bias | response | Racial/ethnic bias |
 | `OutputPoliticalBiasValidator` | political-bias | response | Political bias |
+| `OutputIntersectionalityValidator` | intersectionality | response | Intersectional bias |
 
 ### Security
 

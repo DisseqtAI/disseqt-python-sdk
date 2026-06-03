@@ -43,22 +43,22 @@ result = client.validate(validator)
 
 ## Validator Categories
 
-### Input Validators (16 total)
+### Input Validators (17 total)
 
 Validate user prompts/queries before LLM processing:
 
-- **Safety & Content Moderation**: Toxicity, NSFW, Hate Speech, Violence, Terrorism, Self Harm, Sexual Content
+- **Safety & Content Moderation**: Toxicity, NSFW, Hate Speech, Violence, Terrorism, Self Harm, Sexual Content, Child Safety
 - **Bias Detection**: Bias, Gender Bias, Racial Bias, Political Bias, Intersectionality
 - **Security**: Prompt Injection, Invisible Text
 - **Intent Guardrails**: Intent Guard (block list), Intent Compliance (allow list)
 
-### Output Validators (32 total)
+### Output Validators (34 total)
 
 Validate LLM responses for quality and safety:
 
 - **Quality Metrics**: Grammar Correctness, Response Tone, Answer Relevance, Conceptual Similarity, Factual Consistency, Clarity, Coherence, Creativity, Readability, Diversity, Narrative Continuity
-- **Safety & Content Moderation**: Toxicity, NSFW, Hate Speech, Violence, Terrorism, Self Harm, Sexual Content
-- **Bias Detection**: Bias, Gender Bias, Racial Bias, Political Bias
+- **Safety & Content Moderation**: Toxicity, NSFW, Hate Speech, Violence, Terrorism, Self Harm, Sexual Content, Child Safety
+- **Bias Detection**: Bias, Gender Bias, Racial Bias, Political Bias, Intersectionality
 - **Security**: Data Leakage, Insecure Output
 - **Intent Guardrails**: Intent Guard (block list), Intent Compliance (allow list)
 - **Scoring Metrics**: BLEU Score, ROUGE Score, METEOR Score, Cosine Similarity, Fuzzy Score, Compression Score
