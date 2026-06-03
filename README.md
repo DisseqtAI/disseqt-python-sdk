@@ -399,6 +399,10 @@ Per-project intent guardrails (configurable block/allow lists):
 - **OutputDataLeakageValidator** - Detects data leakage in output
 - **OutputInsecureOutputValidator** - Detects insecure output patterns
 
+**Intent Guardrails:**
+- **OutputIntentGuardValidator** - Blocks disallowed intents in the model's output (block list; `enforcement` "blocking")
+- **OutputIntentComplianceValidator** - Flags output intents outside the allow list (`enforcement` "advisory")
+
 **Scoring Metrics:**
 - **BleuScoreValidator** - Calculates BLEU score
 - **RougeScoreValidator** - Calculates ROUGE score

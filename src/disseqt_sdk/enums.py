@@ -74,6 +74,10 @@ class OutputValidation(Enum):
     DATA_LEAKAGE = "data-leakage"
     INSECURE_OUTPUT = "insecure-output"
 
+    # Intent guardrails
+    INTENT_GUARD = "intent-guard"
+    INTENT_COMPLIANCE = "intent-compliance"
+
     # Scoring metrics
     BLEU_SCORE = "bleu-score"
     ROUGE_SCORE = "rouge-score"

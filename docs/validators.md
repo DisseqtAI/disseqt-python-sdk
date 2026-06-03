@@ -14,6 +14,7 @@ This documentation covers all validators available in the Disseqt SDK, organized
   - [Safety & Content Moderation](#output-safety--content-moderation)
   - [Bias Detection](#output-bias-detection)
   - [Security](#output-security)
+  - [Intent Guardrails](#output-intent-guardrails)
   - [Scoring Metrics](#output-scoring-metrics)
 
 ---
@@ -1099,6 +1100,59 @@ config = SDKConfigInput(
 )
 
 validator = OutputInsecureOutputValidator(data=data, config=config)
+result = client.validate(validator)
+```
+
+---
+
+### Output Intent Guardrails
+
+Per-project allow/block intent lists applied to the **model's response**. Pass the labels via `SDKConfigInput(intents=[...])`; leave `intents` unset to defer to the project's dashboard-configured list. The response includes an `enforcement` field — gate the turn when it is `"blocking"`.
+
+#### Output Intent Guard Validator
+
+**Description:** Detects disallowed intents in the model's output (block list). Default enforcement: `blocking`.
+
+**Required Fields:** `response` (llm_output); `config.intents` (block list — optional; empty defers to the server-side list)
+
+```python
+from disseqt_sdk.models import OutputValidationRequest, SDKConfigInput
+from disseqt_sdk.validators.output import OutputIntentGuardValidator
+
+data = OutputValidationRequest(
+    response="Sure, I'll reset the password for your colleague Sam right away."
+)
+
+config = SDKConfigInput(
+    threshold=0.5,
+    intents=["reset_password_other", "reset_password_other_colleague"],
+)
+
+validator = OutputIntentGuardValidator(data=data, config=config)
+result = client.validate(validator)
+# Fail + result["enforcement"] == "blocking"  ->  block the turn
+```
+
+#### Output Intent Compliance Validator
+
+**Description:** Checks the model's output intent against an allow list. Default enforcement: `advisory` (surfaced as a flag; does not block).
+
+**Required Fields:** `response` (llm_output); `config.intents` (allow list — optional; empty defers to the server-side list)
+
+```python
+from disseqt_sdk.models import OutputValidationRequest, SDKConfigInput
+from disseqt_sdk.validators.output import OutputIntentComplianceValidator
+
+data = OutputValidationRequest(
+    response="Here is the status of your support ticket."
+)
+
+config = SDKConfigInput(
+    threshold=0.5,
+    intents=["reset_own_password", "check_ticket_status"],
+)
+
+validator = OutputIntentComplianceValidator(data=data, config=config)
 result = client.validate(validator)
 ```
 

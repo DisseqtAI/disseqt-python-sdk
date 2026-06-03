@@ -1,4 +1,4 @@
-"""Tests for the intent-guard / intent-compliance input validators."""
+"""Tests for the intent-guard / intent-compliance input and output validators."""
 
 import json
 
@@ -6,10 +6,15 @@ import pytest
 from requests_mock import ANY
 
 from disseqt_sdk import SDKConfigInput
-from disseqt_sdk.enums import InputValidation, ValidatorDomain
+from disseqt_sdk.enums import InputValidation, OutputValidation, ValidatorDomain
 from disseqt_sdk.models.input_validation import InputValidationRequest
+from disseqt_sdk.models.output_validation import OutputValidationRequest
 from disseqt_sdk.registry import get_validator_metadata
 from disseqt_sdk.validators.input import IntentComplianceValidator, IntentGuardValidator
+from disseqt_sdk.validators.output import (
+    OutputIntentComplianceValidator,
+    OutputIntentGuardValidator,
+)
 
 INTENTS = ["reset_password_other", "reset_password_other_colleague"]
 
@@ -128,4 +133,81 @@ class TestIntentValidatorRegistration:
         assert (
             get_validator_metadata(validator.domain, validator.slug)["class"]
             is IntentComplianceValidator
+        )
+
+
+class TestOutputIntentValidatorPaths:
+    """URL path + payload for the OUTPUT intent validators (evaluate llm_output)."""
+
+    def test_output_intent_guard_path(self, requests_mock, client, block_config):
+        """output intent-guard posts to the output-validation/intent-guard endpoint."""
+        validator = OutputIntentGuardValidator(
+            data=OutputValidationRequest(response="Sure, I'll reset your colleague's password."),
+            config=block_config,
+        )
+        expected_url = (
+            "https://test-api.disseqt.ai/api/v1/sdk/validators/output-validation/intent-guard"
+        )
+        requests_mock.post(expected_url, json={"threshold_validated_result": "Fail"})
+
+        client.validate(validator)
+
+        assert requests_mock.called
+        assert requests_mock.request_history[0].url == expected_url
+
+    def test_output_intent_compliance_path(self, requests_mock, client, block_config):
+        """output intent-compliance posts to the output-validation/intent-compliance endpoint."""
+        validator = OutputIntentComplianceValidator(
+            data=OutputValidationRequest(response="Here is your ticket status."),
+            config=block_config,
+        )
+        expected_url = (
+            "https://test-api.disseqt.ai/api/v1/sdk/validators/output-validation/intent-compliance"
+        )
+        requests_mock.post(expected_url, json={"threshold_validated_result": "Pass"})
+
+        client.validate(validator)
+
+        assert requests_mock.called
+        assert requests_mock.request_history[0].url == expected_url
+
+    def test_output_intent_guard_payload_uses_llm_output(self, requests_mock, client, block_config):
+        """The response text maps to llm_output; intents ride in config_input."""
+        validator = OutputIntentGuardValidator(
+            data=OutputValidationRequest(response="Sure, I'll reset your colleague's password."),
+            config=block_config,
+        )
+        requests_mock.post(ANY, json={"threshold_validated_result": "Fail"})
+
+        client.validate(validator)
+        payload = json.loads(requests_mock.request_history[0].text)
+
+        assert payload["input_data"]["llm_output"] == "Sure, I'll reset your colleague's password."
+        assert "llm_input_query" not in payload["input_data"]
+        assert payload["config_input"]["intents"] == INTENTS
+
+
+class TestOutputIntentValidatorRegistration:
+    """Output intent validators register under output-validation (same slug, distinct domain)."""
+
+    def test_output_intent_guard_registered(self):
+        validator = OutputIntentGuardValidator(
+            data=OutputValidationRequest(response="x"), config=SDKConfigInput(threshold=0.5)
+        )
+        assert validator.domain == ValidatorDomain.OUTPUT_VALIDATION
+        assert validator.slug == OutputValidation.INTENT_GUARD.value == "intent-guard"
+        assert (
+            get_validator_metadata(validator.domain, validator.slug)["class"]
+            is OutputIntentGuardValidator
+        )
+
+    def test_output_intent_compliance_registered(self):
+        validator = OutputIntentComplianceValidator(
+            data=OutputValidationRequest(response="x"), config=SDKConfigInput(threshold=0.5)
+        )
+        assert validator.domain == ValidatorDomain.OUTPUT_VALIDATION
+        assert validator.slug == OutputValidation.INTENT_COMPLIANCE.value == "intent-compliance"
+        assert (
+            get_validator_metadata(validator.domain, validator.slug)["class"]
+            is OutputIntentComplianceValidator
         )

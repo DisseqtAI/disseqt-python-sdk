@@ -46,7 +46,7 @@ Per-project configurable allow/block intent lists. Pass labels via `SDKConfigInp
 
 ---
 
-## Output Validators (30 total)
+## Output Validators (32 total)
 
 ### Quality Metrics
 
@@ -91,6 +91,13 @@ Per-project configurable allow/block intent lists. Pass labels via `SDKConfigInp
 |-----------|------|-----------------|-------------|
 | `OutputDataLeakageValidator` | data-leakage | response | Detects data leakage |
 | `OutputInsecureOutputValidator` | insecure-output | response | Detects insecure code |
+
+### Intent Guardrails
+
+| Validator | Slug | Required Fields | Description |
+|-----------|------|-----------------|-------------|
+| `OutputIntentGuardValidator` | intent-guard | response | Blocks disallowed intents in output (enforcement: blocking) |
+| `OutputIntentComplianceValidator` | intent-compliance | response | Flags output intents outside the allow list (advisory) |
 
 ### Scoring Metrics
 

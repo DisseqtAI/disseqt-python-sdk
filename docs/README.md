@@ -52,7 +52,7 @@ Validate user prompts/queries before LLM processing:
 - **Security**: Prompt Injection, Invisible Text
 - **Intent Guardrails**: Intent Guard (block list), Intent Compliance (allow list)
 
-### Output Validators (30 total)
+### Output Validators (32 total)
 
 Validate LLM responses for quality and safety:
 
@@ -60,6 +60,7 @@ Validate LLM responses for quality and safety:
 - **Safety & Content Moderation**: Toxicity, NSFW, Hate Speech, Violence, Terrorism, Self Harm, Sexual Content
 - **Bias Detection**: Bias, Gender Bias, Racial Bias, Political Bias
 - **Security**: Data Leakage, Insecure Output
+- **Intent Guardrails**: Intent Guard (block list), Intent Compliance (allow list)
 - **Scoring Metrics**: BLEU Score, ROUGE Score, METEOR Score, Cosine Similarity, Fuzzy Score, Compression Score
 
 ### Agentic Behavior Validators (8 total)

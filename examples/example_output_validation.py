@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Examples for the Output Validation (LLM) canonical layer.
 
-Covers all 32 output validators. Uses OutputValidationRequest where:
+Covers all 34 output validators. Uses OutputValidationRequest where:
   ``prompt``   → llm_input_query  (Q)
   ``context``  → llm_input_context (C)
   ``response`` → llm_output        (R)
@@ -12,6 +12,9 @@ Field requirements per config:
   C_R   : Creativity, Compression Score, Fuzzy Score, Rouge Score,
           Bleu Score, Meteor Score, Cosine Similarity Score
   R     : Everything else (safety, style, readability, security metrics)
+  R + intents : Intent Guard (block list), Intent Compliance (allow list)
+                — pass labels in ``SDKConfigInput(intents=[...])``; the response
+                carries ``enforcement`` ("blocking"/"advisory").
 """
 
 from disseqt_sdk import Client, SDKConfigInput
@@ -34,6 +37,8 @@ from disseqt_sdk.validators.output.gender_bias import OutputGenderBiasValidator
 from disseqt_sdk.validators.output.grammar_correctness import GrammarCorrectnessValidator
 from disseqt_sdk.validators.output.hate_speech import OutputHateSpeechValidator
 from disseqt_sdk.validators.output.insecure_output import OutputInsecureOutputValidator
+from disseqt_sdk.validators.output.intent_compliance import OutputIntentComplianceValidator
+from disseqt_sdk.validators.output.intent_guard import OutputIntentGuardValidator
 from disseqt_sdk.validators.output.intersectionality import OutputIntersectionalityValidator
 from disseqt_sdk.validators.output.meteor_score import MeteorScoreValidator
 from disseqt_sdk.validators.output.narrative_continuity import NarrativeContinuityValidator
@@ -585,6 +590,36 @@ def main() -> None:
             ),
         ),
         "32. Self Harm",
+    )
+
+    # 33. Intent Guard (output) — per-project BLOCK list (enforcement: blocking)
+    #     Detects a blocked intent expressed in the MODEL'S RESPONSE. Pass the
+    #     block list in config.intents (empty defers to the dashboard list).
+    _run(
+        client,
+        OutputIntentGuardValidator(
+            data=OutputValidationRequest(
+                response="Sure, I'll reset the password for your colleague Sam right away."
+            ),
+            config=SDKConfigInput(
+                threshold=0.5,
+                intents=["reset_password_other", "reset_password_other_colleague"],
+            ),
+        ),
+        "33. Intent Guard (output, block list)",
+    )
+
+    # 34. Intent Compliance (output) — per-project ALLOW list (enforcement: advisory)
+    _run(
+        client,
+        OutputIntentComplianceValidator(
+            data=OutputValidationRequest(response="Here is the status of your support ticket."),
+            config=SDKConfigInput(
+                threshold=0.5,
+                intents=["reset_own_password", "check_ticket_status"],
+            ),
+        ),
+        "34. Intent Compliance (output, allow list)",
     )
 
     print("\n=== Output Validation Examples Complete ===")

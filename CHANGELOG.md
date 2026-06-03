@@ -10,11 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.4.0] - 2026-06-03
 
 ### Added
-- **Intent validators**: `IntentGuardValidator` (slug `intent-guard`; per-project
-  BLOCK list; response `enforcement` "blocking") and `IntentComplianceValidator`
-  (slug `intent-compliance`; per-project ALLOW list; `enforcement` "advisory") in
-  the input-validation layer. Same `client.validate(...)` flow as the other input
-  validators.
+- **Intent validators** (both directions): `intent-guard` (per-project BLOCK list;
+  response `enforcement` "blocking") and `intent-compliance` (per-project ALLOW
+  list; `enforcement` "advisory"), exposed as `IntentGuardValidator` /
+  `IntentComplianceValidator` (input — evaluates the prompt) and
+  `OutputIntentGuardValidator` / `OutputIntentComplianceValidator` (output —
+  evaluates the response). Same `client.validate(...)` flow as the other validators.
 - **`SDKConfigInput.intents`**: optional `list[str]` carried inside `config_input`
   for the intent validators. An empty/omitted list defers to the project's
   dashboard-configured intent list.
