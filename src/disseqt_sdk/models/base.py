@@ -13,6 +13,10 @@ class SDKConfigInput:
     threshold: float
     custom_labels: list[str] | None = None
     label_thresholds: list[float] | None = None
+    # Allow/block intent labels for the intent-guard / intent-compliance
+    # validators. Sent inside config_input; an empty/None list is omitted so the
+    # server falls back to the project's dashboard-configured intent list.
+    intents: list[str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for API payload."""
@@ -21,6 +25,8 @@ class SDKConfigInput:
             out["custom_labels"] = self.custom_labels
         if self.label_thresholds:
             out["label_thresholds"] = self.label_thresholds
+        if self.intents:
+            out["intents"] = self.intents
         return out
 
 

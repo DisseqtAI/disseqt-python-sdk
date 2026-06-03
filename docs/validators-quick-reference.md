@@ -4,7 +4,7 @@ A quick reference guide for all Disseqt SDK validators.
 
 > **Note:** For advanced validators (Agentic, RAG, MCP, Themes, Composite), see [advanced-validators.md](./advanced-validators.md)
 
-## Input Validators (14 total)
+## Input Validators (16 total)
 
 ### Safety & Content Moderation
 
@@ -34,6 +34,15 @@ A quick reference guide for all Disseqt SDK validators.
 |-----------|------|-------------|
 | `InputPromptInjectionValidator` | prompt-injection | Detects prompt injection attacks |
 | `InvisibleTextValidator` | invisible-text | Detects hidden/invisible text |
+
+### Intent Guardrails
+
+Per-project configurable allow/block intent lists. Pass labels via `SDKConfigInput(intents=[...])` (empty → use the project's dashboard-configured list); the response carries an `enforcement` field.
+
+| Validator | Slug | Description |
+|-----------|------|-------------|
+| `IntentGuardValidator` | intent-guard | Blocks disallowed intents (block list; enforcement: blocking) |
+| `IntentComplianceValidator` | intent-compliance | Flags intents outside the allow list (enforcement: advisory) |
 
 ---
 

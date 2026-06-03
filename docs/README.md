@@ -43,13 +43,14 @@ result = client.validate(validator)
 
 ## Validator Categories
 
-### Input Validators (14 total)
+### Input Validators (16 total)
 
 Validate user prompts/queries before LLM processing:
 
 - **Safety & Content Moderation**: Toxicity, NSFW, Hate Speech, Violence, Terrorism, Self Harm, Sexual Content
 - **Bias Detection**: Bias, Gender Bias, Racial Bias, Political Bias, Intersectionality
 - **Security**: Prompt Injection, Invisible Text
+- **Intent Guardrails**: Intent Guard (block list), Intent Compliance (allow list)
 
 ### Output Validators (30 total)
 

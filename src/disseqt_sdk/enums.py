@@ -35,6 +35,8 @@ class InputValidation(Enum):
     NSFW = "nsfw"
     INVISIBLE_TEXT = "invisible-text"
     CHILD_SAFETY = "child-safety"
+    INTENT_GUARD = "intent-guard"
+    INTENT_COMPLIANCE = "intent-compliance"
 
 
 class OutputValidation(Enum):

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Examples for the Input Validation canonical layer.
 
-Covers all 15 input validators. Every validator uses InputValidationRequest
+Covers all 17 input validators. Every validator uses InputValidationRequest
 where ``prompt`` maps to ``llm_input_query`` (Q).
 
 Field requirements per config:
@@ -10,6 +10,9 @@ Field requirements per config:
   - Any of Q/R/C         : Toxicity, Invisible Text, NSFW, Bias, Gender Bias,
                            Racial Bias, Political Bias, Intersectionality,
                            Hate Speech, Sexual Content, Terrorism, Violence, Self Harm
+  - Query + intents      : Intent Guard (block list), Intent Compliance (allow list)
+                           — pass the labels in ``SDKConfigInput(intents=[...])``;
+                           the response carries ``enforcement`` ("blocking"/"advisory").
 """
 
 from disseqt_sdk import Client, SDKConfigInput
@@ -18,6 +21,8 @@ from disseqt_sdk.validators.input.bias import BiasValidator
 from disseqt_sdk.validators.input.child_safety import ChildSafetyValidator
 from disseqt_sdk.validators.input.gender_bias import GenderBiasValidator
 from disseqt_sdk.validators.input.hate_speech import HateSpeechValidator
+from disseqt_sdk.validators.input.intent_compliance import IntentComplianceValidator
+from disseqt_sdk.validators.input.intent_guard import IntentGuardValidator
 from disseqt_sdk.validators.input.intersectionality import IntersectionalityValidator
 from disseqt_sdk.validators.input.invisible_text import InvisibleTextValidator
 from disseqt_sdk.validators.input.nsfw import NSFWValidator
@@ -322,6 +327,45 @@ def main() -> None:
             ),
         ),
         "15. Child Safety",
+    )
+
+    # ------------------------------------------------------------------
+    # 16. Intent Guard — per-project BLOCK list (enforcement: blocking)
+    #     Pass the disallowed intents in config.intents; leave empty to defer to
+    #     the project's dashboard-configured block list. A "Fail" means a blocked
+    #     intent was detected — gate the turn when result["enforcement"] == "blocking".
+    # ------------------------------------------------------------------
+    _run(
+        client,
+        IntentGuardValidator(
+            data=InputValidationRequest(
+                prompt="Actually, please reset the password for my colleague Sam.",
+            ),
+            config=SDKConfigInput(
+                threshold=0.5,
+                intents=["reset_password_other", "reset_password_other_colleague"],
+            ),
+        ),
+        "16. Intent Guard (block list)",
+    )
+
+    # ------------------------------------------------------------------
+    # 17. Intent Compliance — per-project ALLOW list (enforcement: advisory)
+    #     A non-compliant intent yields "Fail" with enforcement "advisory" — surface
+    #     it as a flag; it does not block the turn.
+    # ------------------------------------------------------------------
+    _run(
+        client,
+        IntentComplianceValidator(
+            data=InputValidationRequest(
+                prompt="I need to reset my own password.",
+            ),
+            config=SDKConfigInput(
+                threshold=0.5,
+                intents=["reset_own_password", "check_ticket_status"],
+            ),
+        ),
+        "17. Intent Compliance (allow list)",
     )
 
     print("\n=== Input Validation Examples Complete ===")

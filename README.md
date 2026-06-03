@@ -362,6 +362,11 @@ Safety & content moderation for user inputs:
 - **NSFWValidator** - Detects NSFW content
 - **InvisibleTextValidator** - Detects hidden/invisible text attacks
 
+Per-project intent guardrails (configurable block/allow lists):
+
+- **IntentGuardValidator** - Blocks disallowed intents (block list; response `enforcement` "blocking")
+- **IntentComplianceValidator** - Flags intents outside the allow list (`enforcement` "advisory")
+
 ### Output Validation
 
 **Quality Metrics:**

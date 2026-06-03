@@ -4,6 +4,8 @@ from .bias import BiasValidator
 from .child_safety import ChildSafetyValidator
 from .gender_bias import GenderBiasValidator
 from .hate_speech import HateSpeechValidator
+from .intent_compliance import IntentComplianceValidator
+from .intent_guard import IntentGuardValidator
 from .intersectionality import IntersectionalityValidator
 from .invisible_text import InvisibleTextValidator
 from .nsfw import NSFWValidator
@@ -32,4 +34,6 @@ __all__ = [
     "NSFWValidator",
     "InvisibleTextValidator",
     "ChildSafetyValidator",
+    "IntentGuardValidator",
+    "IntentComplianceValidator",
 ]
