@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Quick verification script to test disseqt-sdk installation.
+Quick verification script to test disseqt-ai-sdk installation.
 Run this after installing the package to verify everything works.
 """
 
 
 def main():
-    print("🔍 Verifying disseqt-sdk installation...\n")
+    print("🔍 Verifying disseqt-ai-sdk installation...\n")
 
     # Test 1: Import package
     try:
@@ -76,7 +76,7 @@ def main():
         print(f"⚠️  Could not retrieve version: {e}")
 
     print("\n🎉 All verification tests passed!")
-    print("\nYou can now use disseqt-sdk in your projects.")
+    print("\nYou can now use disseqt-ai-sdk in your projects.")
     print("\nQuick example:")
     print(
         """

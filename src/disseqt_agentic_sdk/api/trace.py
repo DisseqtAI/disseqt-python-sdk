@@ -73,6 +73,7 @@ def start_trace(
     intent_id: str | None = None,
     workflow_id: str | None = None,
     user_id: str | None = None,
+    realtime_policy_id: str | None = None,
 ) -> TraceWrapper:
     """
     Start a new trace using a DisseqtAgenticClient instance.
@@ -86,6 +87,14 @@ def start_trace(
         intent_id: Optional intent ID
         workflow_id: Optional workflow ID
         user_id: Optional user ID (overrides default from client)
+        realtime_policy_id: Per-trace policy override. When set, every
+            span in this trace is sent to llm-monitoring with
+            ``resource.attributes["policy.id"]`` = this value. Lets two
+            agents inside the same application run under different
+            policies without re-initializing the client. When omitted,
+            falls back to the client's default
+            ``realtime_policy_id`` (or no policy at all if the client
+            wasn't given one).
 
     Returns:
         TraceWrapper: Wrapped trace that auto-sends on exit
@@ -93,16 +102,27 @@ def start_trace(
     Example:
         >>> from disseqt_agentic_sdk import DisseqtAgenticClient, start_trace
         >>> from disseqt_agentic_sdk.enums import SpanKind
+        >>> # Init the client ONCE for the whole app
         >>> client = DisseqtAgenticClient(
-        ...     api_key="...", org_id="...", project_id="...", service_name="..."
+        ...     api_key="...", project_id="...", service_name="my-app"
         ... )
-        >>> with start_trace(client, "user_request", intent_id="intent_123") as trace:
-        ...     with trace.start_span("agent_planning", SpanKind.AGENT_EXEC) as span:
-        ...         span.set_agent_info("assistant", "agent_001")
-        # Trace is automatically sent when exiting the 'with' block
+        >>> # Agent A — uses policy A
+        >>> with start_trace(client, "agent_a_run",
+        ...                  realtime_policy_id="policy-a-uuid") as trace:
+        ...     with trace.start_span("plan", SpanKind.AGENT_EXEC) as span:
+        ...         span.set_agent_info("agent_a", "a-001")
+        >>> # Agent B — same client, different policy
+        >>> with start_trace(client, "agent_b_run",
+        ...                  realtime_policy_id="policy-b-uuid") as trace:
+        ...     with trace.start_span("plan", SpanKind.AGENT_EXEC) as span:
+        ...         span.set_agent_info("agent_b", "b-001")
     """
     # Use user_id from trace if provided, otherwise use empty string (client no longer has user_id)
     trace_user_id = user_id if user_id is not None else ""
+
+    # Per-trace policy override beats client default. Empty string here
+    # means "fall back to client.realtime_policy_id at transport time".
+    effective_policy_id = realtime_policy_id or getattr(client, "realtime_policy_id", None) or ""
 
     trace = DisseqtTrace(
         name=name,
@@ -115,6 +135,7 @@ def start_trace(
         environment=client.environment,
         intent_id=intent_id,
         workflow_id=workflow_id,
+        realtime_policy_id=effective_policy_id,
         client=client,  # Pass client for incremental span sending
     )
 

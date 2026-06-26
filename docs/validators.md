@@ -22,11 +22,11 @@ This documentation covers all validators available in the Disseqt SDK, organized
 ## Quick Start
 
 ```python
-from disseqt_sdk import DisseqtClient
+from disseqt_sdk import Client
 from disseqt_sdk.models import InputValidationRequest, OutputValidationRequest, SDKConfigInput
 
-# Initialize the client
-client = DisseqtClient(api_key="your_api_key")
+# Initialize the client (both project_id and api_key are required)
+client = Client(project_id="your_project_id", api_key="your_api_key")
 
 # Create a config
 config = SDKConfigInput(

@@ -59,7 +59,7 @@ pip install git+https://github.com/DisseqtAI/disseqt-python-sdk.git
 Once published to PyPI:
 
 ```bash
-pip install disseqt-sdk
+pip install disseqt-ai-sdk
 ```
 
 ## Installation in Virtual Environment (Recommended)
@@ -122,7 +122,7 @@ For projects using modern Python packaging:
 ```toml
 [project]
 dependencies = [
-    "disseqt-sdk @ git+https://github.com/DisseqtAI/disseqt-python-sdk.git",
+    "disseqt-ai-sdk @ git+https://github.com/DisseqtAI/disseqt-python-sdk.git",
 ]
 ```
 
@@ -156,7 +156,7 @@ After installation, verify it works:
 import disseqt_sdk
 from disseqt_sdk import Client
 
-print("disseqt-sdk installed successfully!")
+print("disseqt-ai-sdk installed successfully!")
 
 # Test basic import
 client = Client(project_id="test", api_key="test")
@@ -166,7 +166,7 @@ print(f"Client initialized: {client}")
 Or from command line:
 
 ```bash
-python -c "import disseqt_sdk; print('✓ disseqt-sdk installed successfully')"
+python -c "import disseqt_sdk; print('✓ disseqt-ai-sdk installed successfully')"
 ```
 
 ## Prerequisites
@@ -220,7 +220,7 @@ pip install --upgrade --force-reinstall git+https://github.com/DisseqtAI/disseqt
 ## Uninstall
 
 ```bash
-pip uninstall disseqt-sdk
+pip uninstall disseqt-ai-sdk
 ```
 
 ## Support

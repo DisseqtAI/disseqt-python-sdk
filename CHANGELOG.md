@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-26
+
+### Added
+- **Realtime policy evaluation** (`disseqt_sdk`): new
+  `Client.evaluate_policy(realtime_policy_id, prompt=, context=, response=,
+  conversation_history=, tool_calls=, agent_responses=, reference_data=,
+  ...)` runs a published policy server-side and returns a structured
+  verdict with per-rule breakdown. The typed kwargs are renamed to the
+  wire shape the validators expect (`prompt` → `llm_input_query`, etc.);
+  pass `input_data=` as a raw dict only for shapes the typed args don't
+  cover. Caller helpers `is_blocking(result)` and `is_async(result)` plus
+  `parse_policy(result)` returning typed `PolicyDecision` / `PolicyRuleset`
+  / `PolicyRule` dataclasses.
+- **`Client.realtime_policy_id`** + **`Client.application_name`**: optional
+  defaults for `evaluate_policy()`. `application_name` is required
+  whenever `realtime_policy_id` is set (matches `service_name` on the
+  agentic SDK). Per-call value always wins over the Client default.
+- **`Client.realtime_policy_base_url`**: separate base URL for the policy
+  evaluate endpoint (defaults to
+  `https://api.disseqt.ai/realtime-policies`). Independent of `base_url`
+  so the two endpoints can be mocked / routed independently — override
+  for local testing (e.g. `http://localhost:9010`).
+- **Agentic SDK realtime policies**: `DisseqtAgenticClient(realtime_policy_id=)`
+  sets a default policy stamped on every span's resource block as
+  `policy.id`. `start_trace(client, name, realtime_policy_id=)` overrides
+  per-trace — lets two agents inside one application run under different
+  policies without re-initialising the client. The transport groups
+  buffered spans by policy and emits one POST per distinct policy.
+
+### Changed
+- **`enforcement` field** in policy responses now mirrors the policy's
+  `strategy.executionMode` (values: `"sync"` / `"async"`) — decoupled
+  from the BLOCK/PASS verdict, which is in `decision`. Previously this
+  field held `"blocking"` / `"advisory"`.
+
+### Fixed
+- `examples/example_composite_score.py`: removed trailing commas that
+  turned `PROJECT_ID` and `API_KEY` into single-element tuples.
+- `INSTALL.md`, `docs/README.md`, `docs/validators.md`,
+  `examples/verify_installation.py`: fixed `pip install disseqt-sdk` →
+  `pip install disseqt-ai-sdk` (actual PyPI name), and
+  `DisseqtClient(...)` → `Client(project_id=..., api_key=...)` in
+  example code (the class name and required args were wrong).
+
 ## [0.4.0] - 2026-06-03
 
 ### Added

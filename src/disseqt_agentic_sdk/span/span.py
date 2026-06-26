@@ -43,6 +43,7 @@ class DisseqtSpan:
         service_name: str = "",
         service_version: str = "1.0.0",
         environment: str = "production",
+        realtime_policy_id: str = "",
         client: "DisseqtAgenticClient | None" = None,  # Optional client for incremental sending
     ):
         """
@@ -99,6 +100,11 @@ class DisseqtSpan:
         self.service_name = service_name
         self.service_version = service_version
         self.environment = environment
+
+        # Realtime policy the trace that owns this span elected to use.
+        # Empty string means "no per-trace override; use the client
+        # default if set". Stamped on EnrichedSpan in to_enriched_span().
+        self.realtime_policy_id = realtime_policy_id
 
         # Client reference for incremental sending (optional)
         self._client = client
@@ -328,6 +334,7 @@ class DisseqtSpan:
             service_name=self.service_name,
             service_version=self.service_version,
             environment=self.environment,
+            realtime_policy_id=self.realtime_policy_id,
             dt=datetime.now(timezone.utc),
             attributes_json=attributes_json,
             resource_attributes_json="{}",
