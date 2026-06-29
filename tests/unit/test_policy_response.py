@@ -89,9 +89,7 @@ class TestEvaluatePolicyTypedArgs:
 
         client.evaluate_policy(realtime_policy_id="p", prompt="Hello")
 
-        assert requests_mock.last_request.json()["input_data"] == {
-            "llm_input_query": "Hello"
-        }
+        assert requests_mock.last_request.json()["input_data"] == {"llm_input_query": "Hello"}
 
     def test_all_llm_fields_renamed(self, requests_mock, client):
         url = f"{TEST_POLICIES_URL}/api/v1/sdk/policies/p/evaluate"
@@ -175,10 +173,7 @@ class TestEvaluatePolicyTypedArgs:
             input_data={"llm_input_query": "from-raw-dict"},
         )
 
-        assert (
-            requests_mock.last_request.json()["input_data"]["llm_input_query"]
-            == "from-raw-dict"
-        )
+        assert requests_mock.last_request.json()["input_data"]["llm_input_query"] == "from-raw-dict"
 
     def test_raises_when_no_input_fields(self, requests_mock, client):
         with pytest.raises(ValueError, match="at least one input field"):
@@ -194,9 +189,7 @@ class TestRealtimePolicyBaseURL:
         # Default points at the dedicated realtime-policies gateway —
         # separate from base_url (which is production-monitoring's
         # validators endpoint).
-        assert (
-            c.realtime_policy_base_url == "https://api.disseqt.ai/realtime-policies"
-        )
+        assert c.realtime_policy_base_url == "https://api.disseqt.ai/realtime-policies"
 
     def test_evaluate_uses_realtime_policy_base_url_not_base_url(self, requests_mock):
         c = Client(
@@ -278,9 +271,9 @@ class TestClientDefaultRealtimePolicyId:
             c.evaluate_policy(prompt="hi")
         msg = str(exc.value)
         assert "realtime_policy_id" in msg
-        assert "client.validate" in msg, (
-            "the error should point users at client.validate() as the no-policy path"
-        )
+        assert (
+            "client.validate" in msg
+        ), "the error should point users at client.validate() as the no-policy path"
 
     def test_validate_still_works_without_policy_id(self, requests_mock):
         # Constructing a Client without a policy_id is fine; you just

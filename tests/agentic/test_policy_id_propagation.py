@@ -124,9 +124,7 @@ class TestPerTracePolicyOverride:
     run under different policies without re-initialising the client.
     """
 
-    def _fake_span(
-        self, span_id: str, trace_id: str, policy_id: str = ""
-    ) -> MagicMock:
+    def _fake_span(self, span_id: str, trace_id: str, policy_id: str = "") -> MagicMock:
         span = MagicMock()
         span.trace_id = trace_id
         span.realtime_policy_id = policy_id
@@ -217,9 +215,7 @@ class TestPerTracePolicyOverride:
 
         transport.session.post = fake_post  # type: ignore[assignment]
 
-        transport.send_spans(
-            [self._fake_span("s1", "trace-a", policy_id="trace-policy")]
-        )
+        transport.send_spans([self._fake_span("s1", "trace-a", policy_id="trace-policy")])
 
         assert posts[0]["resource"]["attributes"]["policy.id"] == "trace-policy"
 

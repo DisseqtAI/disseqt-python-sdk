@@ -155,8 +155,7 @@ class HTTPTransport:
                     resource_attrs["policy.id"] = policy_id
 
         traces = [
-            {"traceId": trace_id, "spans": span_list}
-            for trace_id, span_list in traces_dict.items()
+            {"traceId": trace_id, "spans": span_list} for trace_id, span_list in traces_dict.items()
         ]
 
         payload = {
