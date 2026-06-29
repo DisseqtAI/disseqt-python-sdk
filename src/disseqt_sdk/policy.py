@@ -5,8 +5,27 @@ returns a structured response with a per-rule breakdown. These helpers
 parse it into typed dataclasses and answer the common "should I block?"
 and "is this sync or async?" checks without callers poking at dict keys.
 
-Response fields you actually care about
----------------------------------------
+Wire shape
+----------
+prod-monitoring wraps the verdict in the standard Disseqt DSQ envelope::
+
+    {
+      "status":        "success",
+      "data":          { "policy_id": "...", "decision": "BLOCK", ... },
+      "messages":      [],
+      "code":          "DSQ-2000",
+      "standard_code": "OK",
+      "request_id":    "req_abc",
+      "timestamp":     "2026-06-27T15:30:18Z"
+    }
+
+The helpers in this module accept either the full envelope OR the
+``data`` payload directly — _unwrap_envelope() handles both, so caller
+code is the same whether you pass ``client.evaluate_policy(...)``'s
+return value or ``response["data"]``.
+
+Response fields inside ``data``
+-------------------------------
 * ``decision`` — ``"BLOCK"`` | ``"PASS"`` — the policy's verdict.
 * ``enforcement`` — ``"sync"`` | ``"async"`` — mirrors the policy's
   ``strategy.executionMode``. Tells you whether the decision in this
@@ -68,16 +87,36 @@ class PolicyDecision:
     rulesets: list[PolicyRuleset] = field(default_factory=list)
 
 
+def _unwrap_envelope(response: dict[str, Any]) -> dict[str, Any]:
+    """Return ``response["data"]`` when the response is a DSQ envelope,
+    else ``response`` itself.
+
+    A DSQ envelope is recognised by ``status == "success"`` together with
+    a dict-valued ``data`` field — that's the shape prod-monitoring's
+    /policies/:id/evaluate returns. Anything else (a raw payload from a
+    legacy or non-prod-monitoring caller, or an error envelope where
+    ``data`` is missing/None) falls through unchanged, so existing
+    callers that already pass the unwrapped dict keep working.
+    """
+    if response.get("status") == "success":
+        data = response.get("data")
+        if isinstance(data, dict):
+            return data
+    return response
+
+
 def parse(response: dict[str, Any]) -> PolicyDecision | None:
     """Turn a /policies/:id/evaluate response into a PolicyDecision.
 
+    Accepts either the full DSQ envelope or the unwrapped ``data`` dict.
     Returns None when the response doesn't carry a policy verdict (e.g.
-    server returned an error envelope with success=false and no policy_id).
+    server returned an error envelope with no policy_id).
     """
-    if not response.get("policy_id"):
+    payload = _unwrap_envelope(response)
+    if not payload.get("policy_id"):
         return None
     rulesets: list[PolicyRuleset] = []
-    for rs in response.get("rulesets", []) or []:
+    for rs in payload.get("rulesets", []) or []:
         rules: list[PolicyRule] = []
         for r in rs.get("rules", []) or []:
             rules.append(
@@ -101,11 +140,11 @@ def parse(response: dict[str, Any]) -> PolicyDecision | None:
             )
         )
     return PolicyDecision(
-        policy_id=str(response.get("policy_id", "")),
-        policy_name=str(response.get("policy_name", "")),
-        policy_version=int(response.get("policy_version", 0)),
-        decision=str(response.get("decision", "")),
-        enforcement=str(response.get("enforcement", "")),
+        policy_id=str(payload.get("policy_id", "")),
+        policy_name=str(payload.get("policy_name", "")),
+        policy_version=int(payload.get("policy_version", 0)),
+        decision=str(payload.get("decision", "")),
+        enforcement=str(payload.get("enforcement", "")),
         rulesets=rulesets,
     )
 
@@ -113,22 +152,26 @@ def parse(response: dict[str, Any]) -> PolicyDecision | None:
 def is_blocking(response: dict[str, Any]) -> bool:
     """Return True when the policy verdict is BLOCK.
 
-    Convenience for the common "do not pass this output downstream" check.
-    Reads ``decision``, which is the actual verdict — independent of
-    sync/async.
+    Accepts either the full DSQ envelope or the unwrapped ``data`` dict.
+    Convenience for the common "do not pass this output downstream"
+    check. Reads ``decision``, which is the actual verdict — independent
+    of sync/async.
     """
-    return str(response.get("decision", "")) == DECISION_BLOCK
+    payload = _unwrap_envelope(response)
+    return str(payload.get("decision", "")) == DECISION_BLOCK
 
 
 def is_async(response: dict[str, Any]) -> bool:
     """Return True when the policy ran in async mode.
 
+    Accepts either the full DSQ envelope or the unwrapped ``data`` dict.
     In async mode the decision in this response is not yet final — the
     real result will land on the realtime-validations dashboard once
     background processing completes. Callers usually log and move on
     instead of acting on ``is_blocking``.
     """
-    return str(response.get("enforcement", "")) == ENFORCEMENT_ASYNC
+    payload = _unwrap_envelope(response)
+    return str(payload.get("enforcement", "")) == ENFORCEMENT_ASYNC
 
 
 def _maybe_float(v: Any) -> float | None:

@@ -488,3 +488,65 @@ class TestIsAsync:
         response = {"decision": DECISION_BLOCK, "enforcement": ENFORCEMENT_SYNC}
         assert is_blocking(response) is True
         assert is_async(response) is False
+
+
+class TestDSQEnvelopeUnwrapping:
+    """The helpers accept either the raw payload OR the full
+    {status, data, messages, code, ...} DSQ envelope that
+    prod-monitoring's /policies/:id/evaluate now returns."""
+
+    @staticmethod
+    def _wrap(data: dict) -> dict:
+        return {
+            "status": "success",
+            "data": data,
+            "messages": [],
+            "code": "DSQ-2000",
+            "standard_code": "OK",
+            "request_id": "req_abc",
+            "timestamp": "2026-06-27T15:30:18Z",
+        }
+
+    def test_is_blocking_reads_through_envelope(self):
+        wrapped = self._wrap({"decision": DECISION_BLOCK, "enforcement": ENFORCEMENT_SYNC})
+        assert is_blocking(wrapped) is True
+
+    def test_is_blocking_false_when_envelope_decision_is_pass(self):
+        wrapped = self._wrap({"decision": DECISION_PASS, "enforcement": ENFORCEMENT_SYNC})
+        assert is_blocking(wrapped) is False
+
+    def test_is_async_reads_through_envelope(self):
+        wrapped = self._wrap({"enforcement": ENFORCEMENT_ASYNC, "status": "accepted"})
+        assert is_async(wrapped) is True
+
+    def test_parse_policy_reads_through_envelope(self):
+        wrapped = self._wrap(
+            {
+                "policy_id": "abc",
+                "policy_name": "Safety Guard",
+                "policy_version": 3,
+                "status": "completed",
+                "decision": DECISION_BLOCK,
+                "enforcement": ENFORCEMENT_SYNC,
+                "rulesets": [],
+            }
+        )
+        d = parse_policy(wrapped)
+        assert d is not None
+        assert d.policy_id == "abc"
+        assert d.decision == DECISION_BLOCK
+        assert d.enforcement == ENFORCEMENT_SYNC
+
+    def test_raw_payload_still_works_for_backward_compat(self):
+        # Pre-envelope wire shape — must keep working so existing
+        # callers that already have the payload don't break.
+        raw = {"decision": DECISION_BLOCK, "enforcement": ENFORCEMENT_SYNC}
+        assert is_blocking(raw) is True
+
+    def test_error_envelope_is_not_unwrapped(self):
+        # An envelope whose status isn't "success" (or whose data isn't
+        # a dict) shouldn't be treated as the payload — falls through.
+        err = {"status": "error", "error": {"external": "nope"}, "code": "DSQ-4000"}
+        # No "decision" anywhere → is_blocking False, parse returns None.
+        assert is_blocking(err) is False
+        assert parse_policy(err) is None
