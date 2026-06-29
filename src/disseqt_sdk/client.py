@@ -417,19 +417,23 @@ class Client:
             headers["X-Request-Id"] = request_id
 
         try:
-            response = requests.post(url, json=payload, headers=headers, timeout=self.timeout)
-            if not response.ok:
-                body = response.text[:512] if response.text else ""
+            # NB: local is `http_resp`, not `response`, to avoid shadowing
+            # the function's `response: str | None` parameter (the LLM
+            # output the caller wants validated) — mypy strict mode
+            # refuses to narrow a parameter type to requests.Response.
+            http_resp = requests.post(url, json=payload, headers=headers, timeout=self.timeout)
+            if not http_resp.ok:
+                body = http_resp.text[:512] if http_resp.text else ""
                 raise HTTPError(
-                    status_code=response.status_code,
+                    status_code=http_resp.status_code,
                     message="Policy evaluation failed",
                     response_body=body,
                 )
             try:
-                data = response.json()
+                data = http_resp.json()
             except json.JSONDecodeError as e:
                 raise ValueError(
-                    f"Failed to decode policy response: {e}. Body: {response.text[:200]}"
+                    f"Failed to decode policy response: {e}. Body: {http_resp.text[:200]}"
                 ) from e
             return cast(dict[str, Any], data)
         except requests.RequestException as e:
