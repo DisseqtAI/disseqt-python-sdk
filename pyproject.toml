@@ -36,7 +36,7 @@ Issues = "https://github.com/DisseqtAI/disseqt-python-sdk/issues"
 Changelog = "https://github.com/DisseqtAI/disseqt-python-sdk/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/disseqt_sdk", "src/disseqt_agentic_sdk"]
+packages = ["src/disseqt_sdk", "src/disseqt_agentic_sdk", "src/disseqt_logging"]
 
 [tool.black]
 line-length = 100

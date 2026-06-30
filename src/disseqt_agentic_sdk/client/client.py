@@ -99,12 +99,13 @@ class DisseqtAgenticClient:
         # Register cleanup on exit
         atexit.register(self.shutdown)
 
+        # Defense-in-depth: never log the project_id (a sensitive identifier),
+        # even though the logger would redact it. Only non-sensitive fields here.
         logger.info(
             "DisseqtAgenticClient initialized",
             extra={
                 "service_name": self.service_name,
                 "endpoint": endpoint,
-                "project_id": self.project_id,
                 "max_batch_size": max_batch_size,
                 "flush_interval": flush_interval,
             },

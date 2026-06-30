@@ -508,6 +508,64 @@ except HTTPError as e:
     print(f"Response: {e.response_body}")
 ```
 
+## Logging
+
+The SDK ships a built-in structured logger (`disseqt_logging`) — **no extra
+dependencies, nothing to install**. Both the validation and agentic SDKs emit a
+single consistent log schema: JSON (or human console), automatic
+`service` / `env` / `host` fields, PII/credential redaction, and a privacy-safe
+payload digest.
+
+**Silent by default.** The SDK produces **no log output** until you opt in via
+`configure_logging(...)`, `set_log_level(...)`, or the `DISSEQT_LOG_LEVEL`
+environment variable — so upgrading never adds unsolicited output. Once enabled,
+`Client.validate()` logs one structured line per call:
+
+```python
+import disseqt_sdk
+from disseqt_sdk import Client, SDKConfigInput
+from disseqt_sdk.models.input_validation import InputValidationRequest
+from disseqt_sdk.validators.input.safety import ToxicityValidator
+
+disseqt_sdk.configure_logging(level="info")   # or set DISSEQT_LOG_LEVEL
+
+client = Client(project_id="...", api_key="...")
+client.validate(ToxicityValidator(
+    data=InputValidationRequest(prompt="..."),
+    config=SDKConfigInput(threshold=0.5),
+))
+# {"event": "validation.response", "domain": "input-validation",
+#  "slug": "toxicity", "status": 200, "latency_ms": 142.3,
+#  "service": "disseqt-ai-sdk", "env": "production", ...}
+```
+
+Safety guarantees baked in:
+
+- Request payloads (which may contain user prompts) are **never logged
+  verbatim** — only a content-free `digest` (`len=… sha256=…`).
+- Auth headers, `api_key`, and `project_id` are never logged; as defense in
+  depth, any field whose name looks sensitive (`*token*`, `*secret*`,
+  `api_key`, `authorization`, `project_id`, …) and any email / JWT / card /
+  phone / long-token shape in a string value is redacted.
+
+### Configuration
+
+Use `disseqt_sdk.configure_logging(...)` / `set_log_level(...)`, or the
+environment:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `DISSEQT_LOG_LEVEL` | _(unset → silent)_ | `debug` / `info` / `warn` / `error`; setting it enables output |
+| `DISSEQT_LOG_FORMAT` | `auto` | `json`, `console`, or `auto` (console on a TTY) |
+| `DISSEQT_ENV` | `production` | Value bound to the `env` field |
+| `DISSEQT_LOG_SERVICE` | `disseqt-ai-sdk` | Value bound to the `service` field |
+| `DISSEQT_LOG_REDACT` | `1` | Set to `0` to disable redaction |
+| `DISSEQT_LOG_FILE` | — | When set, also tee to a size-rotated file |
+
+The agentic SDK keeps its existing `get_logger()` / `set_log_level()` surface;
+both now route through the same shared logger. Call `disseqt_logging.disable()`
+to silence output again after enabling it.
+
 ## Development
 
 ### Setup

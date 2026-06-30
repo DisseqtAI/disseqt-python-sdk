@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, cast
 
 import requests
+
+from disseqt_logging import digest, get_logger
 
 from .registry import get_validator_metadata
 from .routes import build_validator_url
 from .validators.base import BaseValidator, ThemesClassifierValidator
 from .validators.composite.evaluate import CompositeScoreEvaluator
+
+logger = get_logger(__name__)
 
 
 class HTTPError(Exception):
@@ -88,7 +93,9 @@ class Client:
             request._path_template,
         )
 
-        # print(f"URL: {url}")
+        # Stable, secrets-free correlation fields for every log line in this call.
+        domain = getattr(request.domain, "value", str(request.domain))
+        slug = request.slug
 
         # Get validator metadata from registry
         try:
@@ -106,9 +113,21 @@ class Client:
         else:
             payload = request.to_payload()
 
-        # Build headers
+        # Build headers (auth headers are never logged)
         headers = self._build_headers()
 
+        # Log the outgoing request. The payload may contain user prompts, so we
+        # emit only a content-free digest of it, never the body itself.
+        logger.debug(
+            "validation.request",
+            domain=domain,
+            slug=slug,
+            url=url,
+            payload_digest=digest(json.dumps(payload, sort_keys=True, default=str)),
+            timeout_s=self.timeout,
+        )
+
+        started = time.monotonic()
         try:
             # Make the API request
             response = requests.post(
@@ -117,39 +136,72 @@ class Client:
                 headers=headers,
                 timeout=self.timeout,
             )
-
-            # Check for HTTP errors
-            if not response.ok:
-                # Truncate response body for error message
-                body = response.text[:512] if response.text else ""
-                raise HTTPError(
-                    status_code=response.status_code,
-                    message="API request failed",
-                    response_body=body,
-                )
-
-            # Parse JSON response
-            try:
-                server_response_raw = response.json()
-                if server_response_raw is None:
-                    raise ValueError("Server returned null/empty JSON response")
-                server_response = cast(dict[str, Any], server_response_raw)
-            except json.JSONDecodeError as e:
-                raise ValueError(
-                    f"Failed to decode JSON response: {e}. Response text: {response.text[:200]}"
-                ) from e
-
-            # Use custom response handler or default
-            if response_handler:
-                result = response_handler(server_response)
-                return cast(dict[str, Any], result)
-            else:
-                # Use default response handling (no forced normalization)
-                return server_response
-
         except requests.RequestException as e:
+            latency_ms = round((time.monotonic() - started) * 1000, 1)
+            logger.error(
+                "validation.network_error",
+                domain=domain,
+                slug=slug,
+                latency_ms=latency_ms,
+                exc_info=True,
+            )
             raise HTTPError(
                 status_code=0,
                 message=f"Network error: {e}",
                 response_body="",
             ) from e
+
+        latency_ms = round((time.monotonic() - started) * 1000, 1)
+
+        # Check for HTTP errors
+        if not response.ok:
+            # Truncate response body for error message
+            body = response.text[:512] if response.text else ""
+            logger.error(
+                "validation.http_error",
+                domain=domain,
+                slug=slug,
+                status=response.status_code,
+                latency_ms=latency_ms,
+                response_body_digest=digest(response.text or ""),
+            )
+            raise HTTPError(
+                status_code=response.status_code,
+                message="API request failed",
+                response_body=body,
+            )
+
+        # Parse JSON response
+        try:
+            server_response_raw = response.json()
+            if server_response_raw is None:
+                raise ValueError("Server returned null/empty JSON response")
+            server_response = cast(dict[str, Any], server_response_raw)
+        except json.JSONDecodeError as e:
+            logger.error(
+                "validation.decode_error",
+                domain=domain,
+                slug=slug,
+                status=response.status_code,
+                latency_ms=latency_ms,
+                exc_info=True,
+            )
+            raise ValueError(
+                f"Failed to decode JSON response: {e}. Response text: {response.text[:200]}"
+            ) from e
+
+        logger.info(
+            "validation.response",
+            domain=domain,
+            slug=slug,
+            status=response.status_code,
+            latency_ms=latency_ms,
+        )
+
+        # Use custom response handler or default
+        if response_handler:
+            result = response_handler(server_response)
+            return cast(dict[str, Any], result)
+        else:
+            # Use default response handling (no forced normalization)
+            return server_response
