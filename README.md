@@ -566,6 +566,10 @@ The agentic SDK keeps its existing `get_logger()` / `set_log_level()` surface;
 both now route through the same shared logger. Call `disseqt_logging.disable()`
 to silence output again after enabling it.
 
+**See [docs/logging.md](docs/logging.md)** for the full guide — using the logger
+in your own code, structured fields, `bind()`, the error envelope, redaction
+details, file output, and the complete API reference.
+
 ## Development
 
 ### Setup
