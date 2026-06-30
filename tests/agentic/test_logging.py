@@ -1,4 +1,8 @@
-"""Tests for the agentic SDK logging wrapper (delegates to disseqt_logging)."""
+"""Tests for the agentic SDK logging wrapper (delegates to disseqt_logging).
+
+``get_logger`` returns a standard-library :class:`logging.Logger`, so structured
+fields are passed via ``extra={...}`` (stdlib style), matching earlier releases.
+"""
 
 import io
 import json
@@ -13,7 +17,6 @@ from disseqt_agentic_sdk.utils.logging import (
     get_logger,
     set_log_level,
 )
-from disseqt_logging import Logger
 
 
 @pytest.fixture
@@ -30,15 +33,25 @@ def _lines(buf):
 
 
 class TestAgenticLogging:
-    def test_get_logger_returns_shared_logger(self):
-        assert isinstance(get_logger(), Logger)
-        assert isinstance(get_logger("custom"), Logger)
+    def test_get_logger_returns_stdlib_logger(self):
+        # Backward compatibility: still a real stdlib logging.Logger.
+        assert isinstance(get_logger(), logging.Logger)
+        assert isinstance(get_logger("custom"), logging.Logger)
+
+    def test_stdlib_methods_available(self):
+        log = get_logger("disseqt_agentic_sdk.compat")
+        # The stdlib surface clients may rely on is present.
+        assert hasattr(log, "setLevel")
+        assert hasattr(log, "addHandler")
+        assert hasattr(log, "isEnabledFor")
+        assert hasattr(log, "handlers")
+        assert hasattr(log, "level")
 
     def test_default_logger_name(self):
         assert DEFAULT_LOGGER_NAME == "disseqt_agentic_sdk"
 
     def test_emits_structured_json(self, cap):
-        get_logger("disseqt_agentic_sdk.transport").info("buffer flush", span_count=3)
+        get_logger("disseqt_agentic_sdk.transport").info("buffer flush", extra={"span_count": 3})
         line = _lines(cap)[-1]
         assert line["event"] == "buffer flush"
         assert line["span_count"] == 3
@@ -57,7 +70,7 @@ class TestAgenticLogging:
         assert "Traceback" in line["exception"]
         assert line["endpoint"] == "https://x"
 
-    def test_warning_alias_works(self, cap):
+    def test_warning_works(self, cap):
         get_logger("disseqt_agentic_sdk.span").warning("retrying")
         assert _lines(cap)[-1]["level"] == "warning"
 

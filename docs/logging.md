@@ -275,14 +275,16 @@ disseqt_sdk.configure_logging(level="debug")
 ### Agentic SDK (`disseqt_agentic_sdk`)
 
 The agentic SDK logs its lifecycle (client init, span buffering/flush, transport
-results) through the same logger. Its public helpers are unchanged:
+results) through the same logger. Its public helpers are unchanged, and
+`get_logger()` still returns a **standard-library `logging.Logger`** — so pass
+structured fields via `extra={...}` (stdlib style):
 
 ```python
 from disseqt_agentic_sdk import get_logger, set_log_level
 
 set_log_level("debug")
-log = get_logger(__name__)
-log.info("span queued", span_count=7)
+log = get_logger(__name__)            # a real logging.Logger
+log.info("span queued", extra={"span_count": 7})
 ```
 
 ---
@@ -365,11 +367,16 @@ Or via the environment: `DISSEQT_LOG_FILE=/var/log/myapp/disseqt.log`.
 - The SDK uses a private root logger named `disseqt_ai_sdk` and does **not**
   propagate into your application's root logger, so it never captures or blocks
   loggers you own (including `disseqt.*` names).
-- The agentic `get_logger()` now returns a `disseqt_logging.Logger` (not a stdlib
-  `logging.Logger`). Its `.debug/.info/.warning/.error` methods are drop-in, but
-  if you previously called stdlib-only methods on it (`.setLevel(...)`,
-  `.addHandler(...)`) use `disseqt_agentic_sdk.set_log_level(...)` /
-  `disseqt_logging.configure(...)` instead.
+- **`disseqt_agentic_sdk.get_logger()` still returns a stdlib `logging.Logger`**
+  (unchanged type) — `isinstance(..., logging.Logger)`, `.setLevel(...)`,
+  `.addHandler(...)`, `.handlers`, `.level`, etc. all continue to work. The only
+  visible change is the output *format* (now structured) and that it is silent
+  until enabled. Pass structured fields via `extra={...}`.
+
+The validation/`disseqt_logging` `get_logger()` returns the richer
+`disseqt_logging.Logger` wrapper (the `**fields` API shown above); use
+`disseqt_logging.stdlib_logger(name)` if you specifically want a plain stdlib
+logger there too.
 
 ---
 
@@ -380,7 +387,8 @@ Importable from `disseqt_logging` (and the most common ones re-exported from
 
 | Symbol | Description |
 | --- | --- |
-| `get_logger(name=None) -> Logger` | Get a logger (also `disseqt_sdk.get_logger`). |
+| `get_logger(name=None) -> Logger` | Get the `**fields` wrapper logger (also `disseqt_sdk.get_logger`). |
+| `stdlib_logger(name=None) -> logging.Logger` | Get a plain stdlib logger under the SDK root (use `extra={...}`). |
 | `configure(config=None, **overrides) -> LoggerConfig` | Enable & configure (alias `disseqt_sdk.configure_logging`). |
 | `set_level(level)` | Set level / enable (alias `disseqt_sdk.set_log_level`). |
 | `current_level() -> str` | Current level name. |

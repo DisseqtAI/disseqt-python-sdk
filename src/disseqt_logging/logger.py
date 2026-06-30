@@ -58,6 +58,24 @@ _STRUCTURAL: frozenset[str] = frozenset(
     }
 )
 
+# Standard LogRecord attributes; anything else on a plain stdlib record is a
+# caller-supplied ``extra=`` field that should flow into the structured output.
+_RESERVED_RECORD_ATTRS: frozenset[str] = frozenset(vars(logging.makeLogRecord({})).keys()) | {
+    "message",
+    "asctime",
+    "taskName",
+}
+
+
+def _stdlib_fields(record: logging.LogRecord) -> dict[str, Any]:
+    """Extract caller ``extra=`` fields from a plain stdlib log record."""
+    return {
+        key: value
+        for key, value in vars(record).items()
+        if key not in _RESERVED_RECORD_ATTRS and not key.startswith("_")
+    }
+
+
 _lock = threading.RLock()
 _config: LoggerConfig | None = None
 _configured = False  # handlers installed (real or silent NullHandler)
@@ -192,10 +210,20 @@ class _DisseqtFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         """Assemble, redact, and render ``record``."""
-        payload: dict[str, Any] = getattr(record, _RECORD_KEY, None) or {}
-        fields: dict[str, Any] = payload.get("fields") or {}
-        envelope: dict[str, Any] | None = payload.get("error")
-        exc_text: str | None = payload.get("exc_text")
+        payload: dict[str, Any] | None = getattr(record, _RECORD_KEY, None)
+        if payload is not None:
+            # Record emitted via the :class:`Logger` wrapper.
+            fields: dict[str, Any] = payload.get("fields") or {}
+            envelope: dict[str, Any] | None = payload.get("error")
+            exc_text: str | None = payload.get("exc_text")
+        else:
+            # Plain stdlib record (e.g. via :func:`stdlib_logger` or any
+            # ``logging.getLogger`` child under our root). Pull ``extra=`` fields
+            # off the record and build the envelope from ``exc_info``.
+            fields = _stdlib_fields(record)
+            exc = record.exc_info[1] if record.exc_info else None
+            envelope = _error_envelope(exc, None) if exc is not None else None
+            exc_text = self.formatException(record.exc_info) if record.exc_info else None
 
         logger_name = record.name
         if logger_name.startswith(_ROOT_NAME + "."):
@@ -454,6 +482,29 @@ def get_logger(name: str | None = None) -> Logger:
         return Logger(logging.getLogger(_ROOT_NAME))
     child = name if name.startswith(_ROOT_NAME + ".") else f"{_ROOT_NAME}.{name}"
     return Logger(logging.getLogger(child))
+
+
+def stdlib_logger(name: str | None = None) -> logging.Logger:
+    """Return a standard-library :class:`logging.Logger` under the SDK root.
+
+    Use this where a real ``logging.Logger`` is required (e.g. for backward
+    compatibility) instead of the :class:`Logger` wrapper. Its records flow
+    through the same shared handler and are rendered with the same schema and
+    redaction; pass structured fields via ``extra={...}``. Every stdlib method
+    (``setLevel``/``addHandler``/``isEnabledFor``/…) is available.
+
+    Args:
+        name: A module/component name. Reparented under the ``disseqt_ai_sdk``
+            root so one handler serves the whole SDK.
+
+    Returns:
+        A configured stdlib :class:`logging.Logger`.
+    """
+    _ensure_configured()
+    if not name or name == _ROOT_NAME:
+        return logging.getLogger(_ROOT_NAME)
+    child = name if name.startswith(_ROOT_NAME + ".") else f"{_ROOT_NAME}.{name}"
+    return logging.getLogger(child)
 
 
 def set_level(level: str | int) -> None:

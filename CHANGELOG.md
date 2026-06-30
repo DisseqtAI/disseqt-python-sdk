@@ -23,8 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Agentic SDK logging** (`disseqt_agentic_sdk.utils.logging`) now routes
-  through the shared `disseqt_logging` logger; the `get_logger` /
-  `set_log_level` public API is preserved.
+  through the shared `disseqt_logging` logger. `get_logger()` still returns a
+  standard-library `logging.Logger` (unchanged type — `isinstance`, `setLevel`,
+  `addHandler`, etc. keep working); only the output format becomes structured and
+  it is silent until enabled. `set_log_level` is unchanged.
 - `DisseqtAgenticClient` initialization no longer includes `project_id` in its
   log fields (defense in depth — the value is never emitted even with redaction
   disabled).

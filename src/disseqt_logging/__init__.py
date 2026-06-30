@@ -31,6 +31,7 @@ from disseqt_logging.logger import (
     get_logger,
     info,
     set_level,
+    stdlib_logger,
     warn,
 )
 from disseqt_logging.redaction import redact_field, redact_string, sensitive_key
@@ -52,5 +53,6 @@ __all__ = [
     "redact_string",
     "sensitive_key",
     "set_level",
+    "stdlib_logger",
     "warn",
 ]
