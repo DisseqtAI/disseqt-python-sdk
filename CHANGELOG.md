@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Built-in structured logging** via a new dependency-free `disseqt_logging`
+  package (standard library only). Provides JSON/console output, automatic
+  `service`/`env`/`host` fields, PII/credential redaction (email/JWT/card/phone/
+  token shapes + a sensitive-key deny-list), a privacy-safe `digest`, an error
+  envelope, and a dynamic level. **Silent by default** — emits nothing until you
+  opt in via `disseqt_sdk.configure_logging(...)` / `set_log_level(...)` or
+  `DISSEQT_LOG_LEVEL`, so existing installs see no new output. `disseqt_logging.disable()`
+  silences it again.
+- **`Client.validate()` instrumentation**: structured `validation.request` /
+  `validation.response` / `validation.http_error` / `validation.network_error`
+  events with latency and a content-free payload digest. Request payloads, auth
+  headers, `api_key`, and `project_id` are never logged.
+
+### Changed
+- **Agentic SDK logging** (`disseqt_agentic_sdk.utils.logging`) now routes
+  through the shared `disseqt_logging` logger. `get_logger()` still returns a
+  standard-library `logging.Logger` (unchanged type — `isinstance`, `setLevel`,
+  `addHandler`, etc. keep working); only the output format becomes structured and
+  it is silent until enabled. `set_log_level` is unchanged.
+- `DisseqtAgenticClient` initialization no longer includes `project_id` in its
+  log fields (defense in depth — the value is never emitted even with redaction
+  disabled).
+
 ## [0.4.0] - 2026-06-03
 
 ### Added
