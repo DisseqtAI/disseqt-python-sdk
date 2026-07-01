@@ -13,7 +13,7 @@ from .api_client import DisseqtAPIClient
 from .client import Client
 from .models.base import SDKConfigInput
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 __all__ = [
     "Client",
     "DisseqtAPIClient",
