@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-01
+
 ### Added
 - **Built-in structured logging** via a new dependency-free `disseqt_logging`
   package (standard library only). Provides JSON/console output, automatic
