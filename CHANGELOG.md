@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-03
+
+### Added
+- **`Client.validate(request, policies=[...])`** — realtime policies are
+  now evaluated straight from `validate()`. Three call shapes:
+  1. `validate(SomeValidator(...))` — unchanged classic behavior.
+  2. `validate(SomeValidator(...), policies=["<id>", ...])` — the
+     validator runs as usual **and** the same input is evaluated against
+     each policy server-side (each policy's own rulesets, thresholds, and
+     decision strategy; one Decisions-ledger entry per policy).
+  3. `validate(InputValidationRequest(...), policies=["<id>"])` — a bare
+     request object (any `disseqt_sdk.models` request) with no validator
+     and no config; the policies decide everything.
+  With `policies` the return value is a stable envelope
+  `{"validation": {...}|None, "policies": [<policy envelope>, ...]}`
+  (policies evaluated sequentially, in order). Requires
+  `Client(application_name=...)`.
+- **`any_blocking(result)`** helper — True when any policy decision in
+  the envelope (or a list of envelopes, or a single envelope) is BLOCK.
+  Safe on classic validator responses (returns False).
+
+### Deprecated
+- **`Client.evaluate_policy()`** — use `validate(..., policies=[...])`
+  instead; both hit the same evaluate endpoint. Still fully functional
+  (typed kwargs, `config_input`, `request_id`) and will not be removed
+  before 1.0; calling it now emits a `DeprecationWarning`.
+
 ### Fixed
 - `evaluate_policy` docstring: unknown/unpublished policies now answer
   HTTP 404 (DSQ-4040) since production-monitoring v0.1.12 — callers

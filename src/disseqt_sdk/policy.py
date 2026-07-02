@@ -174,6 +174,32 @@ def is_async(response: dict[str, Any]) -> bool:
     return str(payload.get("enforcement", "")) == ENFORCEMENT_ASYNC
 
 
+def any_blocking(result: Any) -> bool:
+    """Return True when any policy decision in ``result`` is BLOCK.
+
+    Accepts, in order of preference:
+
+    - the dict returned by ``client.validate(..., policies=[...])``
+      (reads its ``"policies"`` list),
+    - a plain list of policy envelopes,
+    - a single policy envelope (falls back to :func:`is_blocking`).
+
+    Anything else — including a classic validator response — returns
+    False, so it is always safe to gate on::
+
+        result = client.validate(req, policies=[...])
+        if any_blocking(result):
+            ...  # at least one policy said BLOCK
+    """
+    if isinstance(result, dict) and isinstance(result.get("policies"), list):
+        return any(is_blocking(p) for p in result["policies"] if isinstance(p, dict))
+    if isinstance(result, list):
+        return any(is_blocking(p) for p in result if isinstance(p, dict))
+    if isinstance(result, dict):
+        return is_blocking(result)
+    return False
+
+
 def _maybe_float(v: Any) -> float | None:
     if v is None:
         return None

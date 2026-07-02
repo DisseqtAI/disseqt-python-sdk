@@ -9,7 +9,7 @@ Welcome to the Disseqt SDK documentation.
 | [validators.md](./validators.md) | Input & Output validators with detailed examples |
 | [advanced-validators.md](./advanced-validators.md) | Agentic, RAG, MCP Security, Themes & Composite Score |
 | [validators-quick-reference.md](./validators-quick-reference.md) | Quick reference card for all validators |
-| [realtime-policies.md](./realtime-policies.md) | Run dashboard-managed policies by id: `evaluate_policy`, sync/async, agentic, discovery, error handling |
+| [realtime-policies.md](./realtime-policies.md) | Evaluate dashboard-managed policies from `validate(..., policies=[...])`: envelopes, `any_blocking`, sync/async, discovery, agentic |
 | [logging.md](./logging.md) | Structured logging: setup, fields, redaction, file output, API |
 
 ## Getting Started
