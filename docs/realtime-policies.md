@@ -30,7 +30,7 @@ your code.
 - [Prerequisites](#prerequisites)
 - [How gating works](#how-gating-works)
 - [The skip marker](#the-skip-marker)
-- [Threshold precedence](#threshold-precedence)
+- [Configuration precedence](#configuration-precedence)
 - [Validator matching rules](#validator-matching-rules)
 - [Caching and failure behavior](#caching-and-failure-behavior)
 - [Discovering policies from code](#discovering-policies-from-code)
@@ -45,7 +45,7 @@ your code.
 ## Quick start
 
 ```python
-from disseqt_sdk import Client, SDKConfigInput, is_policy_skipped
+from disseqt_sdk import Client, is_policy_skipped
 from disseqt_sdk.models.input_validation import InputValidationRequest
 from disseqt_sdk.validators.input.invisible_text import InvisibleTextValidator
 
@@ -56,11 +56,10 @@ client = Client(
     application_name="checkout-bot",                            # required with a policy
 )
 
+# Policy passed == enabled. No threshold, no config — the policy owns
+# the validator's configuration.
 result = client.validate(
-    InvisibleTextValidator(
-        data=InputValidationRequest(prompt=user_input),
-        config=SDKConfigInput(threshold=0.5),   # policy threshold wins if it differs
-    )
+    InvisibleTextValidator(data=InputValidationRequest(prompt=user_input))
 )
 
 if is_policy_skipped(result):
@@ -152,19 +151,31 @@ as `validation.policy_skip` events.
 
 ---
 
-## Threshold precedence
+## Configuration precedence
 
-**The policy's threshold always wins.** Whatever `SDKConfigInput(threshold=…)`
-your code passes, a policy-governed run replaces it with the threshold the
-policy defines for that validator — the same precedence the server applies to
-`config_input` during full-policy evaluation. A caller cannot weaken (or
-tighten) dashboard-enforced guardrails from code.
+**Every config key the policy provides wins.** A policy-governed run applies
+the policy's per-validator configuration — `threshold`, `custom_labels`,
+`label_scores` — over anything the code passes, with the exact per-key
+precedence the server applies to `config_input` during full-policy
+evaluation. Keys the policy doesn't set are left as the caller supplied
+them. A caller cannot weaken (or tighten) dashboard-enforced guardrails
+from code.
 
-The response tells you which source applied:
+Because the policy owns the configuration, `config=` is **optional** on
+every validator (and keyword-only): under a bound policy, pass only the
+data. Standalone (no-policy) callers keep passing
+`config=SDKConfigInput(threshold=…)` as before; when omitted entirely, the
+threshold defaults to `0.5`.
+
+The response tells you which threshold source applied:
 
 ```python
 result["policy"]["threshold_source"]   # "policy" (normal) or "config" (policy had no threshold)
 ```
+
+> `custom_labels` / `label_scores` are applied when the server exposes them
+> in the policy detail (production-monitoring ≥ the PR #110 build); on older
+> servers the gate applies the threshold only.
 
 ---
 

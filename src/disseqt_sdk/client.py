@@ -361,6 +361,7 @@ class Client:
         # call, no credit spend — mirroring the server's own skip semantics.
         policy_meta: dict[str, Any] | None = None
         policy_threshold: float | None = None
+        policy_config: dict[str, Any] = {}
         if self.realtime_policy_id and isinstance(request, BaseValidator):
             detail = self._fetch_policy_detail()
             policy_meta = {
@@ -388,9 +389,21 @@ class Client:
                     "validator_name": slug,
                     "policy": policy_meta,
                 }
+            # Collect the policy's configuration for this validator. Every
+            # key the policy provides overrides the code-level config —
+            # the same per-key precedence the server applies during full-
+            # policy evaluation. Keys the policy doesn't set are left
+            # exactly as the caller supplied them.
             raw_threshold = rule.get("threshold")
             if isinstance(raw_threshold, (int, float)):
                 policy_threshold = float(raw_threshold)
+                policy_config["threshold"] = policy_threshold
+            labels = rule.get("custom_labels")
+            if isinstance(labels, list) and labels:
+                policy_config["custom_labels"] = labels
+            scores = rule.get("label_scores")
+            if isinstance(scores, dict) and scores:
+                policy_config["label_scores"] = scores
 
         # Get validator metadata from registry
         try:
@@ -408,21 +421,22 @@ class Client:
         else:
             payload = request.to_payload()
 
-        # Policy-bound run: the policy's threshold is authoritative — it
-        # overrides whatever the code-level config supplied (the same rule
-        # the server applies to config_input during policy evaluation).
-        if policy_meta is not None and policy_threshold is not None:
+        # Policy-bound run: the policy's configuration for this validator is
+        # authoritative — every key it provides (threshold, custom_labels,
+        # label_scores) overrides the code-level config, mirroring the
+        # server's config_input precedence during full-policy evaluation.
+        if policy_meta is not None and policy_config:
             config = payload.get("config_input")
             if isinstance(config, dict):
-                config["threshold"] = policy_threshold
+                config.update(policy_config)
             else:
-                payload["config_input"] = {"threshold": policy_threshold}
+                payload["config_input"] = dict(policy_config)
             logger.debug(
-                "validation.policy_threshold",
+                "validation.policy_config",
                 domain=domain,
                 slug=slug,
                 policy_id=self.realtime_policy_id,
-                threshold=policy_threshold,
+                keys=sorted(policy_config),
             )
 
         # Build headers (auth headers are never logged)

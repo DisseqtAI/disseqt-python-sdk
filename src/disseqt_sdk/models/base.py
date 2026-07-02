@@ -8,9 +8,15 @@ from typing import Any
 
 @dataclass(slots=True)
 class SDKConfigInput:
-    """Configuration input for SDK validators."""
+    """Configuration input for SDK validators.
 
-    threshold: float
+    ``threshold`` defaults to 0.5 so policy-bound callers can omit the
+    config entirely — under a bound realtime policy the policy's own
+    threshold overrides whatever is here. Standalone (no-policy) callers
+    should keep setting it explicitly when 0.5 isn't what they mean.
+    """
+
+    threshold: float = 0.5
     custom_labels: list[str] | None = None
     label_thresholds: list[float] | None = None
     # Allow/block intent labels for the intent-guard / intent-compliance

@@ -463,3 +463,103 @@ class TestReviewFindings:
         requests_mock.get(DETAIL_URL, text="<html>gateway error</html>")
         with pytest.raises(ValueError, match="decode|policy"):
             gated_client().validate(invisible_text())
+
+
+class TestPolicyModeErgonomics:
+    """Policy passed == enabled: call sites need no config at all, and the
+    policy's full per-validator configuration is applied."""
+
+    def test_validate_without_config_under_policy(self, requests_mock):
+        """The headline ergonomic: no SDKConfigInput anywhere."""
+        requests_mock.get(DETAIL_URL, json=POLICY_DETAIL)
+        post = requests_mock.post(
+            f"{BASE}/api/v1/sdk/validators/input-validation/invisible-text",
+            json=VALIDATOR_RESPONSE,
+        )
+        result = gated_client().validate(
+            InvisibleTextValidator(data=InputValidationRequest(prompt="hello"))
+        )
+        assert post.called
+        # Policy threshold applied even though the caller supplied nothing.
+        assert post.last_request.json()["config_input"]["threshold"] == 0.42
+        assert result["policy"]["threshold_source"] == "policy"
+
+    def test_validate_without_config_ungated_uses_default(self, requests_mock):
+        post = requests_mock.post(
+            f"{BASE}/api/v1/sdk/validators/input-validation/toxicity",
+            json=VALIDATOR_RESPONSE,
+        )
+        Client(project_id="p", api_key="k", base_url=BASE).validate(
+            ToxicityValidator(data=InputValidationRequest(prompt="hello"))
+        )
+        assert post.last_request.json()["config_input"]["threshold"] == 0.5
+
+    def test_full_policy_config_merge(self, requests_mock):
+        """threshold + custom_labels + label_scores from the policy all
+        override code config; unspecified keys pass through untouched."""
+        detail = {
+            "status": "success",
+            "data": {
+                "policy_id": POLICY_ID,
+                "name": "Full Config Policy",
+                "version": 2,
+                "enforcement": "sync",
+                "rulesets": [
+                    {
+                        "ruleset_id": "rs-1",
+                        "ruleset_name": "Security",
+                        "validators": [
+                            {
+                                "validator": "invisible_text",
+                                "validator_type": "input-validation",
+                                "enabled": True,
+                                "threshold": 0.42,
+                                "custom_labels": ["Clean", "Hidden", "Very Hidden"],
+                                "label_scores": {"Clean": 0.0, "Hidden": 0.5},
+                            }
+                        ],
+                    }
+                ],
+            },
+        }
+        requests_mock.get(DETAIL_URL, json=detail)
+        post = requests_mock.post(
+            f"{BASE}/api/v1/sdk/validators/input-validation/invisible-text",
+            json=VALIDATOR_RESPONSE,
+        )
+        gated_client().validate(
+            InvisibleTextValidator(
+                data=InputValidationRequest(prompt="hello"),
+                config=SDKConfigInput(
+                    threshold=0.9,
+                    custom_labels=["A", "B"],
+                    intents=["code-provided"],  # policy doesn't set intents
+                ),
+            )
+        )
+        sent = post.last_request.json()["config_input"]
+        assert sent["threshold"] == 0.42  # policy wins
+        assert sent["custom_labels"] == ["Clean", "Hidden", "Very Hidden"]
+        assert sent["label_scores"] == {"Clean": 0.0, "Hidden": 0.5}
+        assert sent["intents"] == ["code-provided"]  # untouched
+
+    def test_policy_without_labels_leaves_code_labels(self, requests_mock):
+        """Keys the policy doesn't provide are never clobbered."""
+        requests_mock.get(DETAIL_URL, json=POLICY_DETAIL)  # rules carry no labels
+        post = requests_mock.post(
+            f"{BASE}/api/v1/sdk/validators/input-validation/invisible-text",
+            json=VALIDATOR_RESPONSE,
+        )
+        gated_client().validate(
+            InvisibleTextValidator(
+                data=InputValidationRequest(prompt="hello"),
+                config=SDKConfigInput(threshold=0.9, custom_labels=["Mine"]),
+            )
+        )
+        sent = post.last_request.json()["config_input"]
+        assert sent["threshold"] == 0.42  # policy threshold wins
+        assert sent["custom_labels"] == ["Mine"]  # code labels survive
+
+    def test_config_is_keyword_only(self):
+        with pytest.raises(TypeError):
+            ToxicityValidator(InputValidationRequest(prompt="x"), SDKConfigInput(threshold=0.5))

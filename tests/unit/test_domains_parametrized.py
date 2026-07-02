@@ -224,13 +224,14 @@ class TestValidatorInitialization:
 
     def test_all_validators_have_unique_domain_slug_combinations(self, config):
         """Test that all validators have unique domain:slug combinations."""
+        # config is keyword-only since 0.7.0 (optional under a bound policy).
         validators = [
-            ToxicityValidator(InputValidationRequest(prompt="test"), config),
-            BiasValidator(InputValidationRequest(prompt="test"), config),
-            FactualConsistencyValidator(OutputValidationRequest(response="test"), config),
-            TopicAdherenceValidator(AgenticBehaviourRequest(), config),
-            McpPromptInjectionValidator(McpSecurityRequest(prompt="test"), config),
-            ContextRelevanceValidator(RagGroundingRequest(), config),
+            ToxicityValidator(InputValidationRequest(prompt="test"), config=config),
+            BiasValidator(InputValidationRequest(prompt="test"), config=config),
+            FactualConsistencyValidator(OutputValidationRequest(response="test"), config=config),
+            TopicAdherenceValidator(AgenticBehaviourRequest(), config=config),
+            McpPromptInjectionValidator(McpSecurityRequest(prompt="test"), config=config),
+            ContextRelevanceValidator(RagGroundingRequest(), config=config),
         ]
 
         domain_slug_pairs = set()

@@ -20,9 +20,16 @@ if TYPE_CHECKING:
 
 @dataclass(slots=True)
 class BaseValidator:
-    """Base class for all validators."""
+    """Base class for all validators.
 
-    config: SDKConfigInput
+    ``config`` is keyword-only and optional: under a bound realtime policy
+    the dashboard supplies the validator's configuration, so call sites
+    read ``validate(ToxicityValidator(data=...))`` with no config noise.
+    Standalone callers pass ``config=SDKConfigInput(threshold=...)`` as
+    before.
+    """
+
+    config: SDKConfigInput = field(default_factory=SDKConfigInput, kw_only=True)
     _domain: ValidatorDomain = field(init=False, repr=False)
     _slug: str = field(init=False, repr=False)
     _path_template: str = field(

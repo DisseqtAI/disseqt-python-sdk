@@ -36,6 +36,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - No policy bound → `validate()` behavior is byte-identical to 0.6.0.
     Composite score and themes-classifier requests are never gated.
 
+- **Policy mode needs no config**: `config=` is now **optional and
+  keyword-only** on every validator, and `SDKConfigInput.threshold`
+  defaults to `0.5` — under a bound policy the call site is just
+  `client.validate(ToxicityValidator(data=...))`; the policy owns the
+  configuration. (Passing `config` positionally no longer works — all
+  documented usage was already keyword.)
+- **Full policy config applied on gated runs**: in addition to
+  `threshold`, the gate now applies the policy's `custom_labels` and
+  `label_scores` for the validator when the server exposes them
+  (production-monitoring PR #110) — per-key policy-wins, identical to
+  server-side `config_input` precedence; keys the policy doesn't set are
+  left untouched.
+
 ### Deprecated
 - **`Client.evaluate_policy()`** — bind the policy on the client and call
   `validate()` instead. Still fully functional (it remains the only way to
