@@ -413,10 +413,14 @@ class Client:
             poke at the shape directly.
 
         Raises:
-            HTTPError: If the server returns a non-2xx. Note: an unknown
-                or unpublished policy currently surfaces as HTTP 500
-                (DSQ-5000) from the server, not 404 — don't branch on
-                404 for missing policies.
+            HTTPError: If the server returns a non-2xx. An unknown,
+                unpublished, or deleted policy answers HTTP 404
+                (DSQ-4040) — branch on ``e.status_code == 404`` to
+                distinguish a bad policy id from a server fault.
+                (Deployments older than production-monitoring v0.1.12
+                returned 500 for these; a malformed non-UUID id may
+                still surface as 500 on servers without the
+                realtime-policies-service malformed-id fix.)
             ValueError: If no input fields were supplied, no policy_id
                 is set anywhere, or no application_name is set anywhere.
         """
