@@ -13,7 +13,7 @@ Client(realtime_policy_id="…")           # bind once
         ▼
 client.validate(SomeValidator(...))       # every call is policy-governed
         │
-        ├─ validator enabled in policy → RUNS (policy threshold wins)
+        ├─ validator enabled in policy → RUNS (policy config wins)
         └─ validator not in policy     → SKIPPED (no API call, no charge)
 ```
 
@@ -105,8 +105,9 @@ goes through three steps:
 2. **Look up the validator** in the policy's rulesets (see
    [Matching rules](#validator-matching-rules)).
 3. **Run or skip**:
-   - **Enabled in the policy** → the validator runs as normal, except the
-     policy's threshold replaces the code-level one. The response gains a
+   - **Enabled in the policy** → the validator runs as normal, with the
+     policy's configuration (threshold, custom labels, label scores)
+     applied over anything the code supplied. The response gains a
      `policy` block.
    - **Absent or disabled** → the call returns a skip marker immediately.
      **No HTTP request is made and no credits are spent.**
