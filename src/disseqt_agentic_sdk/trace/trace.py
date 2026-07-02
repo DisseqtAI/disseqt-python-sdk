@@ -39,6 +39,7 @@ class DisseqtTrace:
         environment: str = "production",
         intent_id: str | None = None,
         workflow_id: str | None = None,
+        realtime_policy_id: str | None = None,
         client: "DisseqtAgenticClient | None" = None,  # Optional client for incremental sending
     ):
         """
@@ -55,6 +56,13 @@ class DisseqtTrace:
             environment: Environment (production, staging, dev)
             intent_id: Optional intent ID
             workflow_id: Optional workflow ID
+            realtime_policy_id: Per-trace policy override. When set, every
+                span this trace creates carries it through to the
+                EnrichedSpan, and the transport stamps it onto the
+                outgoing payload's resource.attributes["policy.id"]. When
+                None, falls back to the client's default
+                ``realtime_policy_id`` (set on
+                :class:`DisseqtAgenticClient`).
         """
         # Generate trace ID if not provided
         self.trace_id = trace_id or generate_trace_id()
@@ -73,6 +81,9 @@ class DisseqtTrace:
         self.environment = environment
         self.intent_id = intent_id
         self.workflow_id = workflow_id
+        # Trace-level policy override. Falls back to the client default at
+        # transport time when this is empty.
+        self.realtime_policy_id = realtime_policy_id or ""
 
         # Span collection
         self.spans: list[DisseqtSpan] = []
@@ -130,6 +141,7 @@ class DisseqtTrace:
             service_name=self.service_name,
             service_version=self.service_version,
             environment=self.environment,
+            realtime_policy_id=self.realtime_policy_id,
             client=self._client,  # Pass client for incremental sending
         )
         logger.debug(f"Created span: {name} ({kind}) in trace {self.trace_id}")

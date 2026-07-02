@@ -24,6 +24,28 @@ class DisseqtAgenticClient:
     - Manage buffering for efficient ingestion
     - Provide resource metadata
 
+    Realtime policies are opt-in
+    ----------------------------
+    The agentic SDK works fine **without** a realtime policy. Three modes:
+
+    1. **No policy anywhere** — don't pass ``realtime_policy_id`` to the
+       client or to ``start_trace``. Spans are sent with no
+       ``policy.id`` resource attribute, and llm-monitoring runs them
+       through its legacy ``feature_settings`` validator path (the same
+       behaviour as before realtime policies existed). Use this when you
+       just want observability without policy enforcement.
+
+    2. **Client default** — pass ``realtime_policy_id=...`` to the
+       constructor. Every trace this client produces carries that
+       policy unless a trace overrides it. Use when one application
+       runs against one policy.
+
+    3. **Per-trace override** — pass ``realtime_policy_id=...`` on
+       :func:`start_trace`. Wins over the client default for that
+       trace's spans only. Use when one application runs multiple
+       agents under different policies (init the client once, vary the
+       policy per trace).
+
     """
 
     SDK_NAME = "disseqt-agentic-sdk"
@@ -40,6 +62,7 @@ class DisseqtAgenticClient:
         max_batch_size: int = 100,
         flush_interval: float = 1.0,
         max_retries: int = 3,
+        realtime_policy_id: str | None = None,
     ):
         """
         Initialize SDK client.
@@ -54,12 +77,34 @@ class DisseqtAgenticClient:
             max_batch_size: Maximum spans per batch
             flush_interval: Flush interval in seconds
             max_retries: Maximum retry attempts
+            realtime_policy_id: Optional realtime-policy UUID. When set,
+                every span emitted by this client carries it as the
+                ``policy.id`` resource attribute, which is the contract
+                llm-monitoring's validation consumer reads to route the
+                span through policy-driven evaluation (rather than
+                feature_settings). Same convention as ``api.key`` — set
+                once on the client, propagated to every span
+                automatically.
+
+                When ``realtime_policy_id`` is set, ``service_name`` is
+                the application identifier that lands in
+                ``policy_decisions.application_name`` on the dashboard
+                (analogous to ``application_name`` on
+                :class:`disseqt_sdk.Client`). ``service_name`` is already
+                a required positional arg so this pairing is enforced
+                by signature — there is no way to construct a client
+                with ``realtime_policy_id`` but without ``service_name``.
 
         Raises:
             ValueError: If any required field is missing or empty
 
         """
-        # Validate required fields
+        # Validate required fields. service_name is required regardless
+        # of realtime_policy_id (it populates the OTel resource attribute
+        # on every span), which means setting realtime_policy_id
+        # automatically requires service_name too — same rule as
+        # disseqt_sdk.Client's (realtime_policy_id ⇒ application_name)
+        # check.
         if not api_key or not api_key.strip():
             raise ValueError("api_key is required and cannot be empty")
 
@@ -67,7 +112,11 @@ class DisseqtAgenticClient:
             raise ValueError("project_id is required and cannot be empty")
 
         if not service_name or not service_name.strip():
-            raise ValueError("service_name is required and cannot be empty")
+            raise ValueError(
+                "service_name is required and cannot be empty "
+                "(also identifies the application on the policies "
+                "dashboard when realtime_policy_id is set)"
+            )
 
         if not endpoint or not endpoint.strip():
             raise ValueError("endpoint is required and cannot be empty")
@@ -81,12 +130,14 @@ class DisseqtAgenticClient:
         self.service_name = service_name
         self.service_version = service_version
         self.environment = environment
+        self.realtime_policy_id = realtime_policy_id
 
         # Initialize transport
         self.transport = HTTPTransport(
             endpoint=endpoint,
             api_key=api_key,
             max_retries=max_retries,
+            realtime_policy_id=realtime_policy_id,
         )
 
         # Initialize buffer

@@ -47,6 +47,14 @@ class EnrichedSpan:
     service_version: str = "1.0.0"
     environment: str = "production"
 
+    # Realtime-policy this span participates in. Populated by the trace
+    # that owns the span (set on DisseqtTrace.realtime_policy_id, then
+    # propagated here at to_enriched_span() time). Empty means "use the
+    # client default, if any". The transport groups spans by this value
+    # so traces with different policy_ids each get a payload with the
+    # right resource.attributes["policy.id"].
+    realtime_policy_id: str = ""
+
     # Timestamp for partitioning (server time)
     dt: datetime | None = None  # Backend will set if not provided
 

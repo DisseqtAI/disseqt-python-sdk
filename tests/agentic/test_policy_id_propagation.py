@@ -1,0 +1,294 @@
+"""Tests for realtime_policy_id propagation: Client → Transport → resource attributes.
+
+The contract (see llm-monitoring/internal/consumer/span_raw_consumer.go):
+when a span carries policy.id as a resource attribute, the validation
+consumer routes it through policy-driven evaluation instead of the
+default feature_settings path. The agentic SDK is the producer side of
+that contract — set realtime_policy_id on DisseqtAgenticClient and every span
+batch the client emits carries policy.id in the OTel-style resource
+attributes block.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import MagicMock, patch
+
+from disseqt_agentic_sdk import DisseqtAgenticClient
+from disseqt_agentic_sdk.transport import HTTPTransport
+
+
+class TestClientPolicyIdPassthrough:
+    """Client(realtime_policy_id=...) hands it to the transport."""
+
+    @patch("disseqt_agentic_sdk.client.client.HTTPTransport")
+    @patch("disseqt_agentic_sdk.client.client.TraceBuffer")
+    def test_realtime_policy_id_forwarded_to_transport(self, _buf, mock_transport):
+        DisseqtAgenticClient(
+            api_key="k",
+            project_id="p",
+            service_name="svc",
+            endpoint="http://localhost/traces",
+            realtime_policy_id="pol-123",
+        )
+        mock_transport.assert_called_once()
+        _, kwargs = mock_transport.call_args
+        assert kwargs["realtime_policy_id"] == "pol-123"
+
+    @patch("disseqt_agentic_sdk.client.client.HTTPTransport")
+    @patch("disseqt_agentic_sdk.client.client.TraceBuffer")
+    def test_no_realtime_policy_id_passes_none(self, _buf, mock_transport):
+        DisseqtAgenticClient(
+            api_key="k",
+            project_id="p",
+            service_name="svc",
+            endpoint="http://localhost/traces",
+        )
+        _, kwargs = mock_transport.call_args
+        assert kwargs["realtime_policy_id"] is None
+
+
+class TestTransportEmitsPolicyId:
+    """HTTPTransport.send_spans includes policy.id in resource.attributes."""
+
+    def _fake_span(self, span_id="s1") -> MagicMock:
+        # Build a span object whose .trace_id / .to_dict() match what
+        # send_spans expects, without depending on the real EnrichedSpan.
+        span = MagicMock()
+        span.trace_id = "trace-abc"
+        # The transport reads .realtime_policy_id off the span object via
+        # getattr(...); MagicMock would otherwise return a MagicMock here
+        # and pollute the resource attrs. Default to empty string —
+        # individual tests can override.
+        span.realtime_policy_id = ""
+        span.to_dict.return_value = {
+            "trace_id": "trace-abc",
+            "span_id": span_id,
+            "parent_span_id": "",
+            "name": "llm.call",
+            "kind": "MODEL_EXEC",
+            "start_time_unix_nano": 1_000_000_000,
+            "end_time_unix_nano": 2_000_000_000,
+            "status_code": "OK",
+            "attributes_json": "{}",
+            "service_name": "svc",
+            "service_version": "1.0",
+            "environment": "test",
+            "project_id": "p",
+        }
+        return span
+
+    def test_realtime_policy_id_present_when_set(self):
+        transport = HTTPTransport(
+            endpoint="http://localhost/traces",
+            api_key="k",
+            realtime_policy_id="pol-456",
+        )
+        captured = {}
+
+        def fake_post(url, json=None, headers=None, **kwargs):
+            captured["payload"] = json
+            resp = MagicMock()
+            resp.raise_for_status.return_value = None
+            return resp
+
+        transport.session.post = fake_post  # type: ignore[assignment]
+        ok = transport.send_spans([self._fake_span()])
+        assert ok is True
+
+        attrs = captured["payload"]["resource"]["attributes"]
+        assert attrs["policy.id"] == "pol-456"
+
+    def test_realtime_policy_id_absent_when_not_set(self):
+        transport = HTTPTransport(endpoint="http://localhost/traces", api_key="k")
+        captured = {}
+
+        def fake_post(url, json=None, headers=None, **kwargs):
+            captured["payload"] = json
+            resp = MagicMock()
+            resp.raise_for_status.return_value = None
+            return resp
+
+        transport.session.post = fake_post  # type: ignore[assignment]
+        transport.send_spans([self._fake_span()])
+
+        attrs = captured["payload"]["resource"]["attributes"]
+        assert "policy.id" not in attrs
+
+
+class TestPerTracePolicyOverride:
+    """When traces in a single batch carry different per-trace policy
+    ids, the transport sends one POST per distinct policy, each with
+    the right resource.attributes['policy.id'].
+
+    This is the core mechanism that lets two agents in the same app
+    run under different policies without re-initialising the client.
+    """
+
+    def _fake_span(self, span_id: str, trace_id: str, policy_id: str = "") -> MagicMock:
+        span = MagicMock()
+        span.trace_id = trace_id
+        span.realtime_policy_id = policy_id
+        span.to_dict.return_value = {
+            "trace_id": trace_id,
+            "span_id": span_id,
+            "parent_span_id": "",
+            "name": "agent.exec",
+            "kind": "AGENT_EXEC",
+            "start_time_unix_nano": 1_000_000_000,
+            "end_time_unix_nano": 2_000_000_000,
+            "status_code": "OK",
+            "attributes_json": "{}",
+            "service_name": "my-app",
+            "service_version": "1.0",
+            "environment": "test",
+            "project_id": "p",
+        }
+        return span
+
+    def test_two_traces_with_different_policies_produce_two_posts(self):
+        # Agent A's trace (policy A) + Agent B's trace (policy B), same
+        # batch. The transport should issue two POSTs — one per policy.
+        transport = HTTPTransport(endpoint="http://localhost/traces", api_key="k")
+        posts: list[dict] = []
+
+        def fake_post(url, json=None, headers=None, **kwargs):
+            posts.append(json)
+            resp = MagicMock()
+            resp.raise_for_status.return_value = None
+            return resp
+
+        transport.session.post = fake_post  # type: ignore[assignment]
+
+        ok = transport.send_spans(
+            [
+                self._fake_span("s1", "trace-a", policy_id="policy-a"),
+                self._fake_span("s2", "trace-b", policy_id="policy-b"),
+            ]
+        )
+
+        assert ok is True
+        assert len(posts) == 2
+
+        policy_ids = {p["resource"]["attributes"].get("policy.id") for p in posts}
+        assert policy_ids == {"policy-a", "policy-b"}
+
+    def test_single_policy_batch_still_one_post(self):
+        # Both traces use the same policy → one POST, both traces inside.
+        transport = HTTPTransport(endpoint="http://localhost/traces", api_key="k")
+        posts: list[dict] = []
+
+        def fake_post(url, json=None, headers=None, **kwargs):
+            posts.append(json)
+            resp = MagicMock()
+            resp.raise_for_status.return_value = None
+            return resp
+
+        transport.session.post = fake_post  # type: ignore[assignment]
+
+        transport.send_spans(
+            [
+                self._fake_span("s1", "trace-a", policy_id="policy-a"),
+                self._fake_span("s2", "trace-b", policy_id="policy-a"),
+            ]
+        )
+
+        assert len(posts) == 1
+        assert posts[0]["resource"]["attributes"]["policy.id"] == "policy-a"
+        # Both traces in one payload.
+        assert len(posts[0]["traces"]) == 2
+
+    def test_per_trace_policy_id_beats_client_default(self):
+        # Client has a default policy, but the span's per-trace override
+        # wins. (Same span has policy_id="trace-policy".)
+        transport = HTTPTransport(
+            endpoint="http://localhost/traces",
+            api_key="k",
+            realtime_policy_id="client-default-policy",
+        )
+        posts: list[dict] = []
+
+        def fake_post(url, json=None, headers=None, **kwargs):
+            posts.append(json)
+            resp = MagicMock()
+            resp.raise_for_status.return_value = None
+            return resp
+
+        transport.session.post = fake_post  # type: ignore[assignment]
+
+        transport.send_spans([self._fake_span("s1", "trace-a", policy_id="trace-policy")])
+
+        assert posts[0]["resource"]["attributes"]["policy.id"] == "trace-policy"
+
+    def test_empty_per_trace_policy_falls_back_to_client_default(self):
+        transport = HTTPTransport(
+            endpoint="http://localhost/traces",
+            api_key="k",
+            realtime_policy_id="client-default-policy",
+        )
+        posts: list[dict] = []
+
+        def fake_post(url, json=None, headers=None, **kwargs):
+            posts.append(json)
+            resp = MagicMock()
+            resp.raise_for_status.return_value = None
+            return resp
+
+        transport.session.post = fake_post  # type: ignore[assignment]
+
+        # No per-trace override on the span.
+        transport.send_spans([self._fake_span("s1", "trace-a", policy_id="")])
+
+        assert posts[0]["resource"]["attributes"]["policy.id"] == "client-default-policy"
+
+
+class TestNoPolicyAnywhere:
+    """The agentic SDK works when neither the client nor any trace sets
+    a realtime_policy_id — spans go out without policy.id and
+    llm-monitoring routes them through its feature_settings path."""
+
+    def _fake_span(self, span_id: str, trace_id: str) -> MagicMock:
+        span = MagicMock()
+        span.trace_id = trace_id
+        span.realtime_policy_id = ""  # no per-trace override
+        span.to_dict.return_value = {
+            "trace_id": trace_id,
+            "span_id": span_id,
+            "parent_span_id": "",
+            "name": "agent.exec",
+            "kind": "AGENT_EXEC",
+            "start_time_unix_nano": 1_000_000_000,
+            "end_time_unix_nano": 2_000_000_000,
+            "status_code": "OK",
+            "attributes_json": "{}",
+            "service_name": "my-app",
+            "service_version": "1.0",
+            "environment": "test",
+            "project_id": "p",
+        }
+        return span
+
+    def test_no_policy_id_anywhere_means_no_policy_attr_on_wire(self):
+        # Neither the transport (client default) nor the span (per-trace
+        # override) carries a policy_id. Resource block should NOT include
+        # policy.id — llm-monitoring then falls back to feature_settings.
+        transport = HTTPTransport(endpoint="http://localhost/traces", api_key="k")
+        posts: list[dict] = []
+
+        def fake_post(url, json=None, headers=None, **kwargs):
+            posts.append(json)
+            resp = MagicMock()
+            resp.raise_for_status.return_value = None
+            return resp
+
+        transport.session.post = fake_post  # type: ignore[assignment]
+
+        ok = transport.send_spans([self._fake_span("s1", "trace-a")])
+
+        assert ok is True
+        assert len(posts) == 1
+        attrs = posts[0]["resource"]["attributes"]
+        # The other resource attrs (service.name etc.) still flow.
+        assert attrs["service.name"] == "my-app"
+        assert attrs["api.key"] == "k"
+        # But there's no policy.id — explicit non-presence.
+        assert "policy.id" not in attrs

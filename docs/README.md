@@ -16,19 +16,19 @@ Welcome to the Disseqt SDK documentation.
 ### Installation
 
 ```bash
-pip install disseqt-sdk
+pip install disseqt-ai-sdk
 ```
 
 ### Basic Usage
 
 ```python
-from disseqt_sdk import DisseqtClient
+from disseqt_sdk import Client
 from disseqt_sdk.models import InputValidationRequest, OutputValidationRequest, SDKConfigInput
 from disseqt_sdk.validators.input import ToxicityValidator
 from disseqt_sdk.validators.output import GrammarCorrectnessValidator
 
-# Initialize the client
-client = DisseqtClient(api_key="your_api_key")
+# Initialize the client (both project_id and api_key are required)
+client = Client(project_id="your_project_id", api_key="your_api_key")
 
 # Input validation example
 input_data = InputValidationRequest(prompt="Hello, how are you?")

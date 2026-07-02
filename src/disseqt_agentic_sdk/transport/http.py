@@ -33,6 +33,7 @@ class HTTPTransport:
         timeout: float = 10.0,
         max_retries: int = 3,
         verify_ssl: bool = True,
+        realtime_policy_id: str | None = None,
     ):
         """
         Initialize HTTP transport.
@@ -43,11 +44,17 @@ class HTTPTransport:
             timeout: Request timeout in seconds
             max_retries: Maximum number of retries
             verify_ssl: Whether to verify SSL certificates
+            realtime_policy_id: Optional realtime-policy UUID stamped
+                onto every payload's ``resource.attributes['policy.id']``
+                field. llm-monitoring's span consumer reads this to route
+                the span through policy-driven evaluation. Omitted from
+                the payload when None.
         """
         self.endpoint = endpoint.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
         self.verify_ssl = verify_ssl
+        self.realtime_policy_id = realtime_policy_id
 
         # Setup session with retry strategy
         self.session = requests.Session()
@@ -64,18 +71,42 @@ class HTTPTransport:
         """
         Send spans to the backend API in Custom Format.
 
-        Formats spans as Custom Format payload with resource and traces.
+        Spans are grouped by their per-trace ``realtime_policy_id`` (with
+        the client default as the fallback) and each distinct group is
+        sent as its own HTTP POST. This is what makes per-trace policy
+        overrides work: traces using different policies in the same
+        batch land in separate payloads, each with the right
+        ``resource.attributes["policy.id"]``. Single-policy batches still
+        produce a single POST so there's no extra HTTP cost in the common
+        case.
 
         Args:
             spans: List of EnrichedSpan objects to send
 
         Returns:
-            bool: True if successful, False otherwise
+            bool: True if every group sent successfully, False otherwise
         """
         if not spans:
             return True
 
-        # Group spans by trace_id
+        # Bucket spans by the policy that should be stamped on their
+        # outgoing resource block. Empty string means "no per-trace
+        # override; use the client default" — which may itself be empty.
+        groups: dict[str, list[EnrichedSpan]] = {}
+        for span in spans:
+            pid = getattr(span, "realtime_policy_id", "") or self.realtime_policy_id or ""
+            groups.setdefault(pid, []).append(span)
+
+        all_ok = True
+        for pid, group in groups.items():
+            if not self._send_group(pid, group):
+                all_ok = False
+        return all_ok
+
+    def _send_group(self, policy_id: str, spans: list[EnrichedSpan]) -> bool:
+        """Send one resource-block's worth of spans (single policy_id)."""
+        # Group by trace_id within the policy bucket so the wire shape
+        # stays {resource, traces: [{traceId, spans}]}.
         traces_dict: dict[str, list[dict[str, Any]]] = {}
         resource_attrs: dict[str, Any] = {}
 
@@ -87,29 +118,25 @@ class HTTPTransport:
             if trace_id_str not in traces_dict:
                 traces_dict[trace_id_str] = []
 
-            # Convert EnrichedSpan to Custom Format span
             span_dict = span.to_dict()
 
-            # Convert to Custom Format span structure
             custom_span = {
                 "traceId": span_dict["trace_id"],
                 "spanId": span_dict["span_id"],
                 "parentSpanId": span_dict.get("parent_span_id") or "",
                 "name": span_dict["name"],
                 "spanKind": span_dict["kind"],
-                "startTimeMs": span_dict["start_time_unix_nano"] // 1_000_000,  # Convert ns to ms
-                "endTimeMs": span_dict["end_time_unix_nano"] // 1_000_000,  # Convert ns to ms
+                "startTimeMs": span_dict["start_time_unix_nano"] // 1_000_000,
+                "endTimeMs": span_dict["end_time_unix_nano"] // 1_000_000,
                 "status": span_dict["status_code"],
             }
 
-            # Put all attributes directly in attributes field
             attributes = json.loads(span_dict.get("attributes_json", "{}"))
             if attributes:
                 custom_span["attributes"] = attributes
 
             traces_dict[trace_id_str].append(custom_span)
 
-            # Extract resource attributes from first span
             if not resource_attrs:
                 resource_attrs = {
                     "service.name": span_dict.get("service_name", ""),
@@ -119,25 +146,23 @@ class HTTPTransport:
                     "ingestion_url": self.endpoint,
                     "api.key": self.api_key,
                 }
+                # policy.id is the OTel-style resource attribute
+                # llm-monitoring's validation consumer keys on to route
+                # the span through policy-driven evaluation. Only emit
+                # when set so non-policy callers get bit-for-bit the
+                # same payload as before.
+                if policy_id:
+                    resource_attrs["policy.id"] = policy_id
 
-        # Build Custom Format payload
-        traces = []
-        for trace_id, span_list in traces_dict.items():
-            traces.append(
-                {
-                    "traceId": trace_id,
-                    "spans": span_list,
-                }
-            )
+        traces = [
+            {"traceId": trace_id, "spans": span_list} for trace_id, span_list in traces_dict.items()
+        ]
 
         payload = {
             "resource": {"attributes": resource_attrs},
             "traces": traces,
         }
-        # Prepare headers
-        headers = {
-            "Content-Type": "application/json",
-        }
+        headers = {"Content-Type": "application/json"}
         try:
             response = self.session.post(
                 self.endpoint,
@@ -153,6 +178,7 @@ class HTTPTransport:
                     "endpoint": self.endpoint,
                     "span_count": len(spans),
                     "trace_count": len(traces),
+                    "policy_id": policy_id or None,
                 },
             )
             return True
