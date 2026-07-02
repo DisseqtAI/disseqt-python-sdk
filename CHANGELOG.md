@@ -43,6 +43,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the validation SDK) and will not be removed before 1.0; calling it now
   emits a `DeprecationWarning`.
 
+### Fixed
+- `evaluate_policy` docstring: unknown/unpublished policies now answer
+  HTTP 404 (DSQ-4040) since production-monitoring v0.1.12 — callers
+  should branch on 404. The docstring previously said the opposite
+  ("don't branch on 404"), written against the pre-v0.1.12 behavior
+  where every miss surfaced as HTTP 500.
+
 ## [0.6.0] - 2026-07-02
 
 ### Added
