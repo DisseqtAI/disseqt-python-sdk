@@ -18,10 +18,11 @@ from .policy import (
     PolicyRuleset,
     is_async,
     is_blocking,
+    is_policy_skipped,
 )
 from .policy import parse as parse_policy
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 __all__ = [
     "Client",
     "DisseqtAPIClient",
@@ -33,6 +34,7 @@ __all__ = [
     "get_logger",
     "is_async",
     "is_blocking",
+    "is_policy_skipped",
     "parse_policy",
     "set_log_level",
 ]

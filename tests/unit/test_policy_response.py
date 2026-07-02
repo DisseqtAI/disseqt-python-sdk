@@ -15,6 +15,11 @@ from disseqt_sdk.policy import (
 TEST_VALIDATORS_URL = "https://test-api.disseqt.ai/realtime-validations"
 TEST_POLICIES_URL = "https://test-api.disseqt.ai/realtime-policies"
 
+# evaluate_policy() is deprecated in favor of policy-gated validate() but
+# stays functional until 1.0 — these tests pin that behavior, so the
+# deprecation warning itself is expected noise here.
+pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
+
 
 @pytest.fixture
 def client():

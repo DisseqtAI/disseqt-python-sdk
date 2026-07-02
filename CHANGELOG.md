@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-02
+
+### Changed
+- **Policy-governed `validate()`**: when the client is bound to a policy
+  (`Client(realtime_policy_id=..., application_name=...)`), every
+  `client.validate(SomeValidator(...))` call is now gated by that policy:
+  - validator **enabled in the policy** → runs with the **policy's
+    threshold** (overrides code-level config, same rule the server applies
+    to `config_input`); the response carries a `policy` block
+    (`policy_id`, `policy_name`, `policy_version`, `enforcement`,
+    `threshold_source`).
+  - validator **not in the policy / disabled** → the call is **skipped
+    locally** (no API request, no credit spend) and returns
+    `{"skipped": True, "skipped_reason": "validator_not_in_policy" |
+    "validator_disabled_in_policy", "validator_type": ...,
+    "validator_name": ..., "policy": {...}}`. New helper
+    `is_policy_skipped(result)` branches on this.
+  - Matching is by canonical validator name (`prompt-injection` ==
+    `prompt_injection`) **and** validator type, so e.g. an input-validation
+    `prompt-injection` does not match an mcp-security `prompt_injection`
+    policy entry.
+  - The policy definition is fetched from `GET /api/v1/sdk/policies/{id}`
+    and cached for 60s (matching the server's policy-cache TTL); transient
+    fetch failures serve the stale copy, a failure with no cache raises
+    `HTTPError` (fail-loud: neither bypassing governance nor silently
+    skipping is acceptable).
+  - No policy bound → `validate()` behavior is byte-identical to 0.6.0.
+    Composite score and themes-classifier requests are never gated.
+
+### Deprecated
+- **`Client.evaluate_policy()`** — bind the policy on the client and call
+  `validate()` instead. Still fully functional (it remains the only way to
+  get a full-policy BLOCK/PASS verdict and a Decisions-ledger entry from
+  the validation SDK) and will not be removed before 1.0; calling it now
+  emits a `DeprecationWarning`.
+
 ## [0.6.0] - 2026-07-02
 
 ### Added

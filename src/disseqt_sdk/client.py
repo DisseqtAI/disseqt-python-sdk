@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+import warnings
 from typing import Any, cast
 
 import requests
@@ -16,6 +17,57 @@ from .validators.base import BaseValidator, ThemesClassifierValidator
 from .validators.composite.evaluate import CompositeScoreEvaluator
 
 logger = get_logger(__name__)
+
+# How long a fetched policy definition is trusted before re-fetching.
+# Mirrors production-monitoring's own policy-cache TTL, so a publish in the
+# dashboard reaches gated validate() calls within the same window either way.
+_POLICY_DETAIL_TTL_S = 60.0
+
+
+def _canonical_validator_name(name: str) -> str:
+    """Normalize validator naming across surfaces.
+
+    The dashboard/policy store uses underscores (``prompt_injection``); SDK
+    slugs use hyphens (``prompt-injection``). Compare in one canonical form.
+    """
+    return name.strip().lower().replace("-", "_")
+
+
+def _find_policy_rule(
+    detail: dict[str, Any], domain_value: str, slug: str
+) -> dict[str, Any] | None:
+    """Locate this validator inside a policy definition.
+
+    Matches on canonical validator name AND ``validator_type`` when the
+    policy carries one — names alone are ambiguous across domains (e.g.
+    ``prompt-injection`` exists in both input-validation and mcp-security,
+    and most safety validators exist for both input and output). The
+    policy vocabulary disambiguates output variants with an ``_output``
+    suffix (``hate_speech_output``), so for output-validation lookups the
+    suffixed name is accepted too.
+
+    When the same validator appears in several rulesets, an **enabled**
+    entry wins over a disabled one — mirroring the server's evaluator,
+    which runs every ruleset rather than the first match.
+    """
+    want = _canonical_validator_name(slug)
+    accepted = {want}
+    if domain_value == "output-validation":
+        accepted.add(f"{want}_output")
+
+    fallback: dict[str, Any] | None = None
+    for ruleset in detail.get("rulesets") or []:
+        for rule in ruleset.get("validators") or []:
+            if _canonical_validator_name(str(rule.get("validator", ""))) not in accepted:
+                continue
+            validator_type = str(rule.get("validator_type") or "")
+            if validator_type and validator_type != domain_value:
+                continue
+            if rule.get("enabled", False):
+                return cast(dict[str, Any], rule)
+            if fallback is None:
+                fallback = cast(dict[str, Any], rule)
+    return fallback
 
 
 class HTTPError(Exception):
@@ -142,6 +194,10 @@ class Client:
         self.realtime_policy_id = realtime_policy_id
         self.application_name = application_name
         self.realtime_policy_base_url = realtime_policy_base_url
+        # Cached policy definition for validate() gating. Not lock-guarded:
+        # concurrent first calls may fetch twice, which is harmless.
+        self._policy_detail: dict[str, Any] | None = None
+        self._policy_detail_fetched_at = 0.0
 
     def _build_headers(self) -> dict[str, str]:
         """Build HTTP headers for API requests.
@@ -155,19 +211,136 @@ class Client:
             "Content-Type": "application/json",
         }
 
+    def _fetch_policy_detail(self) -> dict[str, Any]:
+        """Fetch (and cache) the bound policy's definition for validate() gating.
+
+        Hits ``GET /api/v1/sdk/policies/{id}`` on ``realtime_policy_base_url``.
+        The result is cached for ``_POLICY_DETAIL_TTL_S`` seconds, keyed by
+        the current ``realtime_policy_id`` (rebinding the client to another
+        policy invalidates the cache immediately). On a transient failure
+        (network error, 5xx, or an undecodable 200) a stale cached copy is
+        served — and the retry clock is re-stamped so an outage costs one
+        fetch attempt per TTL window, not one per call. A failure with
+        **no** cached copy raises: silently validating without the policy
+        would bypass governance, and silently skipping everything would
+        disable validation; neither is acceptable.
+        """
+        now = time.monotonic()
+        cached = self._policy_detail
+        # A cached copy is only valid for the policy the client is bound to
+        # NOW — realtime_policy_id is a plain attribute and may be rebound.
+        if cached is not None and cached.get("policy_id") != self.realtime_policy_id:
+            cached = None
+            self._policy_detail = None
+        if cached is not None and (now - self._policy_detail_fetched_at) < _POLICY_DETAIL_TTL_S:
+            return cached
+
+        def _serve_stale(event: str, **fields: Any) -> dict[str, Any] | None:
+            if cached is None:
+                return None
+            # Re-stamp so the next retry happens after a full TTL window
+            # instead of on every gated call during an outage.
+            self._policy_detail_fetched_at = now
+            logger.warning(event, policy_id=self.realtime_policy_id, **fields)
+            return cached
+
+        url = (
+            f"{self.realtime_policy_base_url.rstrip('/')}"
+            f"/api/v1/sdk/policies/{self.realtime_policy_id}"
+        )
+        try:
+            response = requests.get(url, headers=self._build_headers(), timeout=self.timeout)
+        except requests.RequestException as e:
+            stale = _serve_stale("policy_gate.fetch_failed_serving_stale")
+            if stale is not None:
+                return stale
+            raise HTTPError(
+                status_code=0,
+                message=f"Network error fetching realtime policy: {e}",
+                response_body="",
+            ) from e
+
+        if not response.ok:
+            # 5xx with a cached copy -> serve stale. 4xx (unknown/unpublished
+            # policy, bad credentials) is a configuration error -> always raise.
+            if response.status_code >= 500:
+                stale = _serve_stale(
+                    "policy_gate.fetch_error_serving_stale", status=response.status_code
+                )
+                if stale is not None:
+                    return stale
+            raise HTTPError(
+                status_code=response.status_code,
+                message="Failed to fetch realtime policy for validate() gating",
+                response_body=response.text[:512] if response.text else "",
+            )
+
+        try:
+            envelope = response.json()
+        except json.JSONDecodeError as e:
+            stale = _serve_stale("policy_gate.decode_error_serving_stale")
+            if stale is not None:
+                return stale
+            raise ValueError(
+                f"Failed to decode policy detail response: {e}. Body: {response.text[:200]}"
+            ) from e
+        detail = envelope.get("data") if isinstance(envelope, dict) else None
+        if not isinstance(detail, dict) or not detail.get("policy_id"):
+            stale = _serve_stale("policy_gate.malformed_body_serving_stale")
+            if stale is not None:
+                return stale
+            raise ValueError(
+                "Policy detail response did not contain a policy "
+                f"(policy_id={self.realtime_policy_id})"
+            )
+        self._policy_detail = detail
+        self._policy_detail_fetched_at = now
+        logger.debug(
+            "policy_gate.fetched",
+            policy_id=self.realtime_policy_id,
+            policy_version=detail.get("version"),
+        )
+        return detail
+
     def validate(
         self, request: BaseValidator | ThemesClassifierValidator | CompositeScoreEvaluator
     ) -> dict[str, Any]:
         """Validate using the specified validator.
 
+        When the client is bound to a realtime policy
+        (``Client(realtime_policy_id=...)``), the policy governs this call:
+
+        - If the validator **is enabled in the policy**, it runs with the
+          policy's threshold (the policy value overrides any code-level
+          config — same rule the server applies on policy evaluation), and
+          the response carries a ``policy`` block identifying the policy.
+        - If the validator **is not in the policy** (or is disabled there),
+          the call is **skipped locally** — no API request, no credit spend
+          — and a skip marker is returned::
+
+              {"skipped": True,
+               "skipped_reason": "validator_not_in_policy",
+               "validator_type": "input-validation",
+               "validator_name": "toxicity",
+               "policy": {"policy_id": "...", "policy_name": "...",
+                          "policy_version": 3, "enforcement": "sync"}}
+
+          Use :func:`disseqt_sdk.is_policy_skipped` to branch on this.
+
+        Without a bound policy the behavior is unchanged. Composite score
+        and themes-classifier requests are never policy-gated — they pass
+        through as-is.
+
         Args:
             request: Validator request instance
 
         Returns:
-            Normalized validation response
+            Normalized validation response, or a skip marker (see above)
 
         Raises:
-            HTTPError: If the API request fails
+            HTTPError: If the API request fails, or the bound policy cannot
+                be fetched (unknown/unpublished policy -> 404; transient
+                fetch failures fall back to a cached copy when one exists)
             ValueError: If JSON decoding fails
         """
         # Build the URL
@@ -181,6 +354,43 @@ class Client:
         # Stable, secrets-free correlation fields for every log line in this call.
         domain = getattr(request.domain, "value", str(request.domain))
         slug = request.slug
+
+        # Realtime-policy gate: when the client is bound to a policy, the
+        # policy decides whether this validator runs and at what threshold.
+        # Validators the policy doesn't enable are skipped locally — no API
+        # call, no credit spend — mirroring the server's own skip semantics.
+        policy_meta: dict[str, Any] | None = None
+        policy_threshold: float | None = None
+        if self.realtime_policy_id and isinstance(request, BaseValidator):
+            detail = self._fetch_policy_detail()
+            policy_meta = {
+                "policy_id": detail.get("policy_id"),
+                "policy_name": detail.get("name"),
+                "policy_version": detail.get("version"),
+                "enforcement": detail.get("enforcement"),
+            }
+            rule = _find_policy_rule(detail, domain, slug)
+            if rule is None or not rule.get("enabled", False):
+                reason = (
+                    "validator_not_in_policy" if rule is None else "validator_disabled_in_policy"
+                )
+                logger.info(
+                    "validation.policy_skip",
+                    domain=domain,
+                    slug=slug,
+                    policy_id=self.realtime_policy_id,
+                    reason=reason,
+                )
+                return {
+                    "skipped": True,
+                    "skipped_reason": reason,
+                    "validator_type": domain,
+                    "validator_name": slug,
+                    "policy": policy_meta,
+                }
+            raw_threshold = rule.get("threshold")
+            if isinstance(raw_threshold, (int, float)):
+                policy_threshold = float(raw_threshold)
 
         # Get validator metadata from registry
         try:
@@ -197,6 +407,23 @@ class Client:
             payload = request_handler(request)
         else:
             payload = request.to_payload()
+
+        # Policy-bound run: the policy's threshold is authoritative — it
+        # overrides whatever the code-level config supplied (the same rule
+        # the server applies to config_input during policy evaluation).
+        if policy_meta is not None and policy_threshold is not None:
+            config = payload.get("config_input")
+            if isinstance(config, dict):
+                config["threshold"] = policy_threshold
+            else:
+                payload["config_input"] = {"threshold": policy_threshold}
+            logger.debug(
+                "validation.policy_threshold",
+                domain=domain,
+                slug=slug,
+                policy_id=self.realtime_policy_id,
+                threshold=policy_threshold,
+            )
 
         # Build headers (auth headers are never logged)
         headers = self._build_headers()
@@ -285,11 +512,19 @@ class Client:
 
         # Use custom response handler or default
         if response_handler:
-            result = response_handler(server_response)
-            return cast(dict[str, Any], result)
+            result = cast(dict[str, Any], response_handler(server_response))
         else:
             # Use default response handling (no forced normalization)
-            return server_response
+            result = server_response
+
+        # Stamp the governing policy on policy-gated runs so callers (and
+        # logs) can see which policy version authorized this validation.
+        if policy_meta is not None and isinstance(result, dict):
+            result["policy"] = {
+                **policy_meta,
+                "threshold_source": "policy" if policy_threshold is not None else "config",
+            }
+        return result
 
     def evaluate_policy(
         self,
@@ -420,6 +655,16 @@ class Client:
             ValueError: If no input fields were supplied, no policy_id
                 is set anywhere, or no application_name is set anywhere.
         """
+        warnings.warn(
+            "evaluate_policy() is deprecated: bind the policy on the client "
+            "(Client(realtime_policy_id=..., application_name=...)) and call "
+            "client.validate(...) — the policy now decides which validators run "
+            "and at what thresholds. evaluate_policy() remains functional for "
+            "full-policy BLOCK/PASS verdicts (which per-validator validate() "
+            "calls do not produce) and will not be removed before 1.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         effective_policy_id = realtime_policy_id or self.realtime_policy_id
         if not effective_policy_id:
             raise ValueError(

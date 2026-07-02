@@ -174,6 +174,22 @@ def is_async(response: dict[str, Any]) -> bool:
     return str(payload.get("enforcement", "")) == ENFORCEMENT_ASYNC
 
 
+def is_policy_skipped(response: dict[str, Any]) -> bool:
+    """Return True when ``client.validate(...)`` skipped the validator.
+
+    A policy-bound client skips validators the policy doesn't enable — no
+    API call is made and nothing is charged. The skip marker carries
+    ``skipped_reason`` (``validator_not_in_policy`` /
+    ``validator_disabled_in_policy``) and a ``policy`` block identifying
+    the governing policy::
+
+        result = client.validate(ToxicityValidator(...))
+        if is_policy_skipped(result):
+            ...  # this validator isn't part of the bound policy
+    """
+    return bool(response.get("skipped")) and "policy" in response
+
+
 def _maybe_float(v: Any) -> float | None:
     if v is None:
         return None
