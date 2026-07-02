@@ -93,7 +93,7 @@ class Client:
         timeout: int = 30,
         realtime_policy_id: str | None = None,
         application_name: str | None = None,
-        realtime_policy_base_url: str = "https://api.disseqt.ai/realtime-policies",
+        realtime_policy_base_url: str = "https://api.disseqt.ai/realtime-validations",
     ) -> None:
         """Initialize the Disseqt SDK client.
 
@@ -114,13 +114,16 @@ class Client:
                 show which application produced each decision. Mirrors
                 ``service_name`` on :class:`DisseqtAgenticClient`.
             realtime_policy_base_url: Base URL of the realtime-policy
-                evaluate endpoint. Defaults to the managed
-                ``/realtime-policies`` gateway. Separate from
-                ``base_url`` (which is the validators endpoint on
-                production-monitoring) so the two endpoints can be
-                mocked / routed independently — override for local
-                testing (e.g. ``http://localhost:9010``) without
-                disturbing ``base_url`` callers.
+                evaluate endpoint. Defaults to the
+                ``/realtime-validations`` gateway — the evaluate
+                endpoint is served by production-monitoring, the same
+                service that hosts the validators (the
+                ``/realtime-policies`` gateway is the policy CRUD
+                dashboard and has no SDK routes). Kept separate from
+                ``base_url`` so the two endpoints can be mocked /
+                routed independently — override for local testing
+                (e.g. ``http://localhost:9010``) without disturbing
+                ``base_url`` callers.
 
         Raises:
             ValueError: When ``realtime_policy_id`` is set without an
@@ -369,38 +372,51 @@ class Client:
             request_id: Optional override; server generates one if absent.
 
         Returns:
-            Decoded JSON response with::
+            Decoded JSON response — the standard DSQ envelope with the
+            verdict under ``data``::
 
                 {
-                  "success": true,
-                  "policy_id": "...",
-                  "policy_name": "...",
-                  "policy_version": 3,
-                  "decision": "BLOCK" | "PASS",
-                  "enforcement": "blocking" | "advisory",
-                  "rulesets": [
-                    {"ruleset_id": "...", "ruleset_name": "...",
-                     "required": true,
-                     "rules": [{"validator": "toxicity", "status": "fail",
-                                "score": 0.91, "threshold": 0.8,
-                                "polarity": "risk", "is_decider": true,
-                                ...}]}
-                  ],
-                  "duration": "...",
-                  "request_id": "...",
-                  "credit_details": {...}
+                  "status": "success",
+                  "code": "DSQ-2000",           # DSQ-2020 for async 202
+                  "request_id": "...",          # envelope-level
+                  "timestamp": "...",
+                  "data": {
+                    "policy_id": "...",
+                    "policy_name": "...",
+                    "policy_version": 3,
+                    "status": "completed",      # "accepted" for async
+                    "decision": "BLOCK" | "PASS",
+                    "enforcement": "sync" | "async",
+                    "rulesets": [
+                      {"ruleset_id": "...", "ruleset_name": "...",
+                       "required": true,
+                       "rules": [{"validator": "toxicity", "status": "fail",
+                                  "score": 0.91, "threshold": 0.8,
+                                  "polarity": "risk", "is_decider": true,
+                                  ...}]}
+                    ],
+                    "duration": "...",
+                    "credit_details": {...}
+                  }
                 }
 
-            ``rulesets[].rules[].validator`` lets you see which validators
-            the policy actually ran — useful for confirming the policy is
-            configured the way you expect.
+            Async policies (``enforcement: "async"``) return HTTP 202
+            with ``data.status: "accepted"`` and no ``decision`` /
+            ``rulesets`` — evaluation continues server-side.
 
-            Use :func:`disseqt_sdk.is_blocking` on this dict to short-
-            circuit on BLOCK without poking at the shape directly.
+            ``data.rulesets[].rules[].validator`` lets you see which
+            validators the policy actually ran — useful for confirming
+            the policy is configured the way you expect.
+
+            Use :func:`disseqt_sdk.is_blocking` / :func:`disseqt_sdk.parse_policy`
+            on this dict — they unwrap the envelope for you, so you don't
+            poke at the shape directly.
 
         Raises:
-            HTTPError: If the server returns a non-2xx, including 404
-                when the policy is unknown or unpublished.
+            HTTPError: If the server returns a non-2xx. Note: an unknown
+                or unpublished policy currently surfaces as HTTP 500
+                (DSQ-5000) from the server, not 404 — don't branch on
+                404 for missing policies.
             ValueError: If no input fields were supplied, no policy_id
                 is set anywhere, or no application_name is set anywhere.
         """

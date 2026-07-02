@@ -26,9 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   agentic SDK). Per-call value always wins over the Client default.
 - **`Client.realtime_policy_base_url`**: separate base URL for the policy
   evaluate endpoint (defaults to
-  `https://api.disseqt.ai/realtime-policies`). Independent of `base_url`
-  so the two endpoints can be mocked / routed independently — override
-  for local testing (e.g. `http://localhost:9010`).
+  `https://api.disseqt.ai/realtime-validations` — the evaluate endpoint
+  is served by production-monitoring next to the validators; the
+  `/realtime-policies` gateway is the policy CRUD dashboard and has no
+  SDK routes). Independent of `base_url` so the two endpoints can be
+  mocked / routed independently — override for local testing (e.g.
+  `http://localhost:9010`).
 - **Agentic SDK realtime policies**: `DisseqtAgenticClient(realtime_policy_id=)`
   sets a default policy stamped on every span's resource block as
   `policy.id`. `start_trace(client, name, realtime_policy_id=)` overrides

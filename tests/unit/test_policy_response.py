@@ -186,10 +186,11 @@ class TestRealtimePolicyBaseURL:
 
     def test_default_points_at_managed_gateway(self):
         c = Client(project_id="p", api_key="k")
-        # Default points at the dedicated realtime-policies gateway —
-        # separate from base_url (which is production-monitoring's
-        # validators endpoint).
-        assert c.realtime_policy_base_url == "https://api.disseqt.ai/realtime-policies"
+        # Default points at the realtime-validations gateway: the
+        # evaluate endpoint is served by production-monitoring alongside
+        # the validators (the /realtime-policies gateway is the policy
+        # CRUD dashboard and exposes no SDK routes).
+        assert c.realtime_policy_base_url == "https://api.disseqt.ai/realtime-validations"
 
     def test_evaluate_uses_realtime_policy_base_url_not_base_url(self, requests_mock):
         c = Client(
