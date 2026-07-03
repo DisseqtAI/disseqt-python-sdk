@@ -30,6 +30,7 @@ every caller picks it up — no code deploy.
 - [The three call shapes](#the-three-call-shapes)
 - [The response envelope](#the-response-envelope)
 - [Reading policy verdicts](#reading-policy-verdicts)
+- [Decision strategies](#decision-strategies)
 - [Inputs: one bag, every validator](#inputs-one-bag-every-validator)
 - [Sync vs. async policies](#sync-vs-async-policies)
 - [Discovering policies from code](#discovering-policies-from-code)
@@ -203,6 +204,41 @@ for envelope in result["policies"]:
 single envelope — and returns `False` for anything else (including a classic
 validator response), so it's always safe to gate on. `is_blocking` /
 `is_async` / `parse_policy` work on individual envelopes as before.
+
+---
+
+## Decision strategies
+
+The policy's **aggregation strategy** (set in the dashboard's Enforcement
+tab) decides how per-rule outcomes combine into the BLOCK/PASS verdict:
+
+| Strategy | Verdict |
+|---|---|
+| `any` (default) | BLOCK if **any** rule failed |
+| `all` | "All must pass" — BLOCK if any executed rule failed **or errored** |
+| `majority` | BLOCK if failed rules are a strict majority of the pass/fail votes; ties PASS |
+| `weighted` | BLOCK when the **policy confidence ≥ threshold**. Confidence is the ruleset-weight-weighted mean of per-ruleset badness (risk validators contribute their score, quality validators `1 − score`, averaged over the ruleset's scored rules) |
+
+Under every strategy, **skipped rules stay neutral**: they cast no vote, and
+under `weighted` a fully-skipped ruleset's weight is *renormalized away* —
+the confidence is computed over what actually ran, with the configured
+relative weights intact. A policy whose rules all skipped still passes by
+vacuity. Two things override every strategy: an application-level
+`overrides_block` forces BLOCK, and an error on an `is_decider` rule forces
+BLOCK.
+
+The decision explains itself in the envelope and on `PolicyDecision`:
+
+```python
+d = parse_policy(envelope)
+d.aggregation           # "any" | "all" | "majority" | "weighted"
+d.aggregate_score       # weighted only: policy confidence in [0, 1]
+d.aggregate_threshold   # weighted only: the blocking line (score >= thr -> BLOCK)
+```
+
+`aggregate_score` is `None` for non-weighted strategies and for vacuous
+weighted decisions (nothing scored); `aggregation` is empty on servers that
+predate enforcement.
 
 ---
 

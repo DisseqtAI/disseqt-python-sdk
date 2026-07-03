@@ -27,6 +27,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`any_blocking(result)`** helper — True when any policy decision in
   the envelope (or a list of envelopes, or a single envelope) is BLOCK.
   Safe on classic validator responses (returns False).
+- **`PolicyDecision.aggregation` / `.aggregate_score` / `.aggregate_threshold`**
+  — `parse_policy` now surfaces the decision strategy that produced the
+  verdict (`any | all | majority | weighted`) and, for weighted policies,
+  the policy confidence and the blocking line it was compared against
+  (`score >= threshold → BLOCK`). Empty/None against servers that predate
+  aggregation enforcement. Documented in
+  [docs/realtime-policies.md → Decision strategies](docs/realtime-policies.md#decision-strategies),
+  including the skip-renormalization contract for partially-matched inputs.
 
 ### Deprecated
 - **`Client.evaluate_policy()`** — use `validate(..., policies=[...])`

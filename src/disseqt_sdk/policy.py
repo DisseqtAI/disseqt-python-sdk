@@ -84,6 +84,16 @@ class PolicyDecision:
     policy_version: int
     decision: str  # BLOCK | PASS
     enforcement: str  # sync | async
+    #: Strategy that decided the verdict: any | all | majority | weighted.
+    #: Empty on responses from servers that predate aggregation enforcement.
+    aggregation: str = ""
+    #: Weighted-strategy policy confidence in [0, 1] — the ruleset-weighted
+    #: badness the verdict was compared against. None for non-weighted
+    #: strategies and for vacuous decisions where no rule produced a score.
+    aggregate_score: float | None = None
+    #: The blocking line for the weighted strategy: the decision is BLOCK
+    #: when ``aggregate_score >= aggregate_threshold``.
+    aggregate_threshold: float | None = None
     rulesets: list[PolicyRuleset] = field(default_factory=list)
 
 
@@ -145,6 +155,9 @@ def parse(response: dict[str, Any]) -> PolicyDecision | None:
         policy_version=int(payload.get("policy_version", 0)),
         decision=str(payload.get("decision", "")),
         enforcement=str(payload.get("enforcement", "")),
+        aggregation=str(payload.get("aggregation", "")),
+        aggregate_score=_maybe_float(payload.get("aggregate_score")),
+        aggregate_threshold=_maybe_float(payload.get("aggregate_threshold")),
         rulesets=rulesets,
     )
 

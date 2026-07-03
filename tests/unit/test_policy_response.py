@@ -452,6 +452,39 @@ class TestParsePolicy:
         assert d is not None
         assert d.rulesets[0].rules[0].score is None
 
+    def test_parses_aggregation_fields(self):
+        response = {
+            "policy_id": "w",
+            "policy_name": "Weighted",
+            "policy_version": 2,
+            "decision": DECISION_BLOCK,
+            "enforcement": ENFORCEMENT_SYNC,
+            "aggregation": "weighted",
+            "aggregate_score": 0.74,
+            "aggregate_threshold": 0.7,
+            "rulesets": [],
+        }
+        d = parse_policy(response)
+        assert d is not None
+        assert d.aggregation == "weighted"
+        assert d.aggregate_score == 0.74
+        assert d.aggregate_threshold == 0.7
+
+    def test_aggregation_fields_default_when_absent(self):
+        # Servers that predate aggregation enforcement (or non-weighted
+        # strategies, which omit the score) must parse cleanly.
+        response = {
+            "policy_id": "old",
+            "policy_name": "Legacy",
+            "policy_version": 1,
+            "decision": "PASS",
+        }
+        d = parse_policy(response)
+        assert d is not None
+        assert d.aggregation == ""
+        assert d.aggregate_score is None
+        assert d.aggregate_threshold is None
+
 
 class TestIsBlocking:
     """is_blocking() is the convenience caller-check on decision only —
