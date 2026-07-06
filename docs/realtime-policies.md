@@ -29,14 +29,19 @@ every caller picks it up — no code deploy.
 - [Prerequisites](#prerequisites)
 - [The three call shapes](#the-three-call-shapes)
 - [The response envelope](#the-response-envelope)
+- [Rule statuses and skip reasons](#rule-statuses-and-skip-reasons)
 - [Reading policy verdicts](#reading-policy-verdicts)
 - [Decision strategies](#decision-strategies)
+- [Input coverage: all, some, or none](#input-coverage-all-some-or-none)
 - [Inputs: one bag, every validator](#inputs-one-bag-every-validator)
+- [Validator overrides](#validator-overrides)
 - [Sync vs. async policies](#sync-vs-async-policies)
 - [Discovering policies from code](#discovering-policies-from-code)
 - [Agentic SDK: policy on every span](#agentic-sdk-policy-on-every-span)
 - [`evaluate_policy()` — deprecated](#evaluate_policy--deprecated)
 - [Error handling](#error-handling)
+- [Billing, latency, and publish propagation](#billing-latency-and-publish-propagation)
+- [The Decisions ledger](#the-decisions-ledger)
 - [Production patterns](#production-patterns)
 - [Configuration reference](#configuration-reference)
 
@@ -152,31 +157,121 @@ Whenever `policies` is passed, the return value is a stable two-key envelope:
 }
 ```
 
-Each entry in `"policies"` is the standard policy envelope:
+Each entry in `"policies"` is the standard policy envelope. A real sync
+verdict, annotated:
 
 ```jsonc
 {
   "status": "success",
-  "code": "DSQ-2000",              // DSQ-2020 for an async 202
-  "request_id": "…",
+  "code": "DSQ-2000",                    // DSQ-2020 for an async 202
+  "request_id": "d93onau…",              // correlate logs & ledger with this
   "data": {
-    "policy_id": "…",
-    "policy_name": "…",
-    "policy_version": 3,
-    "status": "completed",         // "accepted" for async
-    "decision": "BLOCK",           // omitted on async
-    "enforcement": "sync",
-    "rulesets": [ /* per-rule breakdown; omitted on async */ ],
-    "duration": "…",
-    "credit_details": { /* sync only */ }
+    "policy_id": "994ad00e-…",
+    "policy_name": "Prompt-Injection Defense",
+    "policy_version": 3,                 // the published version that judged
+    "status": "completed",               // "accepted" for async
+    "decision": "BLOCK",                 // BLOCK | PASS — omitted on async
+    "enforcement": "sync",               // sync | async
+    "aggregation": "weighted",           // strategy that decided the verdict
+    "aggregate_score": 0.79,             // weighted only: policy confidence
+    "aggregate_threshold": 0.5,          // weighted only: score >= thr -> BLOCK
+    "rulesets": [                        // per-rule breakdown — omitted on async
+      {
+        "ruleset_id": "rs_a1",
+        "ruleset_name": "Injection",
+        "required": false,
+        "rules": [
+          {
+            "validator": "prompt-injection",
+            "validator_type": "mcp-security",
+            "status": "fail",            // pass | fail | skipped | error
+            "score": 0.9876,
+            "has_score": true,           // false => score is meaningless
+            "threshold": 0.6,            // the policy's per-rule threshold
+            "polarity": "risk",          // risk | quality
+            "is_decider": false,
+            "skipped_reason": ""
+          }
+        ]
+      },
+      {
+        "ruleset_id": "rs_a2",
+        "ruleset_name": "Output leakage",
+        "required": false,
+        "rules": [
+          {
+            "validator": "data-leakage",
+            "validator_type": "output-validation",
+            "status": "skipped",
+            "score": 0,
+            "has_score": false,
+            "threshold": 0.55,
+            "polarity": "risk",
+            "is_decider": false,
+            "skipped_reason": "missing_input:llm_output"
+          }
+        ]
+      }
+    ],
+    "duration": "1.24s",
+    "credit_details": {                  // present when validators executed;
+      "credits_deducted": 2              // per executed validator — skips are
+      /* …additional balance fields… */  // free. Omitted on async 202s and on
+    }                                    // vacuous evaluations (nothing ran)
   }
 }
 ```
+
+Field notes:
+
+- **`aggregation` / `aggregate_score` / `aggregate_threshold`** — which
+  [decision strategy](#decision-strategies) produced the verdict and, for
+  `weighted`, the confidence it compared against the blocking line. Empty /
+  absent on servers that predate aggregation enforcement.
+- **`rulesets`** mirrors the policy editor's structure — one entry per
+  ruleset, in policy order, each rule carrying its own outcome. See the
+  [status vocabulary](#rule-statuses-and-skip-reasons) below.
+- **`has_score: false`** marks rules that produced no score — skipped rules
+  and override-forced verdicts. Their `score` serializes as `0` on the wire,
+  so never read `score` without checking `has_score` (the typed
+  `parse_policy` does this for you and gives you `score=None`). Errored
+  rules may carry **either** value (a parseable ML error can include a
+  meaningless zero-valued score) — branch on `status` first and only trust
+  `score` for `pass`/`fail` rules.
+- **`request_id`** is stamped by the server (or taken from your
+  `X-Request-Id`); the same id links the response, the server logs, and the
+  Decisions-ledger evidence for this evaluation.
 
 Policies are evaluated **sequentially, in the order given**. Each policy is
 one server-side evaluation: billed per executed validator, one
 Decisions-ledger entry. Keep the list short (1–3 is typical: an org-wide
 baseline plus an app policy).
+
+---
+
+## Rule statuses and skip reasons
+
+Every rule in the breakdown ends in exactly one of four states:
+
+| `status` | Meaning | Effect on the decision | Billed |
+|---|---|---|---|
+| `pass` | Ran; score on the passing side of the rule's threshold | Counts as a pass | Yes |
+| `fail` | Ran and breached its threshold — or was force-failed by a [block override](#validator-overrides) | Blocks under `any`/`all`; a fail vote under `majority`; raises the confidence under `weighted`; a forced fail blocks under **every** strategy | Yes (forced fails: no) |
+| `skipped` | Never ran | **Neutral** under every strategy — casts no vote, contributes no weight | No |
+| `error` | Ran, but the validator errored | Blocks if the rule is marked `is_decider` (any strategy) and under `all` (an executed non-pass); otherwise recorded but neutral. Excluded from `weighted` math | — |
+
+`skipped_reason` says *why* a rule skipped (or why a fail was forced):
+
+| `skipped_reason` | On status | Meaning |
+|---|---|---|
+| `missing_input:<field,…>` | `skipped` | The request didn't carry the wire fields this validator needs — the list names exactly what to add |
+| `overrides_allow` | `skipped` | The policy's allow-override list exempts this validator |
+| `overrides_block` | `fail` | The policy's block-override list force-fails this validator — no score, `has_score: false`, blocks regardless of strategy |
+| `no_result` | `skipped` | The validator ran but returned no usable result (rare; treated as a skip) |
+
+Two invariants worth building on: **skips are never billed**, and **a skip
+can never flip a verdict to BLOCK** — only real fails (or decider errors, or
+forced fails) block.
 
 ---
 
@@ -205,29 +300,124 @@ single envelope — and returns `False` for anything else (including a classic
 validator response), so it's always safe to gate on. `is_blocking` /
 `is_async` / `parse_policy` work on individual envelopes as before.
 
+### The typed objects
+
+`parse_policy(envelope)` accepts the full DSQ envelope **or** the unwrapped
+`data` dict, and returns `None` when the payload carries no `policy_id`
+(e.g. an error envelope). Otherwise:
+
+**`PolicyDecision`**
+
+| Field | Type | Notes |
+|---|---|---|
+| `policy_id`, `policy_name`, `policy_version` | `str`, `str`, `int` | The published version that judged |
+| `decision` | `str` | `"BLOCK"` \| `"PASS"` |
+| `enforcement` | `str` | `"sync"` \| `"async"` |
+| `aggregation` | `str` | `"any"` \| `"all"` \| `"majority"` \| `"weighted"`; `""` on older servers |
+| `aggregate_score` | `float \| None` | Weighted only: the policy confidence. `None` otherwise, and on vacuous decisions |
+| `aggregate_threshold` | `float \| None` | Weighted only: `score >= threshold → BLOCK` |
+| `rulesets` | `list[PolicyRuleset]` | Policy-editor structure, in order |
+
+**`PolicyRuleset`**: `ruleset_id`, `ruleset_name`, `required`, `rules:
+list[PolicyRule]`.
+
+**`PolicyRule`**
+
+| Field | Type | Notes |
+|---|---|---|
+| `validator` | `str` | Wire name, e.g. `"prompt-injection"` |
+| `validator_type` | `str` | Domain, e.g. `"input-validation"`, `"mcp-security"` |
+| `status` | `str` | `pass` \| `fail` \| `skipped` \| `error` |
+| `score` | `float \| None` | **`None` whenever the wire `has_score` is false** — no fabricated zeros |
+| `threshold` | `float \| None` | The policy's per-rule threshold |
+| `polarity` | `str` | `"risk"` (high = bad) \| `"quality"` (high = good) |
+| `is_decider` | `bool` | An `error` on this rule blocks the policy |
+| `skipped_reason` | `str` | See the [vocabulary](#rule-statuses-and-skip-reasons); `""` when not applicable |
+
 ---
 
 ## Decision strategies
 
-The policy's **aggregation strategy** (set in the dashboard's Enforcement
-tab) decides how per-rule outcomes combine into the BLOCK/PASS verdict:
+The policy's **aggregation strategy** (dashboard → policy editor →
+Enforcement tab → *Advanced → Aggregation*) decides how per-rule outcomes
+combine into the BLOCK/PASS verdict:
 
 | Strategy | Verdict |
 |---|---|
 | `any` (default) | BLOCK if **any** rule failed |
 | `all` | "All must pass" — BLOCK if any executed rule failed **or errored** |
-| `majority` | BLOCK if failed rules are a strict majority of the pass/fail votes; ties PASS |
-| `weighted` | BLOCK when the **policy confidence ≥ threshold**. Confidence is the ruleset-weight-weighted mean of per-ruleset badness (risk validators contribute their score, quality validators `1 − score`, averaged over the ruleset's scored rules) |
+| `majority` | BLOCK if failed rules are a strict majority of the pass/fail votes; ties PASS. (Accepted by the server; not yet selectable in the dashboard) |
+| `weighted` | BLOCK when the **policy confidence ≥ threshold** |
 
-Under every strategy, **skipped rules stay neutral**: they cast no vote, and
-under `weighted` a fully-skipped ruleset's weight is *renormalized away* —
-the confidence is computed over what actually ran, with the configured
-relative weights intact. A policy whose rules all skipped still passes by
-vacuity. Two things override every strategy: an application-level
-`overrides_block` forces BLOCK, and an error on an `is_decider` rule forces
-BLOCK.
+Two short-circuits sit above every strategy: a
+[block override](#validator-overrides) forces BLOCK, and an `error` on an
+`is_decider` rule forces BLOCK.
 
-The decision explains itself in the envelope and on `PolicyDecision`:
+### `any` — one bad rule is enough
+
+The guardrail default. One `fail` anywhere → BLOCK. Per-rule thresholds are
+the whole story.
+
+### `all` — strict mode
+
+Everything that ran must have **passed**. A `fail` blocks; an executed
+`error` also blocks (it is not a pass) — making `all` the strategy that
+fails *closed* on validator errors. Skips stay neutral: partial input does
+not block.
+
+### `majority` — vote
+
+Only `pass` and `fail` rules vote. `fail` votes must be a **strict**
+majority: 2 fails of 3 votes blocks; 1 of 2 (a tie) passes; 1 of 3 passes —
+the same injection that blocks instantly under `any` can pass under
+`majority` if the other rules disagree. Skips and errors don't vote.
+
+### `weighted` — aggregated confidence
+
+The dashboard's "Weighted score": *Block when the policy confidence ≥
+threshold*. The math, exactly:
+
+1. **Per rule** (only rules that produced a score): badness = `score` for
+   `risk` polarity, `1 − score` for `quality` polarity.
+2. **Per ruleset**: badness = mean over its scored rules.
+3. **Policy confidence** = weighted mean of ruleset badness, using the
+   ruleset weights from the editor (it keeps them summing to 100%;
+   unset weights default to equal) — computed **only over rulesets that
+   scored at least one rule**, with the weights renormalized over those.
+4. `confidence >= weightedThreshold` → BLOCK. The comparison is `>=`:
+   landing exactly on the line blocks.
+
+Worked example — policy with two rulesets, threshold `0.5`:
+
+| Ruleset | Weight | Rule outcome | Badness |
+|---|---|---|---|
+| Injection | 0.8 | `prompt-injection` fail, score 0.99 | 0.99 |
+| Leakage | 0.2 | `data-leakage` pass, score 0.03 | 0.03 |
+
+Confidence = `0.8×0.99 + 0.2×0.03` = **0.798** ≥ 0.5 → **BLOCK**, with
+`aggregate_score: 0.798` in the envelope. Flip the weights (0.2/0.8) and the
+same scores give `0.222` → **PASS** — the weights, not the per-rule
+thresholds, decide.
+
+**Renormalization under partial input.** Send only a prompt to that
+flipped-weights policy (0.2 injection / 0.8 leakage) and the leakage ruleset
+skips (`missing_input:llm_output`). Naive math would give
+`0.2 × 0.99 = 0.198` → PASS — the skipped ruleset's weight silently
+deflating the verdict, an easy dodge for hostile input. Instead the skipped
+ruleset's weight is **renormalized away**: confidence is computed over what
+ran (`0.99`) → **BLOCK**. Partial input is judged on the rules it actually
+exercised, at their configured relative weights.
+
+Note the corollary: under `weighted`, a rule can fail its *own* threshold
+while the *policy* still passes (the aggregate stayed under the line), and
+vice versa. Check `decision` — the per-rule statuses are evidence, not the
+verdict.
+
+**Defensive degradations** (each logged server-side): an unknown
+`aggregation` value or a `weighted` policy with an invalid threshold
+(`≤ 0` or `> 1`) falls back to `any`; contributing rulesets that all carry
+weight 0 fall back to equal weights. `aggregation` in the envelope always
+names the strategy that **actually** decided.
 
 ```python
 d = parse_policy(envelope)
@@ -242,6 +432,37 @@ predate enforcement.
 
 ---
 
+## Input coverage: all, some, or none
+
+What happens when your input shape and the policy's rulesets don't fully
+overlap? Exactly three cases:
+
+| Your input covers… | What happens | Verdict driven by |
+|---|---|---|
+| **All rulesets** | Every rule executes | Real scores, full strategy semantics |
+| **Some rulesets** | Matching rules execute; the rest record `skipped (missing_input:…)` | Only the rules that ran — skips are neutral, weights renormalize |
+| **No rulesets** | Every rule skips | **PASS by vacuity**: nothing executed, nothing billed, `aggregate_score` absent |
+
+The sharp edge is the last row: a PASS where **zero rules ran** is weaker
+than it looks. `any_blocking` returns `False` (nothing blocked — true), but
+nothing was evaluated either. For hard security gates, detect it and fail
+closed:
+
+```python
+d = parse_policy(envelope)
+ran = [r for rs in d.rulesets for r in rs.rules if r.status != "skipped"]
+if not ran:
+    # The policy never actually judged this input — the input shape doesn't
+    # match any rule's required fields. Fix the request (see the discovery
+    # endpoint's required_input_fields), or treat as unevaluated:
+    raise PolicyNotApplicable(d.policy_name)
+```
+
+The Decisions ledger flags these too — the evidence drawer shows every rule
+as SKIPPED with its reason, under a "no rules executed" banner.
+
+---
+
 ## Inputs: one bag, every validator
 
 A policy can span multiple validator domains. The request object's fields are
@@ -250,10 +471,14 @@ the fields it needs:
 
 | Request field | Wire field | Read by |
 |---|---|---|
-| `prompt` | `llm_input_query` | input / RAG / security validators |
-| `context` | `llm_input_context` | RAG / output validators |
+| `prompt` | `llm_input_query` | input / security / RAG validators — plus the output validators that compare against the question (`answer_relevance`, `conceptual_similarity`, `factual_consistency`, `intent_compliance`, `child_safety`, …) |
+| `context` | `llm_input_context` | RAG / context-aware output validators |
 | `response` | `llm_output` | output / RAG / security validators |
 | `conversation_history`, `tool_calls`, `agent_responses`, `reference_data` | same names | agentic validators |
+
+The "read by" column is indicative — the authoritative per-validator list is
+the server's catalog, surfaced per policy as `required_input_fields` by the
+[discovery endpoint](#discovering-policies-from-code).
 
 If a validator's required field is missing, the server records that rule as
 `status: "skipped"` with `skipped_reason: "missing_input:<fields>"` — skips
@@ -261,6 +486,35 @@ are **neutral** to the decision, never billed, and name exactly what to add.
 Supply the union of what your policies need; the
 [discovery endpoint](#discovering-policies-from-code) tells you the union
 up front via `required_input_fields`.
+
+Two serialization details that matter:
+
+- **Empty means absent.** Fields left as `None` are omitted from the wire,
+  and the server additionally treats empty / whitespace-only strings (and
+  empty lists) as absent — `prompt=""` makes the matching rules skip with
+  `missing_input:llm_input_query`, exactly like omitting it. A rule only
+  runs against a field with actual content.
+- **Extra fields are harmless.** Validators read only what they need — a bag
+  carrying `prompt` + `response` + agentic fields satisfies an input policy,
+  an output policy, and an agentic policy in the same call.
+
+---
+
+## Validator overrides
+
+A policy can carry two override lists, keyed by **validator name** (set at
+authoring time):
+
+- **Allow overrides** — the named validators are exempted: their rules record
+  `skipped (overrides_allow)`, neutral and unbilled.
+- **Block overrides** — the named validators are force-failed **without
+  running**: `status: "fail"`, `skipped_reason: "overrides_block"`,
+  `has_score: false`. A forced fail blocks the policy under **every**
+  strategy — it's the deny-overrides trump card, and no threshold change can
+  allow it.
+
+In the typed API a forced fail is a `PolicyRule` with `status == "fail"` and
+`score is None` — render it as a verdict, not a number.
 
 ---
 
@@ -274,12 +528,14 @@ what its envelope contains:
 - **Async** — the request is accepted (HTTP 202, `code: "DSQ-2020"`,
   `data.status: "accepted"`), evaluation runs in the background, and the
   verdict lands on the **Decisions** dashboard. The envelope carries **no
-  decision and no rulesets** — `any_blocking` treats it as not blocking.
-  Use `is_async(envelope)` to detect it, and the envelope's `request_id`
-  to reconcile the eventual dashboard decision.
+  decision, no rulesets, and no `credit_details`** (billing happens
+  out-of-band when the background run completes) — `any_blocking` treats it
+  as not blocking. Use `is_async(envelope)` to detect it, and the envelope's
+  `request_id` to reconcile the eventual dashboard decision.
 
 Mixing sync and async policies in one `policies=[...]` list is fine — each
-envelope self-describes.
+envelope self-describes. Use async for monitoring/audit policies where you
+want the ledger trail without paying the latency on the request path.
 
 ---
 
@@ -305,7 +561,9 @@ print(detail["data"]["required_input_fields"])   # e.g. ["llm_input_query"]
 ```
 
 `required_input_fields` is the union over the policy's **enabled** validators
-— build your request object from it and nothing will skip.
+— build your request object from it and nothing will skip. It is computed
+from the same server-side catalog that decides `missing_input` skips, so
+what discovery promises is exactly what evaluation checks.
 
 ---
 
@@ -351,6 +609,10 @@ typed kwargs (`prompt=`, `context=`, …), `config_input`, and an explicit
 
 ## Error handling
 
+Two different failure planes — don't conflate them:
+
+**Transport / HTTP errors** raise from the call:
+
 ```python
 from disseqt_sdk.client import HTTPError
 
@@ -383,6 +645,60 @@ Facts to rely on:
   stance.
 - Error bodies never leak internal service detail.
 
+**Validator errors inside a completed evaluation** do *not* raise — the call
+returns HTTP 200 and the affected rules carry `status: "error"`. The policy
+still decides: an error blocks if the rule is `is_decider` or the strategy
+is `all`; otherwise the errored rule is neutral (under `weighted` it simply
+doesn't contribute to the confidence). If every rule skipped or errored, the
+decision is a vacuous PASS with no `aggregate_score` — the
+[fail-closed pattern](#input-coverage-all-some-or-none) catches this case
+too if you filter on `status == "pass" or status == "fail"` instead of just
+excluding skips. Mark your load-bearing validators `is_decider` in the
+policy editor if an ML outage must close the gate.
+
+---
+
+## Billing, latency, and publish propagation
+
+- **Billing is per executed validator**, at the validator's pricing tier.
+  Skipped rules cost nothing; forced fails (`overrides_block`) never call
+  the ML service and cost nothing. Sync envelopes report the deduction in
+  `credit_details` (omitted when nothing executed); async policies bill
+  out-of-band on completion — the 202 carries no `credit_details`.
+- **Latency**: each policy in `policies=[...]` is one sequential HTTP call
+  from the SDK, and inside each call the policy's validators execute
+  together server-side. The `timeout` you set on `Client` applies **per
+  call** — budget end-to-end latency as roughly the sum over policies of
+  the slowest validator in each. Keep request-path policies sync and small;
+  push heavy audit bundles to async policies.
+- **Publish propagation**: the server caches policy definitions briefly
+  (with event-driven invalidation on publish). A newly published version is
+  typically live within seconds; worst case, one cache TTL (~60s). The
+  envelope's `policy_version` always tells you which version judged.
+
+---
+
+## The Decisions ledger
+
+Every evaluation — sync or async, BLOCK or PASS — lands as one row on
+**Dashboard → Realtime Policies → Decisions**, attributed to your
+`application_name`. Click a row and the **Violation evidence** drawer shows
+the decision the way the policy editor is structured:
+
+- per-**ruleset** groups, each with its verdict chip (FAILED / PASSED /
+  SKIPPED / ERROR);
+- per-rule rows: executed rules with score-vs-threshold detail, skipped
+  rules with their `missing_input:…` reason, forced fails as verdicts
+  without fabricated scores;
+- an explicit *"no rules executed — passed by default"* banner on vacuous
+  decisions;
+- for weighted policies, the tuning hints tell you which threshold change
+  would have flipped a threshold-driven fail.
+
+Use the ledger in reviews the way you'd use access logs: filter by
+application, policy, or verdict; the `request_id` in your logs matches the
+decision's evidence.
+
 ---
 
 ## Production patterns
@@ -414,6 +730,27 @@ def is_allowed(user_input: str) -> bool:
     return not any_blocking(result)
 ```
 
+### Fail closed on unevaluated policies
+
+For hard gates, a PASS with zero executed rules should not open the gate
+(see [Input coverage](#input-coverage-all-some-or-none)):
+
+```python
+from disseqt_sdk import parse_policy
+
+def gate(result) -> bool:
+    for envelope in result["policies"]:
+        d = parse_policy(envelope)
+        if d is None or d.decision == "BLOCK":
+            return False
+        if d.enforcement == "sync" and not any(
+            r.status in ("pass", "fail")
+            for rs in d.rulesets for r in rs.rules
+        ):
+            return False          # vacuous PASS — nothing actually judged
+    return True
+```
+
 ### Correlate with `request_id`
 
 Each policy envelope carries a server-generated `request_id` — log it; for
@@ -443,4 +780,5 @@ overlapping ones.
 | `timeout` | `30` | Seconds, per HTTP call (each policy evaluation is one call). |
 
 Public helpers: `any_blocking(result)` for the envelope; `is_blocking` /
-`is_async` / `parse_policy` for individual policy envelopes.
+`is_async` / `parse_policy` for individual policy envelopes — see
+[the typed objects](#the-typed-objects) for the full field reference.
