@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import time
-import warnings
 from typing import Any, Protocol, cast, runtime_checkable
 
 import requests
@@ -97,8 +96,6 @@ class Client:
        a local server during tests without disturbing the validator base
        URL. Requires ``application_name`` on the client.
 
-    :meth:`evaluate_policy` still exists but is deprecated in favor of
-    ``validate(..., policies=[...])``.
     """
 
     def __init__(
@@ -107,7 +104,6 @@ class Client:
         api_key: str,
         base_url: str = "https://api.disseqt.ai/realtime-validations",
         timeout: int = 30,
-        realtime_policy_id: str | None = None,
         application_name: str | None = None,
         realtime_policy_base_url: str = "https://api.disseqt.ai/realtime-validations",
     ) -> None:
@@ -119,13 +115,9 @@ class Client:
             base_url: Base URL for the individual-validator API (the
                 ``/sdk/validators/...`` endpoints).
             timeout: Request timeout in seconds
-            realtime_policy_id: Optional default policy used by
-                :meth:`evaluate_policy`. When set, callers can omit the
-                ``realtime_policy_id`` argument on each call and this
-                default is used. Per-call value always wins.
             application_name: Logical name of the calling application
-                (e.g. ``"checkout-bot"``). REQUIRED when
-                ``realtime_policy_id`` is set — the
+                (e.g. ``"checkout-bot"``). REQUIRED to evaluate policies
+                (``validate(..., policies=[...])``) — the
                 ``policy.validation.result.v1`` ledger uses this to
                 show which application produced each decision. Mirrors
                 ``service_name`` on :class:`DisseqtAgenticClient`.
@@ -141,21 +133,11 @@ class Client:
                 (e.g. ``http://localhost:9010``) without disturbing
                 ``base_url`` callers.
 
-        Raises:
-            ValueError: When ``realtime_policy_id`` is set without an
-                accompanying ``application_name``.
         """
-        if realtime_policy_id and not (application_name and application_name.strip()):
-            raise ValueError(
-                "application_name is required when realtime_policy_id is set "
-                "(it identifies the calling application on the policies "
-                "dashboard, same as service_name on DisseqtAgenticClient)"
-            )
         self.project_id = project_id
         self.api_key = api_key
         self.base_url = base_url
         self.timeout = timeout
-        self.realtime_policy_id = realtime_policy_id
         self.application_name = application_name
         self.realtime_policy_base_url = realtime_policy_base_url
 
@@ -460,204 +442,6 @@ class Client:
             # Use default response handling (no forced normalization)
             return server_response
 
-    def evaluate_policy(
-        self,
-        realtime_policy_id: str | None = None,
-        *,
-        # LLM text fields — match what the typed validators expose.
-        # The SDK renames these to the wire shape the validators expect:
-        # prompt → llm_input_query, context → llm_input_context,
-        # response → llm_output. Same convention as
-        # InputValidationRequest / OutputValidationRequest.
-        prompt: str | None = None,
-        context: str | None = None,
-        response: str | None = None,
-        # Agentic-behavior fields — for policies that include agentic
-        # validators (tool_call_accuracy, topic_adherence, …). Sent 1:1
-        # in the wire payload, no rename.
-        conversation_history: list[str] | None = None,
-        tool_calls: list[dict[str, Any]] | None = None,
-        agent_responses: list[str] | None = None,
-        reference_data: dict[str, Any] | None = None,
-        # Escape hatch for shapes the typed args don't cover (themes
-        # classifier, custom validators). Merged on top of whatever the
-        # typed args produced — raw keys win on conflict.
-        input_data: dict[str, Any] | None = None,
-        config_input: dict[str, Any] | None = None,
-        application_name: str | None = None,
-        request_id: str | None = None,
-    ) -> dict[str, Any]:
-        """Run an input through a server-side realtime policy.
-
-        Hits ``POST /api/v1/sdk/policies/{realtime_policy_id}/evaluate`` on
-        the URL configured via ``realtime_policy_base_url``. The server
-        fetches the policy from disseqt-realtime-policies-service, runs
-        every validator the policy specifies (with the policy's thresholds
-        and any custom labels), aggregates a BLOCK/PASS verdict, and
-        publishes the result to ``policy.validation.result.v1``.
-
-        A single policy can span multiple validator domains. The same
-        ``input_data`` dict is sent to every validator the policy lists,
-        and each validator picks the fields it cares about — so a policy
-        with both ``factual_consistency`` (needs query + context +
-        response) and ``tool_call_accuracy`` (needs tool_calls) requires
-        callers to supply the **union** of fields::
-
-            client.evaluate_policy(
-                # LLM validators read these
-                prompt="What is the capital of France?",
-                context="France is a country in Europe.",
-                response="The capital of France is Paris.",
-                # Agentic validators read these
-                tool_calls=[{"name": "lookup_capital", "args": {...}}],
-                conversation_history=["..."],
-            )
-
-        Use the raw ``input_data`` dict only for shapes the typed args
-        don't cover (e.g. ``themes_classifier``).
-
-        Args:
-            realtime_policy_id: UUID of the published policy to run.
-                Falls back to ``Client.realtime_policy_id`` (set at
-                construction). Raises if neither is set.
-            prompt: User query. Sent as ``llm_input_query`` on the wire.
-            context: Additional context. Sent as ``llm_input_context``.
-            response: LLM output to evaluate. Sent as ``llm_output``.
-            conversation_history: Prior turns. Sent as
-                ``conversation_history`` (no rename).
-            tool_calls: Tool invocations the agent made.
-            agent_responses: Agent's textual replies.
-            reference_data: Ground-truth / reference docs for the
-                agentic validators that need them.
-            input_data: Escape hatch — a raw dict merged on top of
-                whatever the typed args produced. Use only when the
-                typed args don't cover what you need.
-            config_input: Optional extra config merged into every
-                validator's config. The policy's threshold always wins
-                on conflict; this only fills in fields the policy
-                didn't set.
-            application_name: Optional override of the Client's
-                ``application_name``. Required (here or on the Client).
-            request_id: Optional override; server generates one if absent.
-
-        Returns:
-            Decoded JSON response — the standard DSQ envelope with the
-            verdict under ``data``::
-
-                {
-                  "status": "success",
-                  "code": "DSQ-2000",           # DSQ-2020 for async 202
-                  "request_id": "...",          # envelope-level
-                  "timestamp": "...",
-                  "data": {
-                    "policy_id": "...",
-                    "policy_name": "...",
-                    "policy_version": 3,
-                    "status": "completed",      # "accepted" for async
-                    "decision": "BLOCK" | "PASS",
-                    "enforcement": "sync" | "async",
-                    "rulesets": [
-                      {"ruleset_id": "...", "ruleset_name": "...",
-                       "required": true,
-                       "rules": [{"validator": "toxicity", "status": "fail",
-                                  "score": 0.91, "threshold": 0.8,
-                                  "polarity": "risk", "is_decider": true,
-                                  ...}]}
-                    ],
-                    "duration": "...",
-                    "credit_details": {...}
-                  }
-                }
-
-            Async policies (``enforcement: "async"``) return HTTP 202
-            with ``data.status: "accepted"`` and no ``decision`` /
-            ``rulesets`` — evaluation continues server-side.
-
-            ``data.rulesets[].rules[].validator`` lets you see which
-            validators the policy actually ran — useful for confirming
-            the policy is configured the way you expect.
-
-            Use :func:`disseqt_sdk.is_blocking` / :func:`disseqt_sdk.parse_policy`
-            on this dict — they unwrap the envelope for you, so you don't
-            poke at the shape directly.
-
-        Raises:
-            HTTPError: If the server returns a non-2xx. An unknown,
-                unpublished, or deleted policy answers HTTP 404
-                (DSQ-4040) — branch on ``e.status_code == 404`` to
-                distinguish a bad policy id from a server fault.
-                (Deployments older than production-monitoring v0.1.12
-                returned 500 for these; a malformed non-UUID id may
-                still surface as 500 on servers without the
-                realtime-policies-service malformed-id fix.)
-            ValueError: If no input fields were supplied, no policy_id
-                is set anywhere, or no application_name is set anywhere.
-        """
-        warnings.warn(
-            "evaluate_policy() is deprecated: pass policies=[...] to "
-            "client.validate(...) instead — it evaluates the same policies "
-            "server-side and can run a validator alongside. evaluate_policy() "
-            "stays functional and will not be removed before 1.0.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        effective_policy_id = realtime_policy_id or self.realtime_policy_id
-        if not effective_policy_id:
-            raise ValueError(
-                "evaluate_policy() needs a realtime_policy_id. Options:\n"
-                "  • Pass realtime_policy_id=... on the call\n"
-                "  • Set Client(realtime_policy_id=...) at construction\n"
-                "If you don't have a published policy and just want to run\n"
-                "validators directly, use client.validate(...) instead:\n"
-                "  • One validator → client.validate(ToxicityValidator(...))\n"
-                "  • Composite bundle → client.validate(CompositeScoreEvaluator(...))"
-            )
-        effective_application_name = application_name or self.application_name
-        if not effective_application_name:
-            raise ValueError(
-                "application_name is required when calling evaluate_policy() "
-                "— either pass it per call or set Client(application_name=...) "
-                "at construction"
-            )
-
-        # Build the wire-shape input_data dict from the typed args.
-        # Rename llm fields to match what ML services expect; agentic
-        # fields go through 1:1.
-        built: dict[str, Any] = {}
-        if prompt is not None:
-            built["llm_input_query"] = prompt
-        if context is not None:
-            built["llm_input_context"] = context
-        if response is not None:
-            built["llm_output"] = response
-        if conversation_history is not None:
-            built["conversation_history"] = conversation_history
-        if tool_calls is not None:
-            built["tool_calls"] = tool_calls
-        if agent_responses is not None:
-            built["agent_responses"] = agent_responses
-        if reference_data is not None:
-            built["reference_data"] = reference_data
-        # Raw escape-hatch dict wins on key conflict so callers can
-        # override the typed-arg rename when they need to.
-        if input_data is not None:
-            built.update(input_data)
-        if not built:
-            raise ValueError(
-                "evaluate_policy() needs at least one input field — pass "
-                "prompt/context/response for LLM validators, "
-                "conversation_history/tool_calls/agent_responses/reference_data "
-                "for agentic validators, or input_data=... as a raw dict"
-            )
-
-        return self._post_policy_evaluate(
-            effective_policy_id,
-            built,
-            effective_application_name,
-            config_input=config_input,
-            request_id=request_id,
-        )
-
     def _post_policy_evaluate(
         self,
         policy_id: str,
@@ -668,8 +452,8 @@ class Client:
     ) -> dict[str, Any]:
         """POST one policy-evaluation request and decode the envelope.
 
-        Shared by :meth:`validate` (``policies=[...]``) and the deprecated
-        :meth:`evaluate_policy`. Raises :class:`HTTPError` on any non-2xx
+        Transport for :meth:`validate` (``policies=[...]``).
+        Raises :class:`HTTPError` on any non-2xx
         (unknown/unpublished policies answer 404 DSQ-4040) and
         ``ValueError`` on an undecodable body.
         """

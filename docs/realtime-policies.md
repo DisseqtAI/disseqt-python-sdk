@@ -38,7 +38,6 @@ every caller picks it up — no code deploy.
 - [Sync vs. async policies](#sync-vs-async-policies)
 - [Discovering policies from code](#discovering-policies-from-code)
 - [Agentic SDK: policy on every span](#agentic-sdk-policy-on-every-span)
-- [`evaluate_policy()` — deprecated](#evaluate_policy--deprecated)
 - [Error handling](#error-handling)
 - [Billing, latency, and publish propagation](#billing-latency-and-publish-propagation)
 - [The Decisions ledger](#the-decisions-ledger)
@@ -597,16 +596,6 @@ policy. Omit the policy id entirely and spans flow exactly as before.
 
 ---
 
-## `evaluate_policy()` — deprecated
-
-`Client.evaluate_policy(...)` predates `validate(..., policies=[...])` and
-hits the same endpoint. It is deprecated (calling it emits a
-`DeprecationWarning`) but stays fully functional until 1.0 — it still offers
-typed kwargs (`prompt=`, `context=`, …), `config_input`, and an explicit
-`request_id` override. New code should use `validate(...)` with `policies`.
-
----
-
 ## Error handling
 
 Two different failure planes — don't conflate them:
@@ -774,8 +763,7 @@ overlapping ones.
 |---|---|---|
 | `project_id` | — (required) | Sent as `X-Project-Id`. |
 | `api_key` | — (required) | Sent as `X-API-Key`. |
-| `application_name` | `None` | **Required** for `policies=[...]` (and for `realtime_policy_id`); shown on the Decisions ledger. |
-| `realtime_policy_id` | `None` | Default policy for the deprecated `evaluate_policy()` only — `validate()` takes explicit `policies=[...]`. |
+| `application_name` | `None` | **Required** for `policies=[...]`; shown on the Decisions ledger. |
 | `realtime_policy_base_url` | `https://api.disseqt.ai/realtime-validations` | Base URL for the policy evaluate + discovery endpoints (served by production-monitoring next to the validators). Override for local testing. |
 | `timeout` | `30` | Seconds, per HTTP call (each policy evaluation is one call). |
 

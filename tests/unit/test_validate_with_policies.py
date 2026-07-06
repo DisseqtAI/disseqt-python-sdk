@@ -176,16 +176,6 @@ class TestErrorPropagation:
         assert exc_info.value.status_code == 500
 
 
-class TestEvaluatePolicyDeprecation:
-    def test_warns_and_delegates_to_same_endpoint(self, requests_mock):
-        post = requests_mock.post(P1_URL, json=P1_BLOCK)
-        c = client()
-        with pytest.warns(DeprecationWarning, match="policies="):
-            result = c.evaluate_policy(realtime_policy_id=P1, prompt="hello")
-        assert post.called
-        assert parse_policy(result).decision == "BLOCK"
-
-
 class TestAnyBlockingHelper:
     def test_accepts_all_supported_shapes(self):
         env_block = {"status": "success", "data": {"policy_id": "x", "decision": "BLOCK"}}

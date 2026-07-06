@@ -21,8 +21,8 @@ prod-monitoring wraps the verdict in the standard Disseqt DSQ envelope::
 
 The helpers in this module accept either the full envelope OR the
 ``data`` payload directly — _unwrap_envelope() handles both, so caller
-code is the same whether you pass ``client.evaluate_policy(...)``'s
-return value or ``response["data"]``.
+code is the same whether you pass an entry from
+``client.validate(...)["policies"]`` or its ``response["data"]``.
 
 Response fields inside ``data``
 -------------------------------

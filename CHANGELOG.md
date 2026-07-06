@@ -36,18 +36,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [docs/realtime-policies.md → Decision strategies](docs/realtime-policies.md#decision-strategies),
   including the skip-renormalization contract for partially-matched inputs.
 
-### Deprecated
-- **`Client.evaluate_policy()`** — use `validate(..., policies=[...])`
-  instead; both hit the same evaluate endpoint. Still fully functional
-  (typed kwargs, `config_input`, `request_id`) and will not be removed
-  before 1.0; calling it now emits a `DeprecationWarning`.
+### Removed
+- **`Client.evaluate_policy()`** and the **`Client(realtime_policy_id=...)`**
+  constructor parameter (introduced in 0.6.0). Policy evaluation is now
+  exclusively `validate(..., policies=[...])` — same endpoint, same
+  envelope per policy, plus the ability to run a validator alongside.
+  Migration:
 
-### Fixed
-- `evaluate_policy` docstring: unknown/unpublished policies now answer
-  HTTP 404 (DSQ-4040) since production-monitoring v0.1.12 — callers
-  should branch on 404. The docstring previously said the opposite
-  ("don't branch on 404"), written against the pre-v0.1.12 behavior
-  where every miss surfaced as HTTP 500.
+  ```python
+  # before (0.6.0)
+  client.evaluate_policy(realtime_policy_id=PID, prompt=text)
+  # after
+  client.validate(InputValidationRequest(prompt=text), policies=[PID])["policies"][0]
+  ```
+
+  Note: unknown/unpublished policies answer HTTP 404 (DSQ-4040) since
+  production-monitoring v0.1.12 — branch on `e.status_code == 404`.
 
 ## [0.6.0] - 2026-07-02
 
