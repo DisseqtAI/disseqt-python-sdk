@@ -7,12 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- `evaluate_policy` docstring: unknown/unpublished policies now answer
-  HTTP 404 (DSQ-4040) since production-monitoring v0.1.12 — callers
-  should branch on 404. The docstring previously said the opposite
-  ("don't branch on 404"), written against the pre-v0.1.12 behavior
-  where every miss surfaced as HTTP 500.
+## [0.7.0] - 2026-07-03
+
+### Added
+- **`Client.validate(request, policies=[...])`** — realtime policies are
+  now evaluated straight from `validate()`. Three call shapes:
+  1. `validate(SomeValidator(...))` — unchanged classic behavior.
+  2. `validate(SomeValidator(...), policies=["<id>", ...])` — the
+     validator runs as usual **and** the same input is evaluated against
+     each policy server-side (each policy's own rulesets, thresholds, and
+     decision strategy; one Decisions-ledger entry per policy).
+  3. `validate(InputValidationRequest(...), policies=["<id>"])` — a bare
+     request object (any `disseqt_sdk.models` request) with no validator
+     and no config; the policies decide everything.
+  With `policies` the return value is a stable envelope
+  `{"validation": {...}|None, "policies": [<policy envelope>, ...]}`
+  (policies evaluated sequentially, in order). Requires
+  `Client(application_name=...)`.
+- **`any_blocking(result)`** helper — True when any policy decision in
+  the envelope (or a list of envelopes, or a single envelope) is BLOCK.
+  Safe on classic validator responses (returns False).
+- **`Client(policies=[...])`** — a client-level default policy list.
+  Every `validate()` call evaluates it unless the call passes its own
+  `policies=` (per-call always overrides). `[]` at construction means
+  "no default"; an explicit per-call `policies=[]` still raises so an
+  accidentally empty list fails loudly instead of silently ungating.
+  Composite-score / themes-classifier requests run classically — the
+  default steps aside for them (logged). Requires `application_name`.
+- **`PolicyDecision.aggregation` / `.aggregate_score` / `.aggregate_threshold`**
+  — `parse_policy` now surfaces the decision strategy that produced the
+  verdict (`any | all | majority | weighted`) and, for weighted policies,
+  the policy confidence and the blocking line it was compared against
+  (`score >= threshold → BLOCK`). Empty/None against servers that predate
+  aggregation enforcement. Documented in
+  [docs/realtime-policies.md → Decision strategies](docs/realtime-policies.md#decision-strategies),
+  including the skip-renormalization contract for partially-matched inputs.
+
+### Removed
+- **`Client.evaluate_policy()`** and the **`Client(realtime_policy_id=...)`**
+  constructor parameter (introduced in 0.6.0). Policy evaluation is now
+  exclusively `validate(..., policies=[...])` — same endpoint, same
+  envelope per policy, plus the ability to run a validator alongside.
+  Migration:
+
+  ```python
+  # before (0.6.0)
+  client.evaluate_policy(realtime_policy_id=PID, prompt=text)
+  # after
+  client.validate(InputValidationRequest(prompt=text), policies=[PID])["policies"][0]
+  ```
+
+  Note: unknown/unpublished policies answer HTTP 404 (DSQ-4040) since
+  production-monitoring v0.1.12 — branch on `e.status_code == 404`.
 
 ## [0.6.0] - 2026-07-02
 

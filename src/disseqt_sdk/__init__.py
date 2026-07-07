@@ -16,12 +16,13 @@ from .policy import (
     PolicyDecision,
     PolicyRule,
     PolicyRuleset,
+    any_blocking,
     is_async,
     is_blocking,
 )
 from .policy import parse as parse_policy
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 __all__ = [
     "Client",
     "DisseqtAPIClient",
@@ -29,6 +30,7 @@ __all__ = [
     "PolicyRule",
     "PolicyRuleset",
     "SDKConfigInput",
+    "any_blocking",
     "configure_logging",
     "get_logger",
     "is_async",

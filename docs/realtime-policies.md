@@ -1,20 +1,25 @@
 # Realtime Policies
 
 A **realtime policy** is a named, versioned bundle of validators — with their
-thresholds, labels, and an enforcement strategy — that you author once in the
-Disseqt dashboard and then run from your application by **policy id**. Instead
-of wiring up individual validators in code, you call one method and get back a
-single **BLOCK / PASS** decision plus the full per-rule breakdown.
+thresholds, labels, and a decision strategy — that you author once in the
+Disseqt dashboard and evaluate from your application by **policy id**, straight
+from `client.validate()`:
 
-Use realtime policies when you want the *policy* (which validators, what
-thresholds, block-vs-monitor) to live in the dashboard and change without a code
-deploy — the SDK just references it by id.
+```python
+result = client.validate(
+    InputValidationRequest(prompt=user_input),
+    policies=["994ad00e-bff4-4cff-8a45-2635f3f3fcd0"],
+)
+if any_blocking(result):
+    ...  # at least one policy said BLOCK
+```
 
-> **How this differs from `client.validate(...)`**
-> `validate()` runs one validator (or a fixed composite bundle) that you
-> configure in code. `evaluate_policy()` runs a *published policy* that the
-> server resolves by id — the set of validators and thresholds is owned by the
-> dashboard, not your code. See [Choosing an approach](#choosing-an-approach).
+For each policy id, the server resolves the latest published version, runs
+**every validator the policy specifies** (with the policy's thresholds), applies
+the policy's decision strategy, returns one **BLOCK/PASS** verdict with a
+per-rule breakdown, and records the decision on the dashboard's **Decisions**
+ledger. Change a threshold or swap validators in the dashboard, publish, and
+every caller picks it up — no code deploy.
 
 ---
 
@@ -22,344 +27,595 @@ deploy — the SDK just references it by id.
 
 - [Quick start](#quick-start)
 - [Prerequisites](#prerequisites)
-- [Two SDKs, two entry points](#two-sdks-two-entry-points)
-- [`evaluate_policy` — the request](#evaluate_policy--the-request)
-- [Reading the result](#reading-the-result)
+- [The three call shapes](#the-three-call-shapes)
+- [The response envelope](#the-response-envelope)
+- [Rule statuses and skip reasons](#rule-statuses-and-skip-reasons)
+- [Reading policy verdicts](#reading-policy-verdicts)
+- [Decision strategies](#decision-strategies)
+- [Input coverage: all, some, or none](#input-coverage-all-some-or-none)
+- [Inputs: one bag, every validator](#inputs-one-bag-every-validator)
+- [Validator overrides](#validator-overrides)
 - [Sync vs. async policies](#sync-vs-async-policies)
 - [Discovering policies from code](#discovering-policies-from-code)
 - [Agentic SDK: policy on every span](#agentic-sdk-policy-on-every-span)
 - [Error handling](#error-handling)
+- [Billing, latency, and publish propagation](#billing-latency-and-publish-propagation)
+- [The Decisions ledger](#the-decisions-ledger)
 - [Production patterns](#production-patterns)
 - [Configuration reference](#configuration-reference)
-- [Choosing an approach](#choosing-an-approach)
 
 ---
 
 ## Quick start
 
 ```python
-from disseqt_sdk import Client, is_blocking
+from disseqt_sdk import Client, any_blocking
+from disseqt_sdk.models.input_validation import InputValidationRequest
 
 client = Client(
     project_id="your_project_id",
     api_key="your_api_key",
-    realtime_policy_id="994ad00e-bff4-4cff-8a45-2635f3f3fcd0",  # published policy
-    application_name="checkout-bot",                            # who is calling
+    application_name="checkout-bot",   # required to evaluate policies
 )
 
-result = client.evaluate_policy(prompt=user_input)
+result = client.validate(
+    InputValidationRequest(prompt=user_input),
+    policies=["994ad00e-bff4-4cff-8a45-2635f3f3fcd0"],
+)
 
-if is_blocking(result):
-    # Policy said BLOCK — do not send this to the model / downstream.
-    raise ValueError("Request blocked by realtime policy")
+if any_blocking(result):
+    raise ValueError("Blocked by realtime policy")
 ```
 
-That is the whole happy path: point the client at a policy id, pass the input,
-and branch on `is_blocking`.
+No validator, no config, no threshold — the policy owns all of that. The
+input object carries the data; the policy list says what judges it.
 
 ---
 
 ## Prerequisites
 
-1. **A published policy.** Create one in the dashboard under
-   **Realtime Policies → Policies** (start from a template or build from
-   scratch), then **Publish**. Copy the **Policy ID** shown on publish — that
-   UUID is what the SDK references. A policy only affects traffic once it is
-   *published*; drafts are invisible to the SDK.
-2. **A project API key** (`X-API-Key`) and **project id** (`X-Project-Id`) — the
-   same credentials you use for `client.validate(...)`.
-3. **`application_name`.** Required whenever a policy id is set. It is recorded
-   on every decision so the dashboard's **Decisions** ledger can show which
-   application produced each verdict. Think of it as the caller's logical name
-   (`"checkout-bot"`, `"support-agent"`), not a hostname.
+1. **A published policy.** Dashboard → **Realtime Policies → Policies →
+   Create policy** (templates: Prompt-Injection Defense, PII / Data-Leakage
+   Guard, …) → **Publish**. Copy the **Policy ID** (a UUID). Only *published*
+   policies are visible to the SDK; the latest published version is always
+   the one evaluated.
+2. **A project API key** (`X-API-Key`) and **project id** (`X-Project-Id`).
+3. **`application_name`** on the `Client` — required for policy evaluation;
+   it's how the Decisions ledger attributes each decision to your app.
 
 ---
 
-## Two SDKs, two entry points
+## The three call shapes
 
-Realtime policies are reachable from both packages:
+`validate()` accepts an optional `policies=[...]` list. What you pass as the
+request decides the shape:
 
-| Package | Entry point | Use when |
-|---|---|---|
-| `disseqt_sdk` | `Client.evaluate_policy(...)` | You want a **synchronous verdict in-line** — a request/response guardrail you branch on immediately. |
-| `disseqt_agentic_sdk` | `DisseqtAgenticClient(realtime_policy_id=...)` / `start_trace(..., realtime_policy_id=...)` | You are **tracing an agent** and want each span evaluated against a policy out-of-band, with results on the dashboard. |
-
-The two are independent — pick by whether you need the decision back in the call
-(`evaluate_policy`) or you are emitting spans and want them policy-tagged
-(agentic). Both are covered below.
-
----
-
-## `evaluate_policy` — the request
+### 1. Validator only — classic, unchanged
 
 ```python
-result = client.evaluate_policy(
-    realtime_policy_id="…",     # optional if set on the Client; per-call wins
-    prompt="…",                 # user query          → wire: llm_input_query
-    context="…",                # retrieved context   → wire: llm_input_context
-    response="…",               # model output        → wire: llm_output
-    # agentic inputs (sent as-is, for policies that include agentic validators)
-    conversation_history=[...],
-    tool_calls=[...],
-    agent_responses=[...],
-    reference_data={...},
-    # escape hatch + overrides
-    input_data={...},           # raw dict, merged last (raw keys win on conflict)
-    config_input={...},         # extra validator config (policy threshold wins)
-    application_name="…",       # optional per-call override of the Client default
-    request_id="…",             # optional; server generates one if omitted
+client.validate(
+    ToxicityValidator(
+        data=InputValidationRequest(prompt=user_input),
+        config=SDKConfigInput(threshold=0.5),
+    )
 )
 ```
 
-### Typed inputs and the field rename
+Runs that one validator with your code's config. Returns the plain
+validation response — byte-identical behavior to previous releases.
 
-The typed keyword arguments are renamed on the wire to the shape the validators
-expect — the same convention as `InputValidationRequest` /
-`OutputValidationRequest`:
-
-| Keyword arg | Wire field | For |
-|---|---|---|
-| `prompt` | `llm_input_query` | the user's query |
-| `context` | `llm_input_context` | retrieved / supplied context |
-| `response` | `llm_output` | the model's output to check |
-| `conversation_history` | `conversation_history` | agentic validators (turn history) |
-| `tool_calls` | `tool_calls` | agentic validators (tool invocations) |
-| `agent_responses` | `agent_responses` | agentic validators |
-| `reference_data` | `reference_data` | agentic validators (ground truth) |
-
-A single policy can span multiple validator domains. The **same** input is sent
-to every validator the policy lists, and each validator reads the fields it
-needs — so supply the **union** of what the policy's validators require:
+### 2. Validator + policies — both, in one call
 
 ```python
-result = client.evaluate_policy(
-    # LLM validators read these
-    prompt="What is the capital of France?",
-    context="France is a country in Europe.",
-    response="The capital of France is Paris.",
-    # agentic validators read these
-    tool_calls=[{"name": "lookup_capital", "args": {"country": "France"}}],
+result = client.validate(
+    ToxicityValidator(data=InputValidationRequest(prompt=user_input),
+                      config=SDKConfigInput(threshold=0.5)),
+    policies=["994ad00e-…", "1268faa4-…"],
 )
+
+result["validation"]   # the toxicity result (your code's config applies to it)
+result["policies"]     # one full-policy verdict per id, in order
 ```
 
-If a validator's required field is missing, the server does **not** guess — it
-records that rule as `status="skipped"` with
-`skipped_reason="missing_input:<fields>"` so you can see exactly what to add.
-[Discover a policy's required fields](#discovering-policies-from-code) up front
-to avoid this.
+The validator runs exactly as in shape 1, **and** the same input is evaluated
+against each policy server-side. Useful when one ad-hoc check and the
+governed policies should both see the input.
 
-### The raw escape hatch
-
-For shapes the typed args don't cover (e.g. a themes classifier, or a custom
-validator), pass `input_data` as a raw dict. It is merged **last**, so raw keys
-win on conflict:
+### 3. Policies only — bare request object
 
 ```python
-result = client.evaluate_policy(input_data={"llm_input_query": "…", "custom_field": "…"})
+result = client.validate(
+    InputValidationRequest(prompt=user_input, response=model_output),
+    policies=["994ad00e-…"],
+)
+
+result["validation"]   # None — no validator ran
+result["policies"][0]  # the policy verdict
 ```
 
-### `config_input` and the threshold rule
+Any `disseqt_sdk.models` request object works as the input carrier
+(`InputValidationRequest`, `OutputValidationRequest`, `RagGroundingRequest`,
+`AgenticBehaviourRequest`, `McpSecurityRequest`) — pick whichever names the
+fields you have. No validator, no config.
 
-`config_input` fills in validator config the policy didn't set. **Any key the
-policy already defines always wins** — for a validator the policy configures
-(its threshold, custom labels, label scores, …), a conflicting `config_input`
-key is ignored; `config_input` only supplies keys the policy left unset. This is
-deliberate: a caller cannot weaken dashboard-enforced guardrails — e.g. lower a
-threshold — from the client side.
+**Rules enforced client-side** (all raise `ValueError` before any network
+call): a bare request without `policies`; an empty `policies` list or blank
+ids; `policies` combined with composite-score or themes-classifier requests;
+missing `application_name`; a request that serializes to no input fields.
+
+### Client-level default: a governed client
+
+Set the list once on the client and every `validate()` call is policy-checked
+— the per-call `policies=` acts as an **override** when present:
+
+```python
+client = Client(
+    project_id=..., api_key=...,
+    application_name="checkout-bot",
+    policies=["994ad00e-…"],              # the governed default
+)
+
+client.validate(toxicity_validator)        # shape 2: validator + default policies
+client.validate(InputValidationRequest(prompt=p))   # shape 3 via the default
+client.validate(req, policies=["1268faa4-…"])       # override: only this list runs
+```
+
+Semantics worth knowing:
+
+- **Per-call always wins** — the override replaces the default, it doesn't
+  append to it. There is no per-call opt-out; construct a second `Client`
+  for deliberately ungoverned paths.
+- **`policies=[]` is always an error**, with or without a default — an
+  accidentally empty list must fail loudly rather than silently ungate the
+  call. `Client(policies=[])` at construction, by contrast, just means "no
+  default", so env-driven lists degrade naturally.
+- **Composite-score and themes-classifier requests** can't be policy-
+  evaluated; on a governed client they run classically and the default
+  steps aside (logged as `validation.policies.default_skipped`). Passing
+  `policies` to them *explicitly* still raises.
+- The list is **copied at construction** — mutating your original list
+  later doesn't change the client.
 
 ---
 
-## Reading the result
+## The response envelope
 
-`evaluate_policy` returns the decoded JSON response — the standard Disseqt
-envelope with the verdict under `data`. **Prefer the helper functions** over
-indexing the raw dict; they unwrap the envelope for you and are stable across
-minor response-shape changes.
+Whenever `policies` is passed, the return value is a stable two-key envelope:
 
 ```python
-from disseqt_sdk import is_blocking, is_async, parse_policy
-
-result = client.evaluate_policy(prompt=user_input)
-
-# 1. Short-circuit on BLOCK — the common case.
-if is_blocking(result):
-    handle_block()
-
-# 2. Full structured breakdown when you need per-rule detail.
-decision = parse_policy(result)          # -> PolicyDecision | None
-print(decision.decision)                 # "BLOCK" | "PASS"
-print(decision.enforcement)              # "sync" | "async"
-print(decision.policy_name, "v", decision.policy_version)
-
-for ruleset in decision.rulesets:
-    for rule in ruleset.rules:
-        print(rule.validator, rule.status, rule.score, rule.threshold)
+{
+    "validation": {...} | None,   # per-validator result (None in shape 3)
+    "policies":  [{...}, ...],    # one policy envelope per id, same order
+}
 ```
 
-### Typed result objects
-
-`parse_policy()` returns a `PolicyDecision` (or `None` if the payload isn't a
-policy result). All three types are **frozen** (immutable) and slotted
-(`from dataclasses import dataclass, field`):
-
-```python
-@dataclass(frozen=True, slots=True)
-class PolicyDecision:
-    policy_id: str
-    policy_name: str
-    policy_version: int
-    decision: str                          # "BLOCK" | "PASS"
-    enforcement: str                       # "sync" | "async"
-    rulesets: list[PolicyRuleset] = field(default_factory=list)
-
-@dataclass(frozen=True, slots=True)
-class PolicyRuleset:
-    ruleset_id: str
-    ruleset_name: str
-    required: bool = False
-    rules: list[PolicyRule] = field(default_factory=list)
-
-@dataclass(frozen=True, slots=True)
-class PolicyRule:
-    validator: str                         # e.g. "prompt-injection"
-    validator_type: str                    # e.g. "mcp-security"
-    status: str                            # "pass" | "fail" | "skipped" | "error"
-    score: float | None = None             # None when the validator produced no score
-    threshold: float | None = None
-    polarity: str = ""                     # "risk" (higher = worse) | "quality" (higher = better)
-    is_decider: bool = False
-    skipped_reason: str = ""               # e.g. "missing_input:llm_input_query"
-```
-
-Because they are frozen, treat results as read-only — assigning to a field
-(e.g. `decision.decision = "PASS"`) raises `FrozenInstanceError`.
-
-> **On `is_decider`.** This flag is a *policy-authoring* setting, not "the rule
-> that caused this block." Under an **any-fails → block** strategy, *any*
-> failing validator blocks regardless of `is_decider`; the flag only controls
-> whether a validator **error** (e.g. an ML service failure) is enough to flip
-> the verdict to BLOCK. Don't infer the deciding rule from `is_decider` — read
-> `status` and the policy's strategy instead.
-
-### Response envelope (for reference)
-
-If you must read the raw dict, this is the shape:
+Each entry in `"policies"` is the standard policy envelope. A real sync
+verdict, annotated:
 
 ```jsonc
 {
   "status": "success",
-  "code": "DSQ-2000",              // DSQ-2020 on the async 202
-  "request_id": "…",               // envelope-level correlation id
-  "timestamp": "…",
+  "code": "DSQ-2000",                    // DSQ-2020 for an async 202
+  "request_id": "d93onau…",              // correlate logs & ledger with this
   "data": {
-    "policy_id": "…",
-    "policy_name": "…",
-    "policy_version": 3,
-    "status": "completed",         // "accepted" for async
-    "decision": "BLOCK",           // omitted on async
-    "enforcement": "sync",         // "sync" | "async"
-    "rulesets": [ /* omitted on async */ ],
-    "duration": "…",
-    "credit_details": { /* sync only */ }
+    "policy_id": "994ad00e-…",
+    "policy_name": "Prompt-Injection Defense",
+    "policy_version": 3,                 // the published version that judged
+    "status": "completed",               // "accepted" for async
+    "decision": "BLOCK",                 // BLOCK | PASS — omitted on async
+    "enforcement": "sync",               // sync | async
+    "aggregation": "weighted",           // strategy that decided the verdict
+    "aggregate_score": 0.79,             // weighted only: policy confidence
+    "aggregate_threshold": 0.5,          // weighted only: score >= thr -> BLOCK
+    "rulesets": [                        // per-rule breakdown — omitted on async
+      {
+        "ruleset_id": "rs_a1",
+        "ruleset_name": "Injection",
+        "required": false,
+        "rules": [
+          {
+            "validator": "prompt-injection",
+            "validator_type": "mcp-security",
+            "status": "fail",            // pass | fail | skipped | error
+            "score": 0.9876,
+            "has_score": true,           // false => score is meaningless
+            "threshold": 0.6,            // the policy's per-rule threshold
+            "polarity": "risk",          // risk | quality
+            "is_decider": false,
+            "skipped_reason": ""
+          }
+        ]
+      },
+      {
+        "ruleset_id": "rs_a2",
+        "ruleset_name": "Output leakage",
+        "required": false,
+        "rules": [
+          {
+            "validator": "data-leakage",
+            "validator_type": "output-validation",
+            "status": "skipped",
+            "score": 0,
+            "has_score": false,
+            "threshold": 0.55,
+            "polarity": "risk",
+            "is_decider": false,
+            "skipped_reason": "missing_input:llm_output"
+          }
+        ]
+      }
+    ],
+    "duration": "1.24s",
+    "credit_details": {                  // present when validators executed;
+      "credits_deducted": 2              // per executed validator — skips are
+      /* …additional balance fields… */  // free. Omitted on async 202s and on
+    }                                    // vacuous evaluations (nothing ran)
   }
 }
 ```
+
+Field notes:
+
+- **`aggregation` / `aggregate_score` / `aggregate_threshold`** — which
+  [decision strategy](#decision-strategies) produced the verdict and, for
+  `weighted`, the confidence it compared against the blocking line. Empty /
+  absent on servers that predate aggregation enforcement.
+- **`rulesets`** mirrors the policy editor's structure — one entry per
+  ruleset, in policy order, each rule carrying its own outcome. See the
+  [status vocabulary](#rule-statuses-and-skip-reasons) below.
+- **`has_score: false`** marks rules that produced no score — skipped rules
+  and override-forced verdicts. Their `score` serializes as `0` on the wire,
+  so never read `score` without checking `has_score` (the typed
+  `parse_policy` does this for you and gives you `score=None`). Errored
+  rules may carry **either** value (a parseable ML error can include a
+  meaningless zero-valued score) — branch on `status` first and only trust
+  `score` for `pass`/`fail` rules.
+- **`request_id`** is stamped by the server (or taken from your
+  `X-Request-Id`); the same id links the response, the server logs, and the
+  Decisions-ledger evidence for this evaluation.
+
+Policies are evaluated **sequentially, in the order given**. Each policy is
+one server-side evaluation: billed per executed validator, one
+Decisions-ledger entry. Keep the list short (1–3 is typical: an org-wide
+baseline plus an app policy).
+
+---
+
+## Rule statuses and skip reasons
+
+Every rule in the breakdown ends in exactly one of four states:
+
+| `status` | Meaning | Effect on the decision | Billed |
+|---|---|---|---|
+| `pass` | Ran; score on the passing side of the rule's threshold | Counts as a pass | Yes |
+| `fail` | Ran and breached its threshold — or was force-failed by a [block override](#validator-overrides) | Blocks under `any`/`all`; a fail vote under `majority`; raises the confidence under `weighted`; a forced fail blocks under **every** strategy | Yes (forced fails: no) |
+| `skipped` | Never ran | **Neutral** under every strategy — casts no vote, contributes no weight | No |
+| `error` | Ran, but the validator errored | Blocks if the rule is marked `is_decider` (any strategy) and under `all` (an executed non-pass); otherwise recorded but neutral. Excluded from `weighted` math | — |
+
+`skipped_reason` says *why* a rule skipped (or why a fail was forced):
+
+| `skipped_reason` | On status | Meaning |
+|---|---|---|
+| `missing_input:<field,…>` | `skipped` | The request didn't carry the wire fields this validator needs — the list names exactly what to add |
+| `overrides_allow` | `skipped` | The policy's allow-override list exempts this validator |
+| `overrides_block` | `fail` | The policy's block-override list force-fails this validator — no score, `has_score: false`, blocks regardless of strategy |
+| `no_result` | `skipped` | The validator ran but returned no usable result (rare; treated as a skip) |
+
+Two invariants worth building on: **skips are never billed**, and **a skip
+can never flip a verdict to BLOCK** — only real fails (or decider errors, or
+forced fails) block.
+
+---
+
+## Reading policy verdicts
+
+```python
+from disseqt_sdk import any_blocking, is_blocking, is_async, parse_policy
+
+result = client.validate(req, policies=[P1, P2])
+
+# The one-line gate:
+if any_blocking(result):          # True if ANY policy said BLOCK
+    reject()
+
+# Per-policy:
+for envelope in result["policies"]:
+    decision = parse_policy(envelope)      # typed PolicyDecision | None
+    print(decision.policy_name, decision.decision, decision.enforcement)
+    for ruleset in decision.rulesets:
+        for rule in ruleset.rules:
+            print(" ", rule.validator, rule.status, rule.score, rule.threshold)
+```
+
+`any_blocking` accepts the whole envelope, a list of policy envelopes, or a
+single envelope — and returns `False` for anything else (including a classic
+validator response), so it's always safe to gate on. `is_blocking` /
+`is_async` / `parse_policy` work on individual envelopes as before.
+
+### The typed objects
+
+`parse_policy(envelope)` accepts the full DSQ envelope **or** the unwrapped
+`data` dict, and returns `None` when the payload carries no `policy_id`
+(e.g. an error envelope). Otherwise:
+
+**`PolicyDecision`**
+
+| Field | Type | Notes |
+|---|---|---|
+| `policy_id`, `policy_name`, `policy_version` | `str`, `str`, `int` | The published version that judged |
+| `decision` | `str` | `"BLOCK"` \| `"PASS"` |
+| `enforcement` | `str` | `"sync"` \| `"async"` |
+| `aggregation` | `str` | `"any"` \| `"all"` \| `"majority"` \| `"weighted"`; `""` on older servers |
+| `aggregate_score` | `float \| None` | Weighted only: the policy confidence. `None` otherwise, and on vacuous decisions |
+| `aggregate_threshold` | `float \| None` | Weighted only: `score >= threshold → BLOCK` |
+| `rulesets` | `list[PolicyRuleset]` | Policy-editor structure, in order |
+
+**`PolicyRuleset`**: `ruleset_id`, `ruleset_name`, `required`, `rules:
+list[PolicyRule]`.
+
+**`PolicyRule`**
+
+| Field | Type | Notes |
+|---|---|---|
+| `validator` | `str` | Wire name, e.g. `"prompt-injection"` |
+| `validator_type` | `str` | Domain, e.g. `"input-validation"`, `"mcp-security"` |
+| `status` | `str` | `pass` \| `fail` \| `skipped` \| `error` |
+| `score` | `float \| None` | **`None` whenever the wire `has_score` is false** — no fabricated zeros |
+| `threshold` | `float \| None` | The policy's per-rule threshold |
+| `polarity` | `str` | `"risk"` (high = bad) \| `"quality"` (high = good) |
+| `is_decider` | `bool` | An `error` on this rule blocks the policy |
+| `skipped_reason` | `str` | See the [vocabulary](#rule-statuses-and-skip-reasons); `""` when not applicable |
+
+---
+
+## Decision strategies
+
+The policy's **aggregation strategy** (dashboard → policy editor →
+Enforcement tab → *Advanced → Aggregation*) decides how per-rule outcomes
+combine into the BLOCK/PASS verdict:
+
+| Strategy | Verdict |
+|---|---|
+| `any` (default) | BLOCK if **any** rule failed |
+| `all` | "All must pass" — BLOCK if any executed rule failed **or errored** |
+| `majority` | BLOCK if failed rules are a strict majority of the pass/fail votes; ties PASS. (Accepted by the server; not yet selectable in the dashboard) |
+| `weighted` | BLOCK when the **policy confidence ≥ threshold** |
+
+Two short-circuits sit above every strategy: a
+[block override](#validator-overrides) forces BLOCK, and an `error` on an
+`is_decider` rule forces BLOCK.
+
+### `any` — one bad rule is enough
+
+The guardrail default. One `fail` anywhere → BLOCK. Per-rule thresholds are
+the whole story.
+
+### `all` — strict mode
+
+Everything that ran must have **passed**. A `fail` blocks; an executed
+`error` also blocks (it is not a pass) — making `all` the strategy that
+fails *closed* on validator errors. Skips stay neutral: partial input does
+not block.
+
+### `majority` — vote
+
+Only `pass` and `fail` rules vote. `fail` votes must be a **strict**
+majority: 2 fails of 3 votes blocks; 1 of 2 (a tie) passes; 1 of 3 passes —
+the same injection that blocks instantly under `any` can pass under
+`majority` if the other rules disagree. Skips and errors don't vote.
+
+### `weighted` — aggregated confidence
+
+The dashboard's "Weighted score": *Block when the policy confidence ≥
+threshold*. The math, exactly:
+
+1. **Per rule** (only rules that produced a score): badness = `score` for
+   `risk` polarity, `1 − score` for `quality` polarity.
+2. **Per ruleset**: badness = mean over its scored rules.
+3. **Policy confidence** = weighted mean of ruleset badness, using the
+   ruleset weights from the editor (it keeps them summing to 100%;
+   unset weights default to equal) — computed **only over rulesets that
+   scored at least one rule**, with the weights renormalized over those.
+4. `confidence >= weightedThreshold` → BLOCK. The comparison is `>=`:
+   landing exactly on the line blocks.
+
+Worked example — policy with two rulesets, threshold `0.5`:
+
+| Ruleset | Weight | Rule outcome | Badness |
+|---|---|---|---|
+| Injection | 0.8 | `prompt-injection` fail, score 0.99 | 0.99 |
+| Leakage | 0.2 | `data-leakage` pass, score 0.03 | 0.03 |
+
+Confidence = `0.8×0.99 + 0.2×0.03` = **0.798** ≥ 0.5 → **BLOCK**, with
+`aggregate_score: 0.798` in the envelope. Flip the weights (0.2/0.8) and the
+same scores give `0.222` → **PASS** — the weights, not the per-rule
+thresholds, decide.
+
+**Renormalization under partial input.** Send only a prompt to that
+flipped-weights policy (0.2 injection / 0.8 leakage) and the leakage ruleset
+skips (`missing_input:llm_output`). Naive math would give
+`0.2 × 0.99 = 0.198` → PASS — the skipped ruleset's weight silently
+deflating the verdict, an easy dodge for hostile input. Instead the skipped
+ruleset's weight is **renormalized away**: confidence is computed over what
+ran (`0.99`) → **BLOCK**. Partial input is judged on the rules it actually
+exercised, at their configured relative weights.
+
+Note the corollary: under `weighted`, a rule can fail its *own* threshold
+while the *policy* still passes (the aggregate stayed under the line), and
+vice versa. Check `decision` — the per-rule statuses are evidence, not the
+verdict.
+
+**Defensive degradations** (each logged server-side): an unknown
+`aggregation` value or a `weighted` policy with an invalid threshold
+(`≤ 0` or `> 1`) falls back to `any`; contributing rulesets that all carry
+weight 0 fall back to equal weights. `aggregation` in the envelope always
+names the strategy that **actually** decided.
+
+```python
+d = parse_policy(envelope)
+d.aggregation           # "any" | "all" | "majority" | "weighted"
+d.aggregate_score       # weighted only: policy confidence in [0, 1]
+d.aggregate_threshold   # weighted only: the blocking line (score >= thr -> BLOCK)
+```
+
+`aggregate_score` is `None` for non-weighted strategies and for vacuous
+weighted decisions (nothing scored); `aggregation` is empty on servers that
+predate enforcement.
+
+---
+
+## Input coverage: all, some, or none
+
+What happens when your input shape and the policy's rulesets don't fully
+overlap? Exactly three cases:
+
+| Your input covers… | What happens | Verdict driven by |
+|---|---|---|
+| **All rulesets** | Every rule executes | Real scores, full strategy semantics |
+| **Some rulesets** | Matching rules execute; the rest record `skipped (missing_input:…)` | Only the rules that ran — skips are neutral, weights renormalize |
+| **No rulesets** | Every rule skips | **PASS by vacuity**: nothing executed, nothing billed, `aggregate_score` absent |
+
+The sharp edge is the last row: a PASS where **zero rules ran** is weaker
+than it looks. `any_blocking` returns `False` (nothing blocked — true), but
+nothing was evaluated either. For hard security gates, detect it and fail
+closed:
+
+```python
+d = parse_policy(envelope)
+ran = [r for rs in d.rulesets for r in rs.rules if r.status != "skipped"]
+if not ran:
+    # The policy never actually judged this input — the input shape doesn't
+    # match any rule's required fields. Fix the request (see the discovery
+    # endpoint's required_input_fields), or treat as unevaluated:
+    raise PolicyNotApplicable(d.policy_name)
+```
+
+The Decisions ledger flags these too — the evidence drawer shows every rule
+as SKIPPED with its reason, under a "no rules executed" banner.
+
+---
+
+## Inputs: one bag, every validator
+
+A policy can span multiple validator domains. The request object's fields are
+serialized once and sent to **every** validator the policy lists — each reads
+the fields it needs:
+
+| Request field | Wire field | Read by |
+|---|---|---|
+| `prompt` | `llm_input_query` | input / security / RAG validators — plus the output validators that compare against the question (`answer_relevance`, `conceptual_similarity`, `factual_consistency`, `intent_compliance`, `child_safety`, …) |
+| `context` | `llm_input_context` | RAG / context-aware output validators |
+| `response` | `llm_output` | output / RAG / security validators |
+| `conversation_history`, `tool_calls`, `agent_responses`, `reference_data` | same names | agentic validators |
+
+The "read by" column is indicative — the authoritative per-validator list is
+the server's catalog, surfaced per policy as `required_input_fields` by the
+[discovery endpoint](#discovering-policies-from-code).
+
+If a validator's required field is missing, the server records that rule as
+`status: "skipped"` with `skipped_reason: "missing_input:<fields>"` — skips
+are **neutral** to the decision, never billed, and name exactly what to add.
+Supply the union of what your policies need; the
+[discovery endpoint](#discovering-policies-from-code) tells you the union
+up front via `required_input_fields`.
+
+Two serialization details that matter:
+
+- **Empty means absent.** Fields left as `None` are omitted from the wire,
+  and the server additionally treats empty / whitespace-only strings (and
+  empty lists) as absent — `prompt=""` makes the matching rules skip with
+  `missing_input:llm_input_query`, exactly like omitting it. A rule only
+  runs against a field with actual content.
+- **Extra fields are harmless.** Validators read only what they need — a bag
+  carrying `prompt` + `response` + agentic fields satisfies an input policy,
+  an output policy, and an agentic policy in the same call.
+
+---
+
+## Validator overrides
+
+A policy can carry two override lists, keyed by **validator name** (set at
+authoring time):
+
+- **Allow overrides** — the named validators are exempted: their rules record
+  `skipped (overrides_allow)`, neutral and unbilled.
+- **Block overrides** — the named validators are force-failed **without
+  running**: `status: "fail"`, `skipped_reason: "overrides_block"`,
+  `has_score: false`. A forced fail blocks the policy under **every**
+  strategy — it's the deny-overrides trump card, and no threshold change can
+  allow it.
+
+In the typed API a forced fail is a `PolicyRule` with `status == "fail"` and
+`score is None` — render it as a verdict, not a number.
 
 ---
 
 ## Sync vs. async policies
 
-A policy's **enforcement** (its `strategy.executionMode`) determines how the
-call behaves. It is **decoupled** from the BLOCK/PASS verdict.
+A policy's **enforcement** (execution mode, set at authoring time) decides
+what its envelope contains:
 
-### Sync (`enforcement: "sync"`)
+- **Sync** — validators run in-line; HTTP 200, `data.status: "completed"`,
+  `decision` + `rulesets` present. This is the guardrail case.
+- **Async** — the request is accepted (HTTP 202, `code: "DSQ-2020"`,
+  `data.status: "accepted"`), evaluation runs in the background, and the
+  verdict lands on the **Decisions** dashboard. The envelope carries **no
+  decision, no rulesets, and no `credit_details`** (billing happens
+  out-of-band when the background run completes) — `any_blocking` treats it
+  as not blocking. Use `is_async(envelope)` to detect it, and the envelope's
+  `request_id` to reconcile the eventual dashboard decision.
 
-The server runs every validator in-line and returns the full verdict — HTTP 200,
-`data.status="completed"`, `decision` and `rulesets` populated. This is the
-guardrail case: you get the decision back and branch on it.
-
-```python
-result = client.evaluate_policy(prompt=user_input)
-if is_blocking(result):
-    reject()
-```
-
-### Async (`enforcement: "async"`)
-
-The server **accepts** the request (HTTP **202**, `code="DSQ-2020"`,
-`data.status="accepted"`), runs the evaluation in the background, and publishes
-the verdict to the **Decisions** dashboard. The 202 response carries **no
-`decision` and no `rulesets`** — there is nothing to branch on synchronously.
-
-```python
-result = client.evaluate_policy(response=model_output)
-
-if is_async(result):
-    # Fire-and-forget: the verdict will appear on the dashboard, not here.
-    log.info("submitted for async evaluation", extra={
-        "request_id": result.get("request_id"),
-    })
-```
-
-Use async for monitoring/observability where you don't need to gate the response
-in real time. Use sync when the decision must block the request. **`is_blocking`
-safely returns `False` on an async 202** (there is no decision yet), so a guard
-written for sync won't accidentally block on an async policy — but you should
-choose the enforcement mode deliberately per use case.
+Mixing sync and async policies in one `policies=[...]` list is fine — each
+envelope self-describes. Use async for monitoring/audit policies where you
+want the ledger trail without paying the latency on the request path.
 
 ---
 
 ## Discovering policies from code
 
-You don't have to hard-code policy ids or guess which inputs a policy needs. Two
-read-only, API-key-authenticated endpoints let you discover both. They are not
-yet wrapped as SDK methods, so call them directly (they share the client's base
-URL and headers):
+Two read-only endpoints (same auth headers) expose the project's published
+policies:
 
 ```python
 import requests
 
-base = client.realtime_policy_base_url          # default: /realtime-validations gateway
+base = client.realtime_policy_base_url
 headers = {"X-API-Key": client.api_key, "X-Project-Id": client.project_id}
 
-# List every published policy for this project.
-policies = requests.get(f"{base}/api/v1/sdk/policies", headers=headers).json()
-for p in policies["data"]["policies"]:
+# All published policies:
+listing = requests.get(f"{base}/api/v1/sdk/policies", headers=headers).json()
+for p in listing["data"]["policies"]:
     print(p["policy_id"], p["name"], p["enforcement"], f'v{p["version"]}')
 
-# Inspect one policy — including the exact input fields it needs.
+# One policy — including the inputs it needs:
 detail = requests.get(f"{base}/api/v1/sdk/policies/{policy_id}", headers=headers).json()
-print("required inputs:", detail["data"]["required_input_fields"])
-# e.g. ["llm_input_query"] — pass these to evaluate_policy to avoid skips.
+print(detail["data"]["required_input_fields"])   # e.g. ["llm_input_query"]
 ```
 
-`required_input_fields` is the union of what the policy's **enabled** validators
-require, so you can assemble a correct `evaluate_policy(...)` call up front
-rather than discovering `skipped_reason` at runtime.
+`required_input_fields` is the union over the policy's **enabled** validators
+— build your request object from it and nothing will skip. It is computed
+from the same server-side catalog that decides `missing_input` skips, so
+what discovery promises is exactly what evaluation checks.
 
 ---
 
 ## Agentic SDK: policy on every span
 
-When you are tracing an agent with `disseqt_agentic_sdk`, attach a policy id and
-every span carries it as the `policy.id` resource attribute. The backend reads
-that attribute and evaluates the spans against the policy — results land on the
-dashboard.
-
-**Client default — one policy for the whole application:**
+Tracing an agent with `disseqt_agentic_sdk`? Attach a policy and every span
+carries it as the `policy.id` resource attribute; evaluation happens
+out-of-band and results land on the Decisions dashboard.
 
 ```python
 from disseqt_agentic_sdk import DisseqtAgenticClient, start_trace
 from disseqt_agentic_sdk.enums import SpanKind
 
 client = DisseqtAgenticClient(
-    api_key="…",
-    project_id="…",
-    service_name="my-agent-app",                 # also the app name on the dashboard
-    realtime_policy_id="994ad00e-…",             # stamped on every span
+    api_key="…", project_id="…",
+    service_name="my-agent-app",          # the app name on the ledger
+    realtime_policy_id="994ad00e-…",      # stamped on every span
 )
 
-with start_trace(client, "handle_user_request") as trace:
+with start_trace(client, "handle_request") as trace:
     with trace.start_span("llm_call", SpanKind.MODEL_EXEC) as span:
         span.set_model_info("claude-sonnet-5", "anthropic")
         ...
@@ -367,129 +623,175 @@ with start_trace(client, "handle_user_request") as trace:
 client.shutdown()
 ```
 
-**Per-trace override — different policies for different agents in one app:**
-
-```python
-# Client has a default policy; this trace runs under a different one.
-with start_trace(client, "risk_agent_run", realtime_policy_id="1268faa4-…") as trace:
-    ...
-```
-
-The transport groups buffered spans by effective policy id and emits **one POST
-per distinct policy**, so a client-default policy and a per-trace override are
-delivered correctly in the same session. `service_name` is required on the
-agentic client and doubles as the application name on the dashboard (the
-agentic equivalent of `application_name`).
+Per-trace override: `start_trace(client, "risk_agent", realtime_policy_id="1268faa4-…")`.
+The transport groups spans by effective policy id — one POST per distinct
+policy. Omit the policy id entirely and spans flow exactly as before.
 
 ---
 
 ## Error handling
 
-`evaluate_policy` raises two exception types. Handle them distinctly:
+Two different failure planes — don't conflate them:
+
+**Transport / HTTP errors** raise from the call:
 
 ```python
 from disseqt_sdk.client import HTTPError
 
 try:
-    result = client.evaluate_policy(prompt=user_input)
-except ValueError as e:
-    # Client-side guard: no policy id, no application_name, or no input fields.
-    # These are programming errors — fix the call, don't retry.
+    result = client.validate(req, policies=[P1])
+except ValueError:
+    # Client-side: invalid combination (see the rules under "The three
+    # call shapes") or an undecodable response body. Fix the call.
     raise
 except HTTPError as e:
     if e.status_code == 404:
         # Unknown, unpublished, or deleted policy id (DSQ-4040).
-        # Also returned for a malformed (non-UUID) id.
         alert_ops(f"policy not found: {e.response_body}")
     elif e.status_code == 401:
-        # Bad or missing API key / project id.
-        raise
+        raise                    # bad credentials
     elif e.status_code == 429:
-        # Rate limited — back off and retry (see Retry-After on the response).
-        backoff_and_retry()
+        backoff_and_retry()      # rate limited — honor Retry-After
     else:
-        # 5xx — transient server/upstream error. Retry with backoff.
-        backoff_and_retry()
+        backoff_and_retry()      # transient 5xx
 ```
 
-**Guarantees worth relying on:**
+Facts to rely on:
 
-- **Unknown / unpublished / deleted policy → HTTP 404** (`DSQ-4040`). Branch on
-  `e.status_code == 404` to tell "bad policy id" apart from a server fault.
-  *(Deployments older than production-monitoring v0.1.12 returned 500 for these;
-  a malformed non-UUID id may still surface as 500 on servers without the
-  realtime-policies-service malformed-id fix.)*
-- **Error bodies never leak internal detail** — upstream URLs and stack detail
-  are kept server-side; the `external` message is caller-safe.
-- **`ValueError` is always client-side** — it means the call itself was
-  malformed (missing policy id / `application_name` / input). No network request
-  was made.
+- **Unknown / unpublished / deleted policy → HTTP 404** (`DSQ-4040`); a
+  malformed (non-UUID) id also answers 404 on current servers.
+- **Sequential semantics on failure**: policies evaluate in order; if policy
+  N fails, policies 1..N-1 already ran (and were recorded server-side), the
+  validator (shape 2) already ran, and the exception propagates. Treat a
+  raised `HTTPError` as "gate undecided" and apply your fail-open/closed
+  stance.
+- Error bodies never leak internal service detail.
+
+**Validator errors inside a completed evaluation** do *not* raise — the call
+returns HTTP 200 and the affected rules carry `status: "error"`. The policy
+still decides: an error blocks if the rule is `is_decider` or the strategy
+is `all`; otherwise the errored rule is neutral (under `weighted` it simply
+doesn't contribute to the confidence). If every rule skipped or errored, the
+decision is a vacuous PASS with no `aggregate_score` — the
+[fail-closed pattern](#input-coverage-all-some-or-none) catches this case
+too if you filter on `status == "pass" or status == "fail"` instead of just
+excluding skips. Mark your load-bearing validators `is_decider` in the
+policy editor if an ML outage must close the gate.
+
+---
+
+## Billing, latency, and publish propagation
+
+- **Billing is per executed validator**, at the validator's pricing tier.
+  Skipped rules cost nothing; forced fails (`overrides_block`) never call
+  the ML service and cost nothing. Sync envelopes report the deduction in
+  `credit_details` (omitted when nothing executed); async policies bill
+  out-of-band on completion — the 202 carries no `credit_details`.
+- **Latency**: each policy in `policies=[...]` is one sequential HTTP call
+  from the SDK, and inside each call the policy's validators execute
+  together server-side. The `timeout` you set on `Client` applies **per
+  call** — budget end-to-end latency as roughly the sum over policies of
+  the slowest validator in each. Keep request-path policies sync and small;
+  push heavy audit bundles to async policies.
+- **Publish propagation**: the server caches policy definitions briefly
+  (with event-driven invalidation on publish). A newly published version is
+  typically live within seconds; worst case, one cache TTL (~60s). The
+  envelope's `policy_version` always tells you which version judged.
+
+---
+
+## The Decisions ledger
+
+Every evaluation — sync or async, BLOCK or PASS — lands as one row on
+**Dashboard → Realtime Policies → Decisions**, attributed to your
+`application_name`. Click a row and the **Violation evidence** drawer shows
+the decision the way the policy editor is structured:
+
+- per-**ruleset** groups, each with its verdict chip (FAILED / PASSED /
+  SKIPPED / ERROR);
+- per-rule rows: executed rules with score-vs-threshold detail, skipped
+  rules with their `missing_input:…` reason, forced fails as verdicts
+  without fabricated scores;
+- an explicit *"no rules executed — passed by default"* banner on vacuous
+  decisions;
+- for weighted policies, the tuning hints tell you which threshold change
+  would have flipped a threshold-driven fail.
+
+Use the ledger in reviews the way you'd use access logs: filter by
+application, policy, or verdict; the `request_id` in your logs matches the
+decision's evidence.
 
 ---
 
 ## Production patterns
 
-### Set the policy once, evaluate many times
-
-Configure the policy id and application name on the `Client`; omit them per call.
-A per-call `realtime_policy_id` always overrides the default when you need it.
+### Policy ids are configuration
 
 ```python
+POLICIES = [p for p in os.environ.get("DISSEQT_POLICIES", "").split(",") if p]
+
 client = Client(
-    project_id=PROJECT_ID,
-    api_key=API_KEY,
-    realtime_policy_id=POLICY_ID,
+    project_id=..., api_key=...,
     application_name="checkout-bot",
-    timeout=30,                       # seconds; raise for slow multi-validator policies
+    policies=POLICIES,        # [] → no default; populated → governed client
 )
 
-# Every call inherits the default policy + application_name.
-verdict = client.evaluate_policy(prompt=user_input)
+result = client.validate(req)                  # default applies
+result = client.validate(req, policies=[...])  # per-call override when needed
 ```
 
-### Fail open vs. fail closed
+Empty env → ungated code path; populated → every `validate()` on this client
+is governed. No deploy to change which policies apply.
 
-Decide explicitly what happens when evaluation itself fails (network, 5xx). For a
-hard guardrail, **fail closed** (treat an error as BLOCK); for advisory
-monitoring, **fail open**. Make it a conscious choice, not an accident of
-exception flow:
+### Fail open vs. fail closed
 
 ```python
 def is_allowed(user_input: str) -> bool:
     try:
-        return not is_blocking(client.evaluate_policy(prompt=user_input))
+        result = client.validate(
+            InputValidationRequest(prompt=user_input), policies=POLICIES
+        )
     except HTTPError as e:
-        if e.status_code == 404:
-            raise                      # misconfiguration — surface loudly
-        # Guardrail policy: an evaluation outage should not silently open the gate.
-        log.error("policy eval failed; failing closed", exc_info=True)
-        return False                   # fail closed
+        if e.status_code in (401, 404):
+            raise                 # misconfiguration — surface loudly
+        log.error("policy evaluation failed; failing closed", exc_info=True)
+        return False              # guardrail: an outage must not open the gate
+    return not any_blocking(result)
 ```
 
-### Correlate calls with `request_id`
+### Fail closed on unevaluated policies
 
-Pass your own `request_id` to tie a policy call to your request logs; the server
-echoes it back in the envelope. If you omit it, the server generates one — read
-it from `result["request_id"]`. For **async** policies this id is your only
-handle to reconcile the 202 with the verdict that later appears on the dashboard.
+For hard gates, a PASS with zero executed rules should not open the gate
+(see [Input coverage](#input-coverage-all-some-or-none)):
 
 ```python
-result = client.evaluate_policy(prompt=user_input, request_id=trace_id)
-assert result["request_id"] == trace_id
+from disseqt_sdk import parse_policy
+
+def gate(result) -> bool:
+    for envelope in result["policies"]:
+        d = parse_policy(envelope)
+        if d is None or d.decision == "BLOCK":
+            return False
+        if d.enforcement == "sync" and not any(
+            r.status in ("pass", "fail")
+            for rs in d.rulesets for r in rs.rules
+        ):
+            return False          # vacuous PASS — nothing actually judged
+    return True
 ```
 
-### Rate limits
+### Correlate with `request_id`
 
-The SDK policy endpoints are rate-limited per API key. On a `429`, the response
-carries `Retry-After` / `X-RateLimit-*` headers — honor them with backoff. High-
-throughput callers should batch or spread load rather than bursting.
+Each policy envelope carries a server-generated `request_id` — log it; for
+async policies it's the handle that matches the eventual Decisions-ledger
+entry.
 
-### Credits
+### Rate limits and cost
 
-Each **sync** evaluation costs one credit regardless of how many validators the
-policy runs; `result["data"]["credit_details"]` reports the deduction. Async 202
-responses do not carry `credit_details` (billing settles when the background
-evaluation completes).
+Endpoints are rate-limited per API key (`429` + `Retry-After`). Each policy
+in the list is a separate evaluation billed per executed validator — N
+policies ≈ N× the cost of one. Prefer one well-composed policy over many
+overlapping ones.
 
 ---
 
@@ -501,26 +803,11 @@ evaluation completes).
 |---|---|---|
 | `project_id` | — (required) | Sent as `X-Project-Id`. |
 | `api_key` | — (required) | Sent as `X-API-Key`. |
-| `realtime_policy_id` | `None` | Default policy for `evaluate_policy`. Per-call value wins. Setting it **requires** `application_name`. |
-| `application_name` | `None` | Required when a policy id is set; recorded on every decision. |
-| `realtime_policy_base_url` | `https://api.disseqt.ai/realtime-validations` | Base URL for the evaluate + discovery endpoints. The evaluate endpoint is served by production-monitoring next to the validators — **not** the `/realtime-policies` dashboard gateway. Override for local testing (e.g. `http://localhost:9010`). |
-| `timeout` | `30` | Request timeout in seconds. Raise for policies with many validators. |
+| `application_name` | `None` | **Required** to evaluate policies (client default or per-call); shown on the Decisions ledger. |
+| `policies` | `None` | Default policy-id list applied to **every** `validate()` call; per-call `policies=` overrides it. `[]` means "no default". Requires `application_name`. Copied defensively. |
+| `realtime_policy_base_url` | `https://api.disseqt.ai/realtime-validations` | Base URL for the policy evaluate + discovery endpoints (served by production-monitoring next to the validators). Override for local testing. |
+| `timeout` | `30` | Seconds, per HTTP call (each policy evaluation is one call). |
 
-`evaluate_policy(...)` raises `ValueError` (client-side) if you call it without a
-policy id, without an `application_name`, or with no input fields — see
-[Error handling](#error-handling).
-
----
-
-## Choosing an approach
-
-| You want to… | Use |
-|---|---|
-| Run **one validator** you configure in code | `client.validate(SomeValidator(...))` |
-| Run a **fixed bundle** of validators with weighted scoring | `client.validate(CompositeScoreEvaluator(...))` |
-| Run a **dashboard-managed policy** by id and get a BLOCK/PASS verdict | `client.evaluate_policy(...)` |
-| **Tag agent spans** with a policy for out-of-band evaluation | `DisseqtAgenticClient(realtime_policy_id=...)` |
-
-If the *set of validators and thresholds* should be owned by the dashboard and
-changeable without a code deploy, use a realtime policy. If it lives in your
-code, use `validate()`.
+Public helpers: `any_blocking(result)` for the envelope; `is_blocking` /
+`is_async` / `parse_policy` for individual policy envelopes — see
+[the typed objects](#the-typed-objects) for the full field reference.

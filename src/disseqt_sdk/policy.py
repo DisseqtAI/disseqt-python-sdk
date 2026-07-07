@@ -21,8 +21,8 @@ prod-monitoring wraps the verdict in the standard Disseqt DSQ envelope::
 
 The helpers in this module accept either the full envelope OR the
 ``data`` payload directly — _unwrap_envelope() handles both, so caller
-code is the same whether you pass ``client.evaluate_policy(...)``'s
-return value or ``response["data"]``.
+code is the same whether you pass an entry from
+``client.validate(...)["policies"]`` or its ``response["data"]``.
 
 Response fields inside ``data``
 -------------------------------
@@ -84,6 +84,16 @@ class PolicyDecision:
     policy_version: int
     decision: str  # BLOCK | PASS
     enforcement: str  # sync | async
+    #: Strategy that decided the verdict: any | all | majority | weighted.
+    #: Empty on responses from servers that predate aggregation enforcement.
+    aggregation: str = ""
+    #: Weighted-strategy policy confidence in [0, 1] — the ruleset-weighted
+    #: badness the verdict was compared against. None for non-weighted
+    #: strategies and for vacuous decisions where no rule produced a score.
+    aggregate_score: float | None = None
+    #: The blocking line for the weighted strategy: the decision is BLOCK
+    #: when ``aggregate_score >= aggregate_threshold``.
+    aggregate_threshold: float | None = None
     rulesets: list[PolicyRuleset] = field(default_factory=list)
 
 
@@ -145,6 +155,9 @@ def parse(response: dict[str, Any]) -> PolicyDecision | None:
         policy_version=int(payload.get("policy_version", 0)),
         decision=str(payload.get("decision", "")),
         enforcement=str(payload.get("enforcement", "")),
+        aggregation=str(payload.get("aggregation", "")),
+        aggregate_score=_maybe_float(payload.get("aggregate_score")),
+        aggregate_threshold=_maybe_float(payload.get("aggregate_threshold")),
         rulesets=rulesets,
     )
 
@@ -172,6 +185,32 @@ def is_async(response: dict[str, Any]) -> bool:
     """
     payload = _unwrap_envelope(response)
     return str(payload.get("enforcement", "")) == ENFORCEMENT_ASYNC
+
+
+def any_blocking(result: Any) -> bool:
+    """Return True when any policy decision in ``result`` is BLOCK.
+
+    Accepts, in order of preference:
+
+    - the dict returned by ``client.validate(..., policies=[...])``
+      (reads its ``"policies"`` list),
+    - a plain list of policy envelopes,
+    - a single policy envelope (falls back to :func:`is_blocking`).
+
+    Anything else — including a classic validator response — returns
+    False, so it is always safe to gate on::
+
+        result = client.validate(req, policies=[...])
+        if any_blocking(result):
+            ...  # at least one policy said BLOCK
+    """
+    if isinstance(result, dict) and isinstance(result.get("policies"), list):
+        return any(is_blocking(p) for p in result["policies"] if isinstance(p, dict))
+    if isinstance(result, list):
+        return any(is_blocking(p) for p in result if isinstance(p, dict))
+    if isinstance(result, dict):
+        return is_blocking(result)
+    return False
 
 
 def _maybe_float(v: Any) -> float | None:
