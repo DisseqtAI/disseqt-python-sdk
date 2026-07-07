@@ -37,13 +37,17 @@ P2_PASS = {
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
 
-def client(app_name: str | None = "policies-test") -> Client:
+def client(
+    app_name: str | None = "policies-test",
+    default_policies: list[str] | None = None,
+) -> Client:
     return Client(
         project_id="proj",
         api_key="key",
         base_url=BASE,
         realtime_policy_base_url=BASE,
         application_name=app_name,
+        policies=default_policies,
     )
 
 
@@ -174,6 +178,89 @@ class TestErrorPropagation:
         with pytest.raises(HTTPError) as exc_info:
             client().validate(toxicity(), policies=[P1, P2])
         assert exc_info.value.status_code == 500
+
+
+class TestClientDefaultPolicies:
+    """Client(policies=[...]) is a default; per-call policies= overrides it."""
+
+    def test_constructor_requires_application_name(self):
+        with pytest.raises(ValueError, match="application_name is required"):
+            client(app_name=None, default_policies=[P1])
+
+    def test_constructor_rejects_blank_ids(self):
+        with pytest.raises(ValueError, match="policy-id strings"):
+            client(default_policies=[P1, "  "])
+
+    def test_constructor_empty_list_means_no_default(self, requests_mock):
+        post = requests_mock.post(TOX_URL, json=VALIDATOR_RESPONSE)
+        c = client(default_policies=[])
+        assert c.policies is None
+        result = c.validate(toxicity())  # classic shape 1, no envelope
+        assert post.called
+        assert "policies" not in result
+
+    def test_defensive_copy(self):
+        ids = [P1]
+        c = client(default_policies=ids)
+        ids.append("mutated-after-construction")
+        assert c.policies == [P1]
+
+    def test_default_applies_to_validator_calls(self, requests_mock):
+        tox = requests_mock.post(TOX_URL, json=VALIDATOR_RESPONSE)
+        pol = requests_mock.post(P1_URL, json=P1_BLOCK)
+        result = client(default_policies=[P1]).validate(toxicity())
+        assert tox.called and pol.called
+        assert result["validation"] is not None
+        assert parse_policy(result["policies"][0]).decision == "BLOCK"
+
+    def test_default_applies_to_bare_requests(self, requests_mock):
+        pol = requests_mock.post(P1_URL, json=P1_BLOCK)
+        result = client(default_policies=[P1]).validate(InputValidationRequest(prompt="hello"))
+        assert pol.called
+        assert result["validation"] is None
+        assert any_blocking(result)
+
+    def test_per_call_overrides_default(self, requests_mock):
+        p1 = requests_mock.post(P1_URL, json=P1_BLOCK)
+        p2 = requests_mock.post(P2_URL, json=P2_PASS)
+        result = client(default_policies=[P1]).validate(
+            InputValidationRequest(prompt="hello"), policies=[P2]
+        )
+        assert p2.called and not p1.called  # override wins, default untouched
+        assert parse_policy(result["policies"][0]).policy_id == P2
+
+    def test_explicit_empty_list_still_raises_despite_default(self):
+        # An accidentally-empty per-call list must fail loudly, never
+        # silently fall back to the default (or ungate the call).
+        with pytest.raises(ValueError, match="non-empty"):
+            client(default_policies=[P1]).validate(
+                InputValidationRequest(prompt="hello"), policies=[]
+            )
+
+    def test_default_steps_aside_for_themes_wrapper(self, requests_mock):
+        from disseqt_sdk.validators.themes_classifier import ClassifyValidator
+
+        classify = ClassifyValidator(data=ThemesClassifierRequest(text="hello"))
+        domain = getattr(classify.domain, "value", classify.domain)
+        themes_url = f"{BASE}/api/v1/sdk/validators/{domain}/{classify.slug}"
+        themes = requests_mock.post(themes_url, json={"success": True})
+        pol = requests_mock.post(P1_URL, json=P1_BLOCK)
+        c = client(default_policies=[P1])
+        c.validate(classify)
+        assert themes.called
+        assert not pol.called  # incompatible request: default not applied
+
+    def test_bare_themes_request_with_default_raises(self):
+        # The default steps aside for themes/composite, after which a bare
+        # request has no policies to run under — same loud error as ever.
+        with pytest.raises(ValueError, match="bare request|policies"):
+            client(default_policies=[P1]).validate(ThemesClassifierRequest(text="x"))
+
+    def test_no_default_no_per_call_is_classic(self, requests_mock):
+        post = requests_mock.post(TOX_URL, json=VALIDATOR_RESPONSE)
+        result = client().validate(toxicity())
+        assert post.called
+        assert "policies" not in result
 
 
 class TestAnyBlockingHelper:

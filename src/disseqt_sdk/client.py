@@ -106,6 +106,7 @@ class Client:
         timeout: int = 30,
         application_name: str | None = None,
         realtime_policy_base_url: str = "https://api.disseqt.ai/realtime-validations",
+        policies: list[str] | None = None,
     ) -> None:
         """Initialize the Disseqt SDK client.
 
@@ -117,7 +118,8 @@ class Client:
             timeout: Request timeout in seconds
             application_name: Logical name of the calling application
                 (e.g. ``"checkout-bot"``). REQUIRED to evaluate policies
-                (``validate(..., policies=[...])``) — the
+                (a client-level ``policies`` default or per-call
+                ``validate(..., policies=[...])``) — the
                 ``policy.validation.result.v1`` ledger uses this to
                 show which application produced each decision. Mirrors
                 ``service_name`` on :class:`DisseqtAgenticClient`.
@@ -132,14 +134,48 @@ class Client:
                 routed independently — override for local testing
                 (e.g. ``http://localhost:9010``) without disturbing
                 ``base_url`` callers.
+            policies: Optional default list of published policy ids.
+                When set, EVERY ``validate()`` call evaluates these
+                policies unless the call passes its own ``policies=``
+                (per-call always wins; there is no per-call opt-out —
+                use a second Client for ungoverned paths). Composite-
+                score and themes-classifier requests are incompatible
+                with policies and run classically, without the default.
+                An empty list means "no default", so env-driven config
+                degrades naturally::
 
+                    ids = [p for p in os.environ.get("DISSEQT_POLICIES", "").split(",") if p]
+                    client = Client(..., application_name="checkout-bot", policies=ids)
+
+                The list is copied defensively; later mutation of the
+                caller's list does not affect the client.
+
+        Raises:
+            ValueError: When ``policies`` is set without an
+                ``application_name``, or contains a blank / non-string
+                entry.
         """
+        default_policies: list[str] | None = None
+        if policies:
+            default_policies = list(policies)
+            if not all(isinstance(p, str) and p.strip() for p in default_policies):
+                raise ValueError(
+                    "Client(policies=...) must be a list of policy-id strings "
+                    f"(got {default_policies!r})"
+                )
+            if not (application_name and application_name.strip()):
+                raise ValueError(
+                    "application_name is required when Client(policies=...) is "
+                    "set — the Decisions ledger attributes each decision to "
+                    "the calling application"
+                )
         self.project_id = project_id
         self.api_key = api_key
         self.base_url = base_url
         self.timeout = timeout
         self.application_name = application_name
         self.realtime_policy_base_url = realtime_policy_base_url
+        self.policies = default_policies
 
     def _build_headers(self) -> dict[str, str]:
         """Build HTTP headers for API requests.
@@ -204,29 +240,60 @@ class Client:
         of fields the policies need (see the policy detail endpoint's
         ``required_input_fields``).
 
-        Without ``policies``, behavior is exactly as before.
+        **Client-level default.** A client constructed with
+        ``Client(policies=[...])`` applies that list to every ``validate()``
+        call that doesn't pass its own ``policies=`` — the per-call value
+        always overrides the client default. Composite-score and
+        themes-classifier requests are incompatible with policies; they run
+        classically and the client default steps aside (logged). Passing
+        ``policies=[]`` explicitly is always an error — an accidentally
+        empty list must fail loudly rather than silently ungate the call.
+
+        Without ``policies`` anywhere, behavior is exactly as before.
 
         Args:
             request: Validator instance, or a bare request object when
-                ``policies`` is given.
+                policies apply (per-call or client default).
             policies: Optional list of published policy ids to evaluate
-                the input against. Composite-score and themes-classifier
-                requests cannot be combined with ``policies``.
+                the input against; overrides the client-level default.
+                Composite-score and themes-classifier requests cannot be
+                combined with ``policies``.
 
         Returns:
             The validation response — or the ``{"validation", "policies"}``
-            envelope when ``policies`` is passed.
+            envelope when policies apply.
 
         Raises:
             HTTPError: If any API request fails (unknown/unpublished
                 policy answers 404 DSQ-4040).
             ValueError: On invalid combinations (bare request without
-                ``policies``, empty ``policies`` list, missing
-                ``application_name``, composite/themes with ``policies``)
-                or an undecodable response body.
+                policies anywhere, empty ``policies`` list, missing
+                ``application_name``, explicit ``policies`` with
+                composite/themes) or an undecodable response body.
         """
         if policies is not None:
             return self._validate_with_policies(request, policies)
+        if self.policies is not None:
+            # Composite/themes can't be policy-evaluated. An explicit
+            # per-call combination raises (caller error), but a client-wide
+            # default must not make those endpoints unusable — it steps
+            # aside for them, visibly in the logs.
+            if isinstance(
+                request,
+                (
+                    ThemesClassifierValidator,
+                    CompositeScoreEvaluator,
+                    ThemesClassifierRequest,
+                    CompositeScoreRequest,
+                ),
+            ):
+                logger.info(
+                    "validation.policies.default_skipped",
+                    reason="composite/themes requests are never policy-evaluated",
+                    request_type=type(request).__name__,
+                )
+            else:
+                return self._validate_with_policies(request, self.policies)
         if not isinstance(
             request, (BaseValidator, ThemesClassifierValidator, CompositeScoreEvaluator)
         ):

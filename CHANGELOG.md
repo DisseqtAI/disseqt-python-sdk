@@ -27,6 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`any_blocking(result)`** helper — True when any policy decision in
   the envelope (or a list of envelopes, or a single envelope) is BLOCK.
   Safe on classic validator responses (returns False).
+- **`Client(policies=[...])`** — a client-level default policy list.
+  Every `validate()` call evaluates it unless the call passes its own
+  `policies=` (per-call always overrides). `[]` at construction means
+  "no default"; an explicit per-call `policies=[]` still raises so an
+  accidentally empty list fails loudly instead of silently ungating.
+  Composite-score / themes-classifier requests run classically — the
+  default steps aside for them (logged). Requires `application_name`.
 - **`PolicyDecision.aggregation` / `.aggregate_score` / `.aggregate_threshold`**
   — `parse_policy` now surfaces the decision strategy that produced the
   verdict (`any | all | majority | weighted`) and, for weighted policies,

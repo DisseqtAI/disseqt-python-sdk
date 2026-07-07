@@ -143,6 +143,39 @@ call): a bare request without `policies`; an empty `policies` list or blank
 ids; `policies` combined with composite-score or themes-classifier requests;
 missing `application_name`; a request that serializes to no input fields.
 
+### Client-level default: a governed client
+
+Set the list once on the client and every `validate()` call is policy-checked
+— the per-call `policies=` acts as an **override** when present:
+
+```python
+client = Client(
+    project_id=..., api_key=...,
+    application_name="checkout-bot",
+    policies=["994ad00e-…"],              # the governed default
+)
+
+client.validate(toxicity_validator)        # shape 2: validator + default policies
+client.validate(InputValidationRequest(prompt=p))   # shape 3 via the default
+client.validate(req, policies=["1268faa4-…"])       # override: only this list runs
+```
+
+Semantics worth knowing:
+
+- **Per-call always wins** — the override replaces the default, it doesn't
+  append to it. There is no per-call opt-out; construct a second `Client`
+  for deliberately ungoverned paths.
+- **`policies=[]` is always an error**, with or without a default — an
+  accidentally empty list must fail loudly rather than silently ungate the
+  call. `Client(policies=[])` at construction, by contrast, just means "no
+  default", so env-driven lists degrade naturally.
+- **Composite-score and themes-classifier requests** can't be policy-
+  evaluated; on a governed client they run classically and the default
+  steps aside (logged as `validation.policies.default_skipped`). Passing
+  `policies` to them *explicitly* still raises.
+- The list is **copied at construction** — mutating your original list
+  later doesn't change the client.
+
 ---
 
 ## The response envelope
@@ -697,11 +730,18 @@ decision's evidence.
 ```python
 POLICIES = [p for p in os.environ.get("DISSEQT_POLICIES", "").split(",") if p]
 
-result = client.validate(req, policies=POLICIES) if POLICIES else client.validate(validator)
+client = Client(
+    project_id=..., api_key=...,
+    application_name="checkout-bot",
+    policies=POLICIES,        # [] → no default; populated → governed client
+)
+
+result = client.validate(req)                  # default applies
+result = client.validate(req, policies=[...])  # per-call override when needed
 ```
 
-Empty env → ungated code path; populated → governed. No deploy to change
-which policies apply.
+Empty env → ungated code path; populated → every `validate()` on this client
+is governed. No deploy to change which policies apply.
 
 ### Fail open vs. fail closed
 
@@ -763,7 +803,8 @@ overlapping ones.
 |---|---|---|
 | `project_id` | — (required) | Sent as `X-Project-Id`. |
 | `api_key` | — (required) | Sent as `X-API-Key`. |
-| `application_name` | `None` | **Required** for `policies=[...]`; shown on the Decisions ledger. |
+| `application_name` | `None` | **Required** to evaluate policies (client default or per-call); shown on the Decisions ledger. |
+| `policies` | `None` | Default policy-id list applied to **every** `validate()` call; per-call `policies=` overrides it. `[]` means "no default". Requires `application_name`. Copied defensively. |
 | `realtime_policy_base_url` | `https://api.disseqt.ai/realtime-validations` | Base URL for the policy evaluate + discovery endpoints (served by production-monitoring next to the validators). Override for local testing. |
 | `timeout` | `30` | Seconds, per HTTP call (each policy evaluation is one call). |
 
