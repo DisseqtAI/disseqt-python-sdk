@@ -25,6 +25,7 @@ def trace_llm_call(
     output_tokens: int | None = None,
     temperature: float | None = None,
     max_tokens: int | None = None,
+    realtime_policy_id: str | None = None,
     **kwargs,
 ):
     """
@@ -41,6 +42,9 @@ def trace_llm_call(
         output_tokens: Output token count
         temperature: Temperature setting
         max_tokens: Max tokens setting
+        realtime_policy_id: Optional per-span policy override. When set,
+            this span is validated against this policy instead of the
+            trace-level or client-level default.
         **kwargs: Additional attributes
 
     Returns:
@@ -57,7 +61,7 @@ def trace_llm_call(
         ...         output_tokens=50
         ...     )
     """
-    span = trace.start_span(name, SpanKind.MODEL_EXEC)
+    span = trace.start_span(name, SpanKind.MODEL_EXEC, realtime_policy_id=realtime_policy_id)
 
     span.set_model_info(model_name, provider)
     span.set_operation(AgenticOperation.CHAT)
@@ -87,6 +91,7 @@ def trace_agent_action(
     agent_id: str | None = None,
     agent_version: str | None = None,
     operation: str | None = None,
+    realtime_policy_id: str | None = None,
     **kwargs,
 ):
     """
@@ -99,6 +104,9 @@ def trace_agent_action(
         agent_id: Optional agent ID
         agent_version: Optional agent version
         operation: Optional operation name
+        realtime_policy_id: Optional per-span policy override. When set,
+            this span is validated against this policy instead of the
+            trace-level or client-level default.
         **kwargs: Additional attributes
 
     Returns:
@@ -113,7 +121,7 @@ def trace_agent_action(
         ...         agent_id="agent_001"
         ...     )
     """
-    span = trace.start_span(name, SpanKind.AGENT_EXEC)
+    span = trace.start_span(name, SpanKind.AGENT_EXEC, realtime_policy_id=realtime_policy_id)
 
     span.set_agent_info(agent_name, agent_id, agent_version)
     if operation:
@@ -132,6 +140,7 @@ def trace_tool_call(
     tool_name: str,
     call_id: str | None = None,
     tool_definitions: list[dict[str, Any]] | None = None,
+    realtime_policy_id: str | None = None,
     **kwargs,
 ):
     """
@@ -143,6 +152,9 @@ def trace_tool_call(
         tool_name: Tool name
         call_id: Optional call ID
         tool_definitions: Optional tool definitions
+        realtime_policy_id: Optional per-span policy override. When set,
+            this span is validated against this policy instead of the
+            trace-level or client-level default.
         **kwargs: Additional attributes
 
     Returns:
@@ -157,7 +169,7 @@ def trace_tool_call(
         ...         call_id="call_001"
         ...     )
     """
-    span = trace.start_span(name, SpanKind.TOOL_EXEC)
+    span = trace.start_span(name, SpanKind.TOOL_EXEC, realtime_policy_id=realtime_policy_id)
 
     span.set_tool_info(tool_name, call_id)
     if tool_definitions:
@@ -175,6 +187,8 @@ def trace_function(
     client: DisseqtAgenticClient,
     name: str | None = None,
     kind: SpanKind | str = SpanKind.INTERNAL,
+    realtime_policy_id: str | None = None,
+    trace_realtime_policy_id: str | None = None,
     **span_attrs,
 ):
     """
@@ -184,6 +198,13 @@ def trace_function(
         client: DisseqtAgenticClient instance (required)
         name: Optional span name (defaults to function name)
         kind: Span kind (default: INTERNAL). Can be a SpanKind enum value or custom string.
+        realtime_policy_id: Optional per-span policy override applied to the
+            wrapped function's span. When set, this span is validated against
+            this policy instead of the trace-level or client-level default.
+        trace_realtime_policy_id: Optional per-trace policy override applied to
+            the auto-created trace. Use this when you want the whole trace
+            (including any child spans opened inside the wrapped function) to
+            run under a specific policy.
         **span_attrs: Additional span attributes
 
     Example:
@@ -198,6 +219,10 @@ def trace_function(
 
         >>> @trace_function(client, kind="CUSTOM_OPERATION")
         ... def custom_function():
+        ...     return "result"
+
+        >>> @trace_function(client, realtime_policy_id="policy-uuid-for-this-span")
+        ... def guarded_function():
         ...     return "result"
     """
 
@@ -218,8 +243,14 @@ def trace_function(
             else:
                 span_kind = kind
 
-            with start_trace(client, f"{span_name}_trace") as trace:
-                with trace.start_span(span_name, span_kind) as span:
+            with start_trace(
+                client,
+                f"{span_name}_trace",
+                realtime_policy_id=trace_realtime_policy_id,
+            ) as trace:
+                with trace.start_span(
+                    span_name, span_kind, realtime_policy_id=realtime_policy_id
+                ) as span:
                     # Set any provided attributes
                     for key, value in span_attrs.items():
                         span.set_attribute(key, value)
