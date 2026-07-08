@@ -101,6 +101,7 @@ class DisseqtTrace:
         kind: SpanKind | str,
         span_id: str | None = None,
         parent_span_id: str | None = None,
+        realtime_policy_id: str | None = None,
     ) -> DisseqtSpan:
         """
         Start a new span in this trace.
@@ -112,6 +113,13 @@ class DisseqtTrace:
                   Example: SpanKind.MODEL_EXEC or "CUSTOM_OPERATION"
             span_id: Optional span ID (auto-generated if not provided)
             parent_span_id: Optional parent span ID (auto-detected from context if not provided)
+            realtime_policy_id: Per-span policy override. When set, this span
+                is sent to llm-monitoring with ``resource.attributes["policy.id"]``
+                = this value, regardless of the trace's or client's default policy.
+                The transport groups spans by effective policy_id and emits one
+                POST per group, so mixing per-span policies inside a trace is
+                supported. When omitted, falls back to the trace-level
+                ``realtime_policy_id`` (or the client default).
 
         Returns:
             DisseqtSpan: The created span
@@ -130,6 +138,11 @@ class DisseqtTrace:
                 # Custom span kind - keep as string
                 kind = kind
 
+        # Span-level override beats trace-level default.
+        effective_policy_id = (
+            realtime_policy_id if realtime_policy_id is not None else self.realtime_policy_id
+        )
+
         span = DisseqtSpan(
             trace_id=self.trace_id,
             name=name,
@@ -141,7 +154,7 @@ class DisseqtTrace:
             service_name=self.service_name,
             service_version=self.service_version,
             environment=self.environment,
-            realtime_policy_id=self.realtime_policy_id,
+            realtime_policy_id=effective_policy_id,
             client=self._client,  # Pass client for incremental sending
         )
         logger.debug(f"Created span: {name} ({kind}) in trace {self.trace_id}")

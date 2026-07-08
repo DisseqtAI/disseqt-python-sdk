@@ -14,6 +14,8 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 from disseqt_agentic_sdk import DisseqtAgenticClient
+from disseqt_agentic_sdk.enums import SpanKind
+from disseqt_agentic_sdk.trace import DisseqtTrace
 from disseqt_agentic_sdk.transport import HTTPTransport
 
 
@@ -292,3 +294,160 @@ class TestNoPolicyAnywhere:
         assert attrs["api.key"] == "k"
         # But there's no policy.id — explicit non-presence.
         assert "policy.id" not in attrs
+
+
+class TestPerSpanPolicyOverride:
+    """Per-span realtime_policy_id override.
+
+    Precedence: span override → trace override → client default. A single
+    trace can carry multiple policies by setting realtime_policy_id on
+    individual start_span() calls; the transport buckets by effective
+    policy_id and emits one POST per distinct policy.
+    """
+
+    def test_start_span_override_beats_trace_default(self):
+        # Trace default is TRACE-P; the span asks for SPAN-P explicitly.
+        trace = DisseqtTrace(name="t", realtime_policy_id="TRACE-P")
+        span = trace.start_span("s1", SpanKind.INTERNAL, realtime_policy_id="SPAN-P")
+        assert span.realtime_policy_id == "SPAN-P"
+
+    def test_start_span_without_override_inherits_trace_default(self):
+        trace = DisseqtTrace(name="t", realtime_policy_id="TRACE-P")
+        span = trace.start_span("s1", SpanKind.INTERNAL)
+        assert span.realtime_policy_id == "TRACE-P"
+
+    def test_start_span_override_empty_string_is_no_policy(self):
+        # Explicit empty string means "no policy for this span", even
+        # when the trace has a default. Lets callers opt a specific
+        # span out of policy evaluation.
+        trace = DisseqtTrace(name="t", realtime_policy_id="TRACE-P")
+        span = trace.start_span("s1", SpanKind.INTERNAL, realtime_policy_id="")
+        assert span.realtime_policy_id == ""
+
+    def test_start_span_override_with_no_trace_default(self):
+        trace = DisseqtTrace(name="t")
+        span = trace.start_span("s1", SpanKind.INTERNAL, realtime_policy_id="SPAN-P")
+        assert span.realtime_policy_id == "SPAN-P"
+
+    def test_mixed_span_policies_in_one_trace_produce_separate_posts(self):
+        # A trace with default TRACE-P, one span overriding to SPAN-P,
+        # two spans inheriting. Transport must send 2 POSTs — one per
+        # distinct policy_id — each with the right resource.policy.id.
+        trace = DisseqtTrace(
+            name="t",
+            org_id="",
+            project_id="p",
+            service_name="svc",
+            environment="test",
+            realtime_policy_id="TRACE-P",
+        )
+        trace.start_span("plan", SpanKind.AGENT_EXEC).end()
+        trace.start_span("critical", SpanKind.MODEL_EXEC, realtime_policy_id="SPAN-P").end()
+        trace.start_span("tool", SpanKind.TOOL_EXEC).end()
+        trace.end()
+
+        enriched = trace.to_enriched_spans()
+
+        transport = HTTPTransport(endpoint="http://localhost/traces", api_key="k")
+        posts: list[dict] = []
+
+        def fake_post(url, json=None, headers=None, **kwargs):
+            posts.append(json)
+            resp = MagicMock()
+            resp.raise_for_status.return_value = None
+            return resp
+
+        transport.session.post = fake_post  # type: ignore[assignment]
+        ok = transport.send_spans(enriched)
+
+        assert ok is True
+        assert len(posts) == 2
+
+        by_policy = {p["resource"]["attributes"]["policy.id"]: p for p in posts}
+        assert set(by_policy) == {"TRACE-P", "SPAN-P"}
+        # 2 spans landed in the TRACE-P bucket, 1 in SPAN-P.
+        assert sum(len(t["spans"]) for t in by_policy["TRACE-P"]["traces"]) == 2
+        assert sum(len(t["spans"]) for t in by_policy["SPAN-P"]["traces"]) == 1
+
+    def test_span_override_beats_client_default_via_transport(self):
+        # No per-trace override, client default is CLIENT-P, span
+        # overrides to SPAN-P. Transport should stamp SPAN-P.
+        trace = DisseqtTrace(name="t", project_id="p", service_name="svc")
+        trace.start_span("s1", SpanKind.INTERNAL, realtime_policy_id="SPAN-P").end()
+        trace.end()
+
+        transport = HTTPTransport(
+            endpoint="http://localhost/traces",
+            api_key="k",
+            realtime_policy_id="CLIENT-P",
+        )
+        posts: list[dict] = []
+
+        def fake_post(url, json=None, headers=None, **kwargs):
+            posts.append(json)
+            resp = MagicMock()
+            resp.raise_for_status.return_value = None
+            return resp
+
+        transport.session.post = fake_post  # type: ignore[assignment]
+        transport.send_spans(trace.to_enriched_spans())
+
+        assert len(posts) == 1
+        assert posts[0]["resource"]["attributes"]["policy.id"] == "SPAN-P"
+
+
+class TestHelpersForwardSpanPolicy:
+    """The trace_llm_call / trace_agent_action / trace_tool_call helpers
+    accept realtime_policy_id and thread it into the created span."""
+
+    def test_trace_llm_call_forwards_policy(self):
+        from disseqt_agentic_sdk.api.helpers import trace_llm_call
+
+        trace = DisseqtTrace(name="t", realtime_policy_id="TRACE-P")
+        span = trace_llm_call(
+            trace,
+            name="chat",
+            model_name="gpt-4",
+            provider="openai",
+            realtime_policy_id="SPAN-P",
+        )
+        assert span.realtime_policy_id == "SPAN-P"
+
+    def test_trace_agent_action_forwards_policy(self):
+        from disseqt_agentic_sdk.api.helpers import trace_agent_action
+
+        trace = DisseqtTrace(name="t", realtime_policy_id="TRACE-P")
+        span = trace_agent_action(
+            trace,
+            name="plan",
+            agent_name="a",
+            realtime_policy_id="SPAN-P",
+        )
+        assert span.realtime_policy_id == "SPAN-P"
+
+    def test_trace_tool_call_forwards_policy(self):
+        from disseqt_agentic_sdk.api.helpers import trace_tool_call
+
+        trace = DisseqtTrace(name="t", realtime_policy_id="TRACE-P")
+        span = trace_tool_call(
+            trace,
+            name="weather",
+            tool_name="get_weather",
+            realtime_policy_id="SPAN-P",
+        )
+        assert span.realtime_policy_id == "SPAN-P"
+
+    def test_helpers_without_policy_inherit_trace_default(self):
+        from disseqt_agentic_sdk.api.helpers import (
+            trace_agent_action,
+            trace_llm_call,
+            trace_tool_call,
+        )
+
+        trace = DisseqtTrace(name="t", realtime_policy_id="TRACE-P")
+        s1 = trace_llm_call(trace, name="chat", model_name="gpt-4", provider="openai")
+        s2 = trace_agent_action(trace, name="plan", agent_name="a")
+        s3 = trace_tool_call(trace, name="weather", tool_name="get_weather")
+        assert s1.realtime_policy_id == "TRACE-P"
+        assert s2.realtime_policy_id == "TRACE-P"
+        assert s3.realtime_policy_id == "TRACE-P"
