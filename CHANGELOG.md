@@ -42,6 +42,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   aggregation enforcement. Documented in
   [docs/realtime-policies.md → Decision strategies](docs/realtime-policies.md#decision-strategies),
   including the skip-renormalization contract for partially-matched inputs.
+- **Per-span / per-trace policy override (agentic SDK)** — a
+  `realtime_policy_id` argument on `DisseqtTrace.start_span(...)`,
+  `start_trace(...)`, and the `trace_llm_call` / `trace_tool_call` /
+  `trace_agent_action` helpers, plus `realtime_policy_id` (span) and
+  `trace_realtime_policy_id` (trace) on the `@trace_function` decorator.
+  Precedence is **span override → trace override → client default → no
+  policy**; `realtime_policy_id=""` opts a specific span out of evaluation.
+  The transport buckets spans by effective policy id — one POST per
+  distinct policy in a batch.
+- **`AgenticBehaviourRequest` now carries the LLM text fields too** —
+  `prompt` / `context` / `response` (serialized to `llm_input_query` /
+  `llm_input_context` / `llm_output`) alongside the agentic arrays
+  (`conversation_history`, `tool_calls`, `agent_responses`,
+  `reference_data`). This makes it the single carrier for a policy that
+  mixes text-domain and agentic validators in one `validate(...,
+  policies=[...])` call.
 
 ### Removed
 - **`Client.evaluate_policy()`** and the **`Client(realtime_policy_id=...)`**
