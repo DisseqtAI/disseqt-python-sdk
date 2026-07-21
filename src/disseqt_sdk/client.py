@@ -352,9 +352,16 @@ class Client:
 
         # Both shapes carry the input on an object that knows its wire
         # form. A validator's payload already contains the renamed
-        # input_data; bare models serialize themselves.
+        # input_data; bare models serialize themselves. A validator's
+        # config_input (threshold, custom labels, llm_as_a_judge flag, …)
+        # is forwarded to the policy evaluation too, so per-validator
+        # config reaches the server-side policy engine; bare models carry
+        # no config.
+        config_input: dict[str, Any] | None = None
         if isinstance(request, BaseValidator):
-            input_data = dict(request.to_payload().get("input_data") or {})
+            payload = request.to_payload()
+            input_data = dict(payload.get("input_data") or {})
+            config_input = dict(payload.get("config_input") or {}) or None
         elif isinstance(request, SupportsInputData):
             input_data = request.to_input_data()
         else:
@@ -374,7 +381,9 @@ class Client:
             self._run_validator(request) if isinstance(request, BaseValidator) else None
         )
         envelopes = [
-            self._post_policy_evaluate(policy_id, input_data, application_name)
+            self._post_policy_evaluate(
+                policy_id, input_data, application_name, config_input=config_input
+            )
             for policy_id in policy_ids
         ]
         logger.info(

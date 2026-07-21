@@ -8,7 +8,15 @@ from typing import Any
 
 @dataclass(slots=True)
 class SDKConfigInput:
-    """Configuration input for SDK validators."""
+    """Configuration input for SDK validators.
+
+    ``custom_labels`` / ``label_thresholds`` apply to classic ML validators
+    AND to LLM judges (when ``llm_as_a_judge=True``). For judges they are
+    relabel-only — the server-owned score, pass/fail verdict, and rubric are
+    untouched — and the labels follow the judge's score axis: safety judges
+    score severity, so a HIGHER score is WORSE (order your labels
+    accordingly, e.g. ``["OK", "Bad", "Awful", "Severe"]``).
+    """
 
     threshold: float
     custom_labels: list[str] | None = None
@@ -17,6 +25,15 @@ class SDKConfigInput:
     # validators. Sent inside config_input; an empty/None list is omitted so the
     # server falls back to the project's dashboard-configured intent list.
     intents: list[str] | None = None
+    # Reroute this validation to the paired certified LLM judge instead of
+    # the classic ML validator. Validators without a judge pairing fall back
+    # gracefully to the ML path (no error).
+    llm_as_a_judge: bool = False
+    # Optional per-call judge override, honored only with llm_as_a_judge=True.
+    # Keys: "custom_llm_id" (integration to use instead of the project's
+    # default judge integration), "model", "criteria". The provider remains
+    # server-authoritative.
+    judge: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for API payload."""
@@ -27,6 +44,10 @@ class SDKConfigInput:
             out["label_thresholds"] = self.label_thresholds
         if self.intents:
             out["intents"] = self.intents
+        if self.llm_as_a_judge:
+            out["llm_as_a_judge"] = True
+        if self.judge:
+            out["judge"] = self.judge
         return out
 
 
