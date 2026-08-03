@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- Bumped `requests` to `>=2.33.0`, `pytest` to `>=9.0.3`, and `black` to
+  `>=26.3.1` (also updating the pinned pre-commit `black` hook), and
+  regenerated `uv.lock` to pull in patched `urllib3`, `filelock`, `idna`,
+  `Pygments`, and `virtualenv`. Closes 12 open Dependabot alerts
+  (DoS/ReDoS, TOCTOU symlink races, and cross-origin header forwarding).
+
 ## [0.7.0] - 2026-07-03
 
 ### Added

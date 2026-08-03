@@ -78,8 +78,7 @@ def main():
     print("\n🎉 All verification tests passed!")
     print("\nYou can now use disseqt-ai-sdk in your projects.")
     print("\nQuick example:")
-    print(
-        """
+    print("""
 from disseqt_sdk import Client, SDKConfigInput
 from disseqt_sdk.models.input_validation import InputValidationRequest
 from disseqt_sdk.validators.input.safety import ToxicityValidator
@@ -91,8 +90,7 @@ validator = ToxicityValidator(
 )
 result = client.validate(validator)
 print(result)
-    """
-    )
+    """)
 
     return True
 
