@@ -80,6 +80,36 @@ class TestSDKConfigInputSerialization:
             "llm_as_a_judge": True,
         }
 
+    def test_flat_custom_llm_id_serializes_into_judge_block(self):
+        out = SDKConfigInput(threshold=0.5, llm_as_a_judge=True, custom_llm_id="cllm-1").to_dict()
+        assert out["judge"] == {"custom_llm_id": "cllm-1"}
+
+    def test_flat_field_merges_with_judge_dict(self):
+        out = SDKConfigInput(
+            threshold=0.5,
+            llm_as_a_judge=True,
+            custom_llm_id="cllm-1",
+            judge={"model": "gpt-5"},
+        ).to_dict()
+        assert out["judge"] == {"custom_llm_id": "cllm-1", "model": "gpt-5"}
+
+    def test_flat_field_wins_over_dict_key_on_conflict(self):
+        out = SDKConfigInput(
+            threshold=0.5,
+            llm_as_a_judge=True,
+            custom_llm_id="flat-wins",
+            judge={"custom_llm_id": "dict-loses", "model": "gpt-5"},
+        ).to_dict()
+        assert out["judge"]["custom_llm_id"] == "flat-wins"
+        assert out["judge"]["model"] == "gpt-5"
+
+    def test_caller_judge_dict_is_not_mutated(self):
+        judge = {"model": "gpt-5"}
+        SDKConfigInput(
+            threshold=0.5, llm_as_a_judge=True, custom_llm_id="cllm-1", judge=judge
+        ).to_dict()
+        assert judge == {"model": "gpt-5"}
+
 
 class TestValidatorWirePayload:
     """The flag/judge block reach the validator endpoint verbatim."""

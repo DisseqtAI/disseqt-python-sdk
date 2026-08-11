@@ -29,15 +29,23 @@ class SDKConfigInput:
     # the classic ML validator. Validators without a judge pairing fall back
     # gracefully to the ML path (no error).
     llm_as_a_judge: bool = False
-    # Optional per-call judge override, honored only with llm_as_a_judge=True.
-    # Keys: "custom_llm_id" (integration to use instead of the project's
-    # default judge integration), "model", "criteria". The provider remains
-    # server-authoritative.
+    # Which LLM Integration judges the run (honored with llm_as_a_judge=True;
+    # omit to use the project's default judge integration). This is the
+    # first-class spelling of judge={"custom_llm_id": ...} — same wire format
+    # (serialized into the nested judge block), but a real field: the IDE
+    # completes it and a typo is a TypeError, whereas a misspelled dict key
+    # silently falls back to the default integration and the WRONG LLM judges
+    # the run without any error.
     #
-    # Finding custom_llm_id: Dashboard -> AI Inventory -> LLM Integrations —
-    # the ID column (and the row's view modal) has one-click copy. It is the
+    # Finding the id: Dashboard -> AI Inventory -> LLM Integrations — the ID
+    # column (and the row's view modal) has one-click copy. It is the
     # INTEGRATION's id, not a model name. Only Permanent integrations have
     # one; Temporary models are session-only and cannot be used here.
+    custom_llm_id: str | None = None
+    # Optional per-call judge override, honored only with llm_as_a_judge=True.
+    # Keys: "custom_llm_id" (prefer the first-class field above, which wins
+    # on conflict), "model", "criteria". The provider remains
+    # server-authoritative.
     #
     # "criteria" shapes QUALITY judges only. Certified SAFETY judges run
     # their frozen rubric verbatim and ignore caller criteria (the response
@@ -55,8 +63,13 @@ class SDKConfigInput:
             out["intents"] = self.intents
         if self.llm_as_a_judge:
             out["llm_as_a_judge"] = True
-        if self.judge:
-            out["judge"] = self.judge
+        # The wire format nests the integration selector under "judge";
+        # the flat field is client-side sugar and wins over a dict key.
+        judge_block = dict(self.judge) if self.judge else {}
+        if self.custom_llm_id:
+            judge_block["custom_llm_id"] = self.custom_llm_id
+        if judge_block:
+            out["judge"] = judge_block
         return out
 
 

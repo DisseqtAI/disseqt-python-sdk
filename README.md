@@ -308,8 +308,8 @@ config = SDKConfigInput(
     llm_as_a_judge=True,
     # Which integration judges the run. Copy this id from
     # Dashboard -> AI Inventory -> LLM Integrations (ID column).
-    # Omit `judge` entirely to use the project's default judge integration.
-    judge={"custom_llm_id": "25dc0684-a394-4389-ad59-90b27138badf"},
+    # Omit it to use the project's default judge integration.
+    custom_llm_id="25dc0684-a394-4389-ad59-90b27138badf",
 )
 
 result = client.validate(
