@@ -9,6 +9,7 @@ Welcome to the Disseqt SDK documentation.
 | [validators.md](./validators.md) | Input & Output validators with detailed examples |
 | [advanced-validators.md](./advanced-validators.md) | Agentic, RAG, MCP Security, Themes & Composite Score |
 | [validators-quick-reference.md](./validators-quick-reference.md) | Quick reference card for all validators |
+| [llm-as-a-judge.md](./llm-as-a-judge.md) | Grade validators with a certified LLM judge on your own LLM account: choosing the integration (`llm_id`), reading the verdict receipts, safety vs quality polarity, parallel multi-model runs, billing & errors |
 | [realtime-policies.md](./realtime-policies.md) | Evaluate dashboard-managed policies from `validate(..., policies=[...])`: envelopes, rule statuses, decision strategies (any/all/majority/weighted), partial-input semantics, overrides, sync/async, discovery, billing, the Decisions ledger |
 | [logging.md](./logging.md) | Structured logging: setup, fields, redaction, file output, API |
 

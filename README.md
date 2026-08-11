@@ -298,6 +298,8 @@ print(result)
 
 ### LLM-as-a-Judge (bring your own LLM)
 
+Full guide: [docs/llm-as-a-judge.md](./docs/llm-as-a-judge.md)
+
 Any paired validator can be graded by a certified LLM judge running on **your
 own** LLM Integration (your provider account, your key) instead of the classic
 ML model. Set `llm_as_a_judge=True`:
