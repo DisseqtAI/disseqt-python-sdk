@@ -306,10 +306,9 @@ ML model. Set `llm_as_a_judge=True`:
 config = SDKConfigInput(
     threshold=0.5,
     llm_as_a_judge=True,
-    # Which integration judges the run. Copy this id from
-    # Dashboard -> AI Inventory -> LLM Integrations (ID column).
-    # Omit it to use the project's default judge integration.
-    custom_llm_id="25dc0684-a394-4389-ad59-90b27138badf",
+    # REQUIRED with llm_as_a_judge=True: which integration judges the run.
+    # Copy this id from Dashboard -> AI Inventory -> LLM Integrations (ID column).
+    llm_id="25dc0684-a394-4389-ad59-90b27138badf",
 )
 
 result = client.validate(

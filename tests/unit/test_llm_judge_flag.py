@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from requests_mock import ANY
 
 from disseqt_sdk import Client
@@ -49,21 +50,33 @@ class TestSDKConfigInputSerialization:
         assert "llm_as_a_judge" not in out
         assert "judge" not in out
 
+    def test_flag_requires_llm_id(self):
+        # The judge MUST be selected explicitly — construction fails fast
+        # instead of a server-side 4xx (or a silent default-integration run).
+        with pytest.raises(ValueError, match="requires llm_id"):
+            SDKConfigInput(threshold=0.5, llm_as_a_judge=True)
+
+    def test_llm_id_requires_the_flag(self):
+        # The mirror rule: an llm_id on a traditional ML run would be a
+        # silent no-op, which is exactly the confusion this field removes.
+        with pytest.raises(ValueError, match="only used with llm_as_a_judge"):
+            SDKConfigInput(threshold=0.5, llm_id="cllm-1")
+
     def test_flag_serialized_when_true(self):
-        out = SDKConfigInput(threshold=0.5, llm_as_a_judge=True).to_dict()
+        out = SDKConfigInput(threshold=0.5, llm_as_a_judge=True, llm_id="cllm-1").to_dict()
         assert out["llm_as_a_judge"] is True
 
     def test_flag_false_omitted(self):
         out = SDKConfigInput(threshold=0.5, llm_as_a_judge=False).to_dict()
         assert "llm_as_a_judge" not in out
 
-    def test_judge_block_serialized_when_non_empty(self):
+    def test_judge_dict_custom_llm_id_satisfies_the_requirement(self):
         judge = {"custom_llm_id": "cllm-1", "model": "gpt-4o", "criteria": "be strict"}
         out = SDKConfigInput(threshold=0.5, llm_as_a_judge=True, judge=judge).to_dict()
         assert out["judge"] == judge
 
     def test_empty_judge_dict_omitted(self):
-        out = SDKConfigInput(threshold=0.5, llm_as_a_judge=True, judge={}).to_dict()
+        out = SDKConfigInput(threshold=0.5, judge={}).to_dict()
         assert "judge" not in out
 
     def test_flag_composes_with_custom_labels(self):
@@ -72,32 +85,34 @@ class TestSDKConfigInputSerialization:
             custom_labels=["OK", "Bad", "Awful", "Severe"],
             label_thresholds=[0.1, 0.5, 0.9],
             llm_as_a_judge=True,
+            llm_id="cllm-1",
         ).to_dict()
         assert out == {
             "threshold": 0.5,
             "custom_labels": ["OK", "Bad", "Awful", "Severe"],
             "label_thresholds": [0.1, 0.5, 0.9],
             "llm_as_a_judge": True,
+            "judge": {"custom_llm_id": "cllm-1"},
         }
 
-    def test_flat_custom_llm_id_serializes_into_judge_block(self):
-        out = SDKConfigInput(threshold=0.5, llm_as_a_judge=True, custom_llm_id="cllm-1").to_dict()
+    def test_llm_id_serializes_into_judge_block(self):
+        out = SDKConfigInput(threshold=0.5, llm_as_a_judge=True, llm_id="cllm-1").to_dict()
         assert out["judge"] == {"custom_llm_id": "cllm-1"}
 
-    def test_flat_field_merges_with_judge_dict(self):
+    def test_llm_id_merges_with_judge_dict(self):
         out = SDKConfigInput(
             threshold=0.5,
             llm_as_a_judge=True,
-            custom_llm_id="cllm-1",
+            llm_id="cllm-1",
             judge={"model": "gpt-5"},
         ).to_dict()
         assert out["judge"] == {"custom_llm_id": "cllm-1", "model": "gpt-5"}
 
-    def test_flat_field_wins_over_dict_key_on_conflict(self):
+    def test_llm_id_wins_over_dict_key_on_conflict(self):
         out = SDKConfigInput(
             threshold=0.5,
             llm_as_a_judge=True,
-            custom_llm_id="flat-wins",
+            llm_id="flat-wins",
             judge={"custom_llm_id": "dict-loses", "model": "gpt-5"},
         ).to_dict()
         assert out["judge"]["custom_llm_id"] == "flat-wins"
@@ -105,9 +120,7 @@ class TestSDKConfigInputSerialization:
 
     def test_caller_judge_dict_is_not_mutated(self):
         judge = {"model": "gpt-5"}
-        SDKConfigInput(
-            threshold=0.5, llm_as_a_judge=True, custom_llm_id="cllm-1", judge=judge
-        ).to_dict()
+        SDKConfigInput(threshold=0.5, llm_as_a_judge=True, llm_id="cllm-1", judge=judge).to_dict()
         assert judge == {"model": "gpt-5"}
 
 
@@ -121,7 +134,7 @@ class TestValidatorWirePayload:
                 SDKConfigInput(
                     threshold=0.5,
                     llm_as_a_judge=True,
-                    judge={"custom_llm_id": "cllm-1"},
+                    llm_id="cllm-1",
                 )
             )
         )
@@ -145,11 +158,15 @@ class TestPolicyPathForwardsConfigInput:
         requests_mock.post(TOX_URL, json=VALIDATOR_RESPONSE)
         pol = requests_mock.post(P1_URL, json=P1_PASS)
         make_client().validate(
-            toxicity(SDKConfigInput(threshold=0.7, llm_as_a_judge=True)),
+            toxicity(SDKConfigInput(threshold=0.7, llm_as_a_judge=True, llm_id="cllm-1")),
             policies=[P1],
         )
         sent = pol.last_request.json()
-        assert sent["config_input"] == {"threshold": 0.7, "llm_as_a_judge": True}
+        assert sent["config_input"] == {
+            "threshold": 0.7,
+            "llm_as_a_judge": True,
+            "judge": {"custom_llm_id": "cllm-1"},
+        }
 
     def test_plain_config_also_forwarded(self, requests_mock):
         requests_mock.post(TOX_URL, json=VALIDATOR_RESPONSE)
@@ -213,7 +230,7 @@ class TestJudgeResponsePassthrough:
                 SDKConfigInput(
                     threshold=0.5,
                     llm_as_a_judge=True,
-                    judge={"custom_llm_id": "cllm-1"},
+                    llm_id="cllm-1",
                 )
             )
         )
