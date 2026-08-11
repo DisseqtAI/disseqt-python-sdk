@@ -296,6 +296,45 @@ result = client.validate(topic_validator)
 print(result)
 ```
 
+### LLM-as-a-Judge (bring your own LLM)
+
+Any paired validator can be graded by a certified LLM judge running on **your
+own** LLM Integration (your provider account, your key) instead of the classic
+ML model. Set `llm_as_a_judge=True`:
+
+```python
+config = SDKConfigInput(
+    threshold=0.5,
+    llm_as_a_judge=True,
+    # Which integration judges the run. Copy this id from
+    # Dashboard -> AI Inventory -> LLM Integrations (ID column).
+    # Omit `judge` entirely to use the project's default judge integration.
+    judge={"custom_llm_id": "25dc0684-a394-4389-ad59-90b27138badf"},
+)
+
+result = client.validate(
+    ToxicityValidator(data=InputValidationRequest(prompt="hello"), config=config)
+)
+
+# The verdict carries receipts — trust these, not assumptions:
+others = result["result"]["data"]["others"]
+others["model"]           # which LLM actually judged (e.g. "gpt-5")
+others["rubric_version"]  # the certified rubric that produced the score
+others["reasoning"]       # the judge's written justification
+others.get("scoring_path")     # quality judges: "logprob_weighted" | "rating_fallback"
+result.get("origin_validator") # set when the judge reroute renamed the run
+                               # (you asked for "toxicity", it ran "llm-judge-toxicity")
+```
+
+Notes:
+
+- Validators **without** a judge pairing fall back gracefully to the ML path — no error.
+- `judge["criteria"]` shapes **quality** judges only; certified **safety** judges run
+  their frozen rubric verbatim (the response stamps `criteria_ignored` if you try).
+- Judge inference runs on your provider account, so a rejected key or exhausted
+  quota surfaces as an HTTP error from your provider's side — check your
+  provider dashboard, not just the SDK call.
+
 ## Examples
 
 ### Agentic SDK Examples

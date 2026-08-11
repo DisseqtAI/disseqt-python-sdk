@@ -33,6 +33,15 @@ class SDKConfigInput:
     # Keys: "custom_llm_id" (integration to use instead of the project's
     # default judge integration), "model", "criteria". The provider remains
     # server-authoritative.
+    #
+    # Finding custom_llm_id: Dashboard -> AI Inventory -> LLM Integrations —
+    # the ID column (and the row's view modal) has one-click copy. It is the
+    # INTEGRATION's id, not a model name. Only Permanent integrations have
+    # one; Temporary models are session-only and cannot be used here.
+    #
+    # "criteria" shapes QUALITY judges only. Certified SAFETY judges run
+    # their frozen rubric verbatim and ignore caller criteria (the response
+    # stamps others.criteria_ignored=true when that happens).
     judge: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:

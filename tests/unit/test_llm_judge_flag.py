@@ -140,3 +140,60 @@ class TestPolicyPathForwardsConfigInput:
         result = make_client().validate(InputValidationRequest(prompt="hi"), policies=[P1])
         assert result["validation"] is None
         assert pol.called
+
+
+class TestJudgeResponsePassthrough:
+    """The chain has grown judge-specific response fields since this SDK was
+    written: top-level ``origin_validator`` (set when the reroute renames the
+    run) and ``others.scoring_path`` (which scoring formula produced the
+    score). The client returns the server dict verbatim, so they must survive
+    to the caller untouched — this pins that property against any future
+    typed-response refactor silently dropping them."""
+
+    REROUTED_RESPONSE = {
+        "success": True,
+        "validator_type": "input-validation",
+        "validator_name": "llm-judge-toxicity",
+        "origin_validator": "toxicity",
+        "score": 0.0082,
+        "threshold_validated_result": "Pass",
+        "result": {
+            "data": {
+                "metric_name": "llm-judge-toxicity",
+                "actual_value": 0.0082,
+                "metric_labels": ["Not Toxic"],
+                "others": {
+                    "engine": "llm-judge",
+                    "model": "gpt-5",
+                    "rubric_version": "v17",
+                    "severity": 1,
+                    "scoring_path": "rating_fallback",
+                    "reasoning": "Benign greeting.",
+                },
+            },
+            "status": {"code": "200", "message": "success"},
+        },
+        "request_id": "req_test",
+    }
+
+    def test_rerouted_judge_fields_reach_the_caller_verbatim(self, requests_mock):
+        requests_mock.post(ANY, json=self.REROUTED_RESPONSE)
+        resp = make_client().validate(
+            toxicity(
+                SDKConfigInput(
+                    threshold=0.5,
+                    llm_as_a_judge=True,
+                    judge={"custom_llm_id": "cllm-1"},
+                )
+            )
+        )
+        # The run was renamed by the reroute — provenance must survive.
+        assert resp["origin_validator"] == "toxicity"
+        assert resp["validator_name"] == "llm-judge-toxicity"
+        # The receipts a caller uses to verify WHICH LLM judged and HOW.
+        others = resp["result"]["data"]["others"]
+        assert others["model"] == "gpt-5"
+        assert others["scoring_path"] == "rating_fallback"
+        assert others["rubric_version"] == "v17"
+        # Whole-dict fidelity: nothing stripped, nothing renamed.
+        assert resp == self.REROUTED_RESPONSE
