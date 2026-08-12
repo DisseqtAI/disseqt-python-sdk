@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **SDK version notification** — every API call now identifies the SDK
+  build via `X-SDK-Version` and `User-Agent: disseqt-ai-sdk/<version>`
+  request headers (validator, policy-evaluate, and Prompt Packs
+  clients). When the server advertises a newer release on the response
+  (`X-SDK-Latest-Version`, plus `X-SDK-Notice` below the supported
+  floor), the SDK logs one `WARNING` through the stdlib `disseqt_sdk`
+  logger — at most once per process per advertised version, fail-open
+  (a malformed or missing header can never affect a call), with zero
+  extra network requests. Opt out of the warning with
+  `DISSEQT_SDK_DISABLE_VERSION_NOTICE=1` (read once at import; the
+  request headers are still sent). Silence it instead with
+  `logging.getLogger("disseqt_sdk").setLevel(logging.ERROR)`.
+
+### Fixed
+- **Single-sourced `__version__`** — both `disseqt_sdk.__version__` and
+  `disseqt_agentic_sdk.__version__` (and
+  `DisseqtAgenticClient.SDK_VERSION`) now resolve the installed
+  `disseqt-ai-sdk` distribution version via `importlib.metadata`
+  (`0.0.0-dev` on an uninstalled source checkout), fixing the agentic
+  package's stale hardcoded `0.1.0`.
+
 ### Security
 - Bumped `requests` to `>=2.33.0`, `pytest` to `>=9.0.3`, and `black` to
   `>=26.3.1` (also updating the pinned pre-commit `black` hook), and
