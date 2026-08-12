@@ -6,6 +6,7 @@ Manages configuration, transport, and buffering.
 
 import atexit
 
+from disseqt_agentic_sdk._version import SDK_VERSION as _SDK_VERSION
 from disseqt_agentic_sdk.buffer import TraceBuffer
 from disseqt_agentic_sdk.trace import DisseqtTrace
 from disseqt_agentic_sdk.transport import HTTPTransport
@@ -49,7 +50,7 @@ class DisseqtAgenticClient:
     """
 
     SDK_NAME = "disseqt-agentic-sdk"
-    SDK_VERSION = "0.1.0"
+    SDK_VERSION = _SDK_VERSION
 
     def __init__(
         self,

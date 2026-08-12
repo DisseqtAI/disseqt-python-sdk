@@ -10,6 +10,7 @@ import requests
 
 from disseqt_logging import digest, get_logger
 
+from ._version import check_version_notice, sdk_identity_headers
 from .models.composite_score import CompositeScoreRequest
 from .models.themes_classifier import ThemesClassifierRequest
 from .registry import get_validator_metadata
@@ -187,6 +188,7 @@ class Client:
             "X-API-Key": self.api_key,
             "X-Project-Id": self.project_id,
             "Content-Type": "application/json",
+            **sdk_identity_headers(),
         }
 
     def validate(
@@ -464,6 +466,9 @@ class Client:
             ) from e
 
         latency_ms = round((time.monotonic() - started) * 1000, 1)
+        # Before the ok-check so error responses (e.g. a future 426
+        # enforcement tier) still surface the upgrade notice.
+        check_version_notice(response.headers)
 
         # Check for HTTP errors
         if not response.ok:
@@ -565,6 +570,7 @@ class Client:
             ) from e
 
         latency_ms = round((time.monotonic() - started) * 1000, 1)
+        check_version_notice(http_resp.headers)
         if not http_resp.ok:
             logger.error(
                 "policy.http_error",

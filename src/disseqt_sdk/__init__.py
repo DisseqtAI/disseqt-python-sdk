@@ -9,6 +9,7 @@ from disseqt_logging import configure as configure_logging
 from disseqt_logging import get_logger
 from disseqt_logging import set_level as set_log_level
 
+from ._version import SDK_VERSION as __version__
 from .api_client import DisseqtAPIClient
 from .client import Client
 from .models.base import SDKConfigInput
@@ -22,7 +23,6 @@ from .policy import (
 )
 from .policy import parse as parse_policy
 
-__version__ = "0.7.0"
 __all__ = [
     "Client",
     "DisseqtAPIClient",

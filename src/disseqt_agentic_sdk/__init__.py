@@ -32,7 +32,7 @@ Quick Start:
             span.set_token_usage(100, 50)
 """
 
-__version__ = "0.1.0"
+from disseqt_agentic_sdk._version import SDK_VERSION as __version__
 
 # Public API
 from disseqt_agentic_sdk.api import (

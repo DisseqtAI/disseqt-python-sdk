@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import requests
 
+from ._version import check_version_notice, sdk_identity_headers
 from .client import HTTPError
 from .models.prompt_packs import (
     CreateRunRequest,
@@ -87,6 +88,7 @@ class DisseqtAPIClient:
             "X-API-Key": self.api_key,
             "X-Project-Id": self.project_id,
             "Content-Type": "application/json",
+            **sdk_identity_headers(),
         }
 
     def _url(self, path: str) -> str:
@@ -128,6 +130,7 @@ class DisseqtAPIClient:
                 headers=headers,
                 timeout=self.timeout,
             )
+            check_version_notice(response.headers)
 
             if not response.ok:
                 body = response.text[:512] if response.text else ""
@@ -173,6 +176,7 @@ class DisseqtAPIClient:
                 headers=headers,
                 timeout=self.timeout,
             )
+            check_version_notice(response.headers)
             return response.status_code, dict(response.headers), response.text or ""
         except requests.RequestException as e:
             raise HTTPError(
