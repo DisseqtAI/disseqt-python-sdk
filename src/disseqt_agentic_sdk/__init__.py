@@ -50,6 +50,14 @@ from disseqt_agentic_sdk.enums import (
     SpanStatus,
 )
 
+# Auto-instrumentation
+from disseqt_agentic_sdk.instrumentation import (
+    instrument,
+    instrument_all,
+    uninstrument,
+    uninstrument_all,
+)
+
 # Semantics
 from disseqt_agentic_sdk.semantics import (
     AgenticAttributes,
@@ -58,6 +66,9 @@ from disseqt_agentic_sdk.semantics import (
     AgenticOperation,
     AgenticOutputType,
     AgenticProvider,
+    GenAIAttributes,
+    GenAIOperation,
+    GenAISystem,
 )
 from disseqt_agentic_sdk.span import DisseqtSpan
 
@@ -90,6 +101,14 @@ __all__ = [
     "AgenticFinishReason",
     "AgenticProvider",
     "AgenticCacheOperation",
+    "GenAIAttributes",
+    "GenAISystem",
+    "GenAIOperation",
+    # Auto-instrumentation
+    "instrument",
+    "instrument_all",
+    "uninstrument",
+    "uninstrument_all",
     # Logging
     "get_logger",
     "set_log_level",

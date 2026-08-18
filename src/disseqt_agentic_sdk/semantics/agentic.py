@@ -130,3 +130,4 @@ class AgenticProvider:
     GROQ = "groq"
     PERPLEXITY = "perplexity"
     X_AI = "x_ai"
+    LITELLM = "litellm"
