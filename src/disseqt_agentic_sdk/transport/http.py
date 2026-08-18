@@ -34,6 +34,7 @@ class HTTPTransport:
         max_retries: int = 3,
         verify_ssl: bool = True,
         realtime_policy_id: str | None = None,
+        application_id: str | None = None,
     ):
         """
         Initialize HTTP transport.
@@ -49,12 +50,18 @@ class HTTPTransport:
                 field. llm-monitoring's span consumer reads this to route
                 the span through policy-driven evaluation. Omitted from
                 the payload when None.
+            application_id: Optional application UUID. When set, sent as
+                the ``X-Application-Id`` request header on every POST.
+                Kong's traces-auth plugin verifies the header against
+                policy-management before forwarding. When None, the
+                header is not sent (project-only scope, backwards-compat).
         """
         self.endpoint = endpoint.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
         self.verify_ssl = verify_ssl
         self.realtime_policy_id = realtime_policy_id
+        self.application_id = application_id
 
         # Setup session with retry strategy
         self.session = requests.Session()
@@ -163,6 +170,12 @@ class HTTPTransport:
             "traces": traces,
         }
         headers = {"Content-Type": "application/json"}
+        # X-Application-Id: verified by Kong's traces-auth plugin against
+        # policy-management before the request reaches llm-monitoring.
+        # Only set when the client was constructed with a non-empty
+        # application_id — never send an empty value.
+        if self.application_id:
+            headers["X-Application-Id"] = self.application_id
         try:
             response = self.session.post(
                 self.endpoint,

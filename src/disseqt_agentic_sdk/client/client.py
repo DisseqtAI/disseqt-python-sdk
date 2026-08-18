@@ -64,6 +64,7 @@ class DisseqtAgenticClient:
         flush_interval: float = 1.0,
         max_retries: int = 3,
         realtime_policy_id: str | None = None,
+        application_id: str | None = None,
     ):
         """
         Initialize SDK client.
@@ -78,6 +79,14 @@ class DisseqtAgenticClient:
             max_batch_size: Maximum spans per batch
             flush_interval: Flush interval in seconds
             max_retries: Maximum retry attempts
+            application_id: Optional application UUID. When set, sent as
+                the ``X-Application-Id`` request header on every trace POST.
+                Kong's traces-auth plugin verifies the header against
+                policy-management (checks project + org match); mismatch
+                or unknown app is rejected before any span reaches
+                llm-monitoring. When unset, spans go through project-only
+                scope (existing behaviour) — safe default for callers that
+                haven't been assigned an application id yet.
             realtime_policy_id: Optional realtime-policy UUID. When set,
                 every span emitted by this client carries it as the
                 ``policy.id`` resource attribute, which is the contract
@@ -132,6 +141,20 @@ class DisseqtAgenticClient:
         self.service_version = service_version
         self.environment = environment
         self.realtime_policy_id = realtime_policy_id
+        # Normalise empty / whitespace-only to None so the transport can
+        # gate on a single "is set?" check. Sending X-Application-Id: ""
+        # to Kong would either fail strict verify or short-circuit to
+        # project-only scope depending on the plugin's require flag —
+        # cleaner to just not send the header at all.
+        self.application_id = application_id.strip() if application_id and application_id.strip() else None
+
+        # Nudge callers who haven't wired an application_id yet. One-shot
+        # per process; silenced via `DISSEQT_SDK_DISABLE_APPLICATION_ID_NOTICE=1`
+        # or `logging.getLogger("disseqt_agentic_sdk").setLevel(logging.ERROR)`.
+        if self.application_id is None:
+            from disseqt_agentic_sdk._notices import notify_missing_application_id
+
+            notify_missing_application_id()
 
         # Initialize transport
         self.transport = HTTPTransport(
@@ -139,6 +162,7 @@ class DisseqtAgenticClient:
             api_key=api_key,
             max_retries=max_retries,
             realtime_policy_id=realtime_policy_id,
+            application_id=self.application_id,
         )
 
         # Initialize buffer
