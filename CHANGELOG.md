@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-18
+
+### Added
+- **Auto-instrumentation for popular LLM SDKs** — one
+  `instrument_all(client)` call at startup patches every installed
+  provider SDK we support so every LLM call emits a `MODEL_EXEC` span
+  automatically, with no wrapping in user code. Supported providers
+  (minimum versions in parens): OpenAI (>=1.50), Anthropic (>=0.40),
+  Groq (>=0.11), Mistral / `mistralai` (>=1.5), Cohere v2 (>=5.11),
+  Google Gemini via `google-genai` (>=1.0), and LiteLLM (>=1.40). Sync,
+  async, and streaming covered for each. Spans dual-emit `agentic.*`
+  and OpenTelemetry `gen_ai.*` attributes so traces are consumable by
+  OTel-native tooling without translation. Selective use via
+  `instrument("openai", client)`; disable via `uninstrument("openai")`
+  / `uninstrument_all()`. Install per-provider or all-at-once extras:
+  `pip install "disseqt-ai-sdk[openai,anthropic]"` or
+  `pip install "disseqt-ai-sdk[instrumentation]"`.
+- **`application_id` recommendation notice** — `DisseqtAgenticClient(...)`
+  now logs a one-shot `WARNING` through the stdlib `disseqt_agentic_sdk`
+  logger when constructed without `application_id`, pointing to the AI
+  Applications Registry docs. Purely informational; ingest behaviour is
+  unchanged. Suppress with `DISSEQT_SDK_DISABLE_APPLICATION_ID_NOTICE=1`
+  or `logging.getLogger("disseqt_agentic_sdk").setLevel(logging.ERROR)`.
+  Follows the same channel contract as the v0.8.0 SDK version notice.
+
+### Dependencies
+- Added `wrapt>=1.16.0` as a runtime dependency (used by the
+  auto-instrumentation monkey-patcher).
+- Added optional-dependencies extras for each supported provider:
+  `openai`, `anthropic`, `groq`, `mistral`, `cohere`, `gemini`,
+  `litellm`, and `instrumentation` (installs all seven).
+
 ## [0.8.0] - 2026-08-12
 
 ### Added
