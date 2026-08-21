@@ -27,7 +27,7 @@ from disseqt_agentic_sdk.instrumentation._oai_compat import (
     set_common_chat_request,
 )
 from disseqt_agentic_sdk.instrumentation._stream import AsyncStreamWrapper, SyncStreamWrapper
-from disseqt_agentic_sdk.instrumentation._utils import open_llm_span
+from disseqt_agentic_sdk.instrumentation._utils import open_llm_span, safe_call
 from disseqt_agentic_sdk.instrumentation.base import DisseqtInstrumentor
 from disseqt_agentic_sdk.semantics import (
     AgenticOperation,
@@ -54,7 +54,8 @@ def _sync_completion(instrumentor: LiteLLMInstrumentor) -> Callable[..., Any]:
     def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         scope = open_llm_span(instrumentor.client, "litellm.completion", SpanKind.MODEL_EXEC)
         span = scope.span
-        set_common_chat_request(
+        safe_call(
+            set_common_chat_request,
             span,
             kwargs,
             provider=AgenticProvider.LITELLM,
@@ -75,7 +76,7 @@ def _sync_completion(instrumentor: LiteLLMInstrumentor) -> Callable[..., Any]:
                 on_chunk=lambda chunk: state.absorb(chunk),
                 on_finish=lambda: state.finalize(span),
             )
-        set_chat_response(span, result)
+        safe_call(set_chat_response, span, result)
         scope.__exit__(None, None, None)
         return result
 
@@ -88,7 +89,8 @@ def _async_completion(instrumentor: LiteLLMInstrumentor) -> Callable[..., Any]:
     ) -> Any:
         scope = open_llm_span(instrumentor.client, "litellm.acompletion", SpanKind.MODEL_EXEC)
         span = scope.span
-        set_common_chat_request(
+        safe_call(
+            set_common_chat_request,
             span,
             kwargs,
             provider=AgenticProvider.LITELLM,
@@ -109,7 +111,7 @@ def _async_completion(instrumentor: LiteLLMInstrumentor) -> Callable[..., Any]:
                 on_chunk=lambda chunk: state.absorb(chunk),
                 on_finish=lambda: state.finalize(span),
             )
-        set_chat_response(span, result)
+        safe_call(set_chat_response, span, result)
         scope.__exit__(None, None, None)
         return result
 

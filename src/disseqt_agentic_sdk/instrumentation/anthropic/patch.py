@@ -24,6 +24,7 @@ from disseqt_agentic_sdk.instrumentation._stream import AsyncStreamWrapper, Sync
 from disseqt_agentic_sdk.instrumentation._tool_calls import from_anthropic as _tc_from_anthropic
 from disseqt_agentic_sdk.instrumentation._utils import (
     open_llm_span,
+    safe_call,
     safe_set,
     serialize_messages,
 )
@@ -139,8 +140,7 @@ def messages_create(instrumentor: AnthropicInstrumentor) -> Callable[..., Any]:
     def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         scope = open_llm_span(instrumentor.client, "anthropic.messages.create", SpanKind.MODEL_EXEC)
         span = scope.span
-        _set_request_attrs(span, kwargs)
-
+        safe_call(_set_request_attrs, span, kwargs)
         try:
             result = wrapped(*args, **kwargs)
         except Exception as exc:
@@ -155,7 +155,7 @@ def messages_create(instrumentor: AnthropicInstrumentor) -> Callable[..., Any]:
                 on_chunk=lambda chunk: state.absorb(chunk),
                 on_finish=lambda: state.finalize(span),
             )
-        _set_response_attrs(span, result)
+        safe_call(_set_response_attrs, span, result)
         scope.__exit__(None, None, None)
         return result
 
@@ -168,8 +168,7 @@ def async_messages_create(instrumentor: AnthropicInstrumentor) -> Callable[..., 
     ) -> Any:
         scope = open_llm_span(instrumentor.client, "anthropic.messages.create", SpanKind.MODEL_EXEC)
         span = scope.span
-        _set_request_attrs(span, kwargs)
-
+        safe_call(_set_request_attrs, span, kwargs)
         try:
             result = await wrapped(*args, **kwargs)
         except Exception as exc:
@@ -184,7 +183,7 @@ def async_messages_create(instrumentor: AnthropicInstrumentor) -> Callable[..., 
                 on_chunk=lambda chunk: state.absorb(chunk),
                 on_finish=lambda: state.finalize(span),
             )
-        _set_response_attrs(span, result)
+        safe_call(_set_response_attrs, span, result)
         scope.__exit__(None, None, None)
         return result
 

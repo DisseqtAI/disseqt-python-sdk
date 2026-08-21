@@ -32,6 +32,7 @@ from disseqt_agentic_sdk.instrumentation._stream import AsyncStreamWrapper, Sync
 from disseqt_agentic_sdk.instrumentation._tool_calls import from_gemini as _tc_from_gemini
 from disseqt_agentic_sdk.instrumentation._utils import (
     open_llm_span,
+    safe_call,
     safe_set,
 )
 from disseqt_agentic_sdk.instrumentation.base import DisseqtInstrumentor
@@ -212,13 +213,13 @@ def _sync_generate(instrumentor: GeminiInstrumentor) -> Callable[..., Any]:
     def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         scope = open_llm_span(instrumentor.client, "gemini.generate_content", SpanKind.MODEL_EXEC)
         span = scope.span
-        _set_request_attrs(span, kwargs)
+        safe_call(_set_request_attrs, span, kwargs)
         try:
             result = wrapped(*args, **kwargs)
         except Exception as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
-        _set_response_attrs(span, result)
+        safe_call(_set_response_attrs, span, result)
         scope.__exit__(None, None, None)
         return result
 
@@ -231,13 +232,13 @@ def _async_generate(instrumentor: GeminiInstrumentor) -> Callable[..., Any]:
     ) -> Any:
         scope = open_llm_span(instrumentor.client, "gemini.generate_content", SpanKind.MODEL_EXEC)
         span = scope.span
-        _set_request_attrs(span, kwargs)
+        safe_call(_set_request_attrs, span, kwargs)
         try:
             result = await wrapped(*args, **kwargs)
         except Exception as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
-        _set_response_attrs(span, result)
+        safe_call(_set_response_attrs, span, result)
         scope.__exit__(None, None, None)
         return result
 
@@ -341,7 +342,7 @@ def _sync_stream(instrumentor: GeminiInstrumentor) -> Callable[..., Any]:
             instrumentor.client, "gemini.generate_content_stream", SpanKind.MODEL_EXEC
         )
         span = scope.span
-        _set_request_attrs(span, kwargs)
+        safe_call(_set_request_attrs, span, kwargs)
         try:
             result = wrapped(*args, **kwargs)
         except Exception as exc:
@@ -366,7 +367,7 @@ def _async_stream(instrumentor: GeminiInstrumentor) -> Callable[..., Any]:
             instrumentor.client, "gemini.generate_content_stream", SpanKind.MODEL_EXEC
         )
         span = scope.span
-        _set_request_attrs(span, kwargs)
+        safe_call(_set_request_attrs, span, kwargs)
         try:
             result = await wrapped(*args, **kwargs)
         except Exception as exc:

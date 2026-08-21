@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from disseqt_agentic_sdk.enums import SpanKind
 from disseqt_agentic_sdk.instrumentation._batches import from_openai, set_batch_attrs
-from disseqt_agentic_sdk.instrumentation._utils import open_llm_span, safe_set
+from disseqt_agentic_sdk.instrumentation._utils import open_llm_span, safe_call, safe_set
 from disseqt_agentic_sdk.semantics import (
     AgenticAttributes,
     AgenticOperation,
@@ -56,7 +56,7 @@ def batches_create(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
         try:
-            set_batch_attrs(span, from_openai(batch), AgenticOperation.BATCH_CREATE)
+            safe_call(set_batch_attrs, span, from_openai(batch), AgenticOperation.BATCH_CREATE)
         finally:
             scope.__exit__(None, None, None)
         return batch
@@ -77,7 +77,7 @@ def async_batches_create(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
         try:
-            set_batch_attrs(span, from_openai(batch), AgenticOperation.BATCH_CREATE)
+            safe_call(set_batch_attrs, span, from_openai(batch), AgenticOperation.BATCH_CREATE)
         finally:
             scope.__exit__(None, None, None)
         return batch
@@ -99,7 +99,7 @@ def batches_retrieve(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
         try:
-            set_batch_attrs(span, from_openai(batch), AgenticOperation.BATCH_RETRIEVE)
+            safe_call(set_batch_attrs, span, from_openai(batch), AgenticOperation.BATCH_RETRIEVE)
         finally:
             scope.__exit__(None, None, None)
         return batch
@@ -120,7 +120,7 @@ def async_batches_retrieve(instrumentor: OpenAIInstrumentor) -> Callable[..., An
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
         try:
-            set_batch_attrs(span, from_openai(batch), AgenticOperation.BATCH_RETRIEVE)
+            safe_call(set_batch_attrs, span, from_openai(batch), AgenticOperation.BATCH_RETRIEVE)
         finally:
             scope.__exit__(None, None, None)
         return batch
@@ -142,7 +142,7 @@ def batches_cancel(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
         try:
-            set_batch_attrs(span, from_openai(batch), AgenticOperation.BATCH_CANCEL)
+            safe_call(set_batch_attrs, span, from_openai(batch), AgenticOperation.BATCH_CANCEL)
         finally:
             scope.__exit__(None, None, None)
         return batch
@@ -163,7 +163,7 @@ def async_batches_cancel(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
         try:
-            set_batch_attrs(span, from_openai(batch), AgenticOperation.BATCH_CANCEL)
+            safe_call(set_batch_attrs, span, from_openai(batch), AgenticOperation.BATCH_CANCEL)
         finally:
             scope.__exit__(None, None, None)
         return batch

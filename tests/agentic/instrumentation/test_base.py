@@ -442,6 +442,65 @@ class TestBase:
             utils_module._logger.removeHandler(handler)
             utils_module._logger.setLevel(prior_level)
 
+    def test_broken_attribute_writer_does_not_break_user_call(self, recording_client):
+        # A bug in our attribute-writing must never crash the wrapped LLM
+        # call. Simulate by monkey-patching an OAI-compat helper to raise
+        # unconditionally, then confirm the user still gets their response.
+        import json
+        from unittest.mock import patch as mp
+
+        from openai import OpenAI
+        from openai.types.chat import ChatCompletion, ChatCompletionMessage
+        from openai.types.chat.chat_completion import Choice
+        from openai.types.completion_usage import CompletionUsage
+
+        # openai/patch.py does `from ..._oai_compat import set_common_chat_request`,
+        # so we must patch the reference used by the wrapper, not the source.
+        from disseqt_agentic_sdk.instrumentation.openai import patch as openai_patch
+
+        def _boom(*_a, **_kw):
+            raise RuntimeError("simulated bug in set_common_chat_request")
+
+        instrument("openai", recording_client)
+        try:
+            client = OpenAI(api_key="fake")
+            fake = ChatCompletion(
+                id="c",
+                model="m",
+                object="chat.completion",
+                created=0,
+                choices=[
+                    Choice(
+                        index=0,
+                        finish_reason="stop",
+                        message=ChatCompletionMessage(role="assistant", content="ok"),
+                    )
+                ],
+                usage=CompletionUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            )
+            with (
+                mp.object(openai_patch, "set_common_chat_request", _boom),
+                mp.object(client.chat.completions, "_post", return_value=fake, create=True),
+            ):
+                # The user's call must still complete successfully even though
+                # our attribute-writing path is broken.
+                result = client.chat.completions.create(
+                    model="m", messages=[{"role": "user", "content": "x"}]
+                )
+        finally:
+            uninstrument("openai")
+
+        assert result.choices[0].message.content == "ok"
+        # And the span was still emitted (scope exit still ran), just without
+        # the attributes the broken writer would have set.
+        from tests.agentic.instrumentation.conftest import find_span
+
+        span = find_span(recording_client, "openai.chat.completions.create")
+        # Response attrs may or may not exist depending on whether the
+        # response-side writer also failed; the key assertion is
+        # "user code kept working".
+        assert json.loads(span.attributes_json) is not None
+
     def test_concurrent_instrument_calls_are_race_free(self, recording_client):
         # Many threads racing on the same provider must produce exactly one
         # successful instrument() and one registry entry — no duplicate

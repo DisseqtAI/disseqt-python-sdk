@@ -20,7 +20,7 @@ from disseqt_agentic_sdk.instrumentation._oai_compat import (
     set_common_chat_request,
 )
 from disseqt_agentic_sdk.instrumentation._stream import AsyncStreamWrapper, SyncStreamWrapper
-from disseqt_agentic_sdk.instrumentation._utils import open_llm_span
+from disseqt_agentic_sdk.instrumentation._utils import open_llm_span, safe_call
 from disseqt_agentic_sdk.instrumentation.base import DisseqtInstrumentor
 from disseqt_agentic_sdk.semantics import (
     AgenticOperation,
@@ -48,7 +48,8 @@ def _sync_chat(instrumentor: MistralInstrumentor) -> Callable[..., Any]:
     def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         scope = open_llm_span(instrumentor.client, "mistral.chat.complete", SpanKind.MODEL_EXEC)
         span = scope.span
-        set_common_chat_request(
+        safe_call(
+            set_common_chat_request,
             span,
             kwargs,
             provider=AgenticProvider.MISTRAL_AI,
@@ -61,7 +62,7 @@ def _sync_chat(instrumentor: MistralInstrumentor) -> Callable[..., Any]:
         except Exception as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
-        set_chat_response(span, result)
+        safe_call(set_chat_response, span, result)
         scope.__exit__(None, None, None)
         return result
 
@@ -74,7 +75,8 @@ def _async_chat(instrumentor: MistralInstrumentor) -> Callable[..., Any]:
     ) -> Any:
         scope = open_llm_span(instrumentor.client, "mistral.chat.complete", SpanKind.MODEL_EXEC)
         span = scope.span
-        set_common_chat_request(
+        safe_call(
+            set_common_chat_request,
             span,
             kwargs,
             provider=AgenticProvider.MISTRAL_AI,
@@ -87,7 +89,7 @@ def _async_chat(instrumentor: MistralInstrumentor) -> Callable[..., Any]:
         except Exception as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
-        set_chat_response(span, result)
+        safe_call(set_chat_response, span, result)
         scope.__exit__(None, None, None)
         return result
 
@@ -98,7 +100,8 @@ def _sync_stream(instrumentor: MistralInstrumentor) -> Callable[..., Any]:
     def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         scope = open_llm_span(instrumentor.client, "mistral.chat.stream", SpanKind.MODEL_EXEC)
         span = scope.span
-        set_common_chat_request(
+        safe_call(
+            set_common_chat_request,
             span,
             kwargs,
             provider=AgenticProvider.MISTRAL_AI,
@@ -128,7 +131,8 @@ def _async_stream(instrumentor: MistralInstrumentor) -> Callable[..., Any]:
     ) -> Any:
         scope = open_llm_span(instrumentor.client, "mistral.chat.stream", SpanKind.MODEL_EXEC)
         span = scope.span
-        set_common_chat_request(
+        safe_call(
+            set_common_chat_request,
             span,
             kwargs,
             provider=AgenticProvider.MISTRAL_AI,

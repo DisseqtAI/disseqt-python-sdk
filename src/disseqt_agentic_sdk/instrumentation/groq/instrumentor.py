@@ -19,7 +19,7 @@ from disseqt_agentic_sdk.instrumentation._oai_compat import (
     set_common_chat_request,
 )
 from disseqt_agentic_sdk.instrumentation._stream import AsyncStreamWrapper, SyncStreamWrapper
-from disseqt_agentic_sdk.instrumentation._utils import open_llm_span
+from disseqt_agentic_sdk.instrumentation._utils import open_llm_span, safe_call
 from disseqt_agentic_sdk.instrumentation.base import DisseqtInstrumentor
 from disseqt_agentic_sdk.semantics import (
     AgenticOperation,
@@ -52,7 +52,8 @@ def _sync_chat(instrumentor: GroqInstrumentor) -> Callable[..., Any]:
             instrumentor.client, "groq.chat.completions.create", SpanKind.MODEL_EXEC
         )
         span = scope.span
-        set_common_chat_request(
+        safe_call(
+            set_common_chat_request,
             span,
             kwargs,
             provider=AgenticProvider.GROQ,
@@ -73,7 +74,7 @@ def _sync_chat(instrumentor: GroqInstrumentor) -> Callable[..., Any]:
                 on_chunk=lambda chunk: state.absorb(chunk),
                 on_finish=lambda: state.finalize(span),
             )
-        set_chat_response(span, result)
+        safe_call(set_chat_response, span, result)
         scope.__exit__(None, None, None)
         return result
 
@@ -88,7 +89,8 @@ def _async_chat(instrumentor: GroqInstrumentor) -> Callable[..., Any]:
             instrumentor.client, "groq.chat.completions.create", SpanKind.MODEL_EXEC
         )
         span = scope.span
-        set_common_chat_request(
+        safe_call(
+            set_common_chat_request,
             span,
             kwargs,
             provider=AgenticProvider.GROQ,
@@ -109,7 +111,7 @@ def _async_chat(instrumentor: GroqInstrumentor) -> Callable[..., Any]:
                 on_chunk=lambda chunk: state.absorb(chunk),
                 on_finish=lambda: state.finalize(span),
             )
-        set_chat_response(span, result)
+        safe_call(set_chat_response, span, result)
         scope.__exit__(None, None, None)
         return result
 

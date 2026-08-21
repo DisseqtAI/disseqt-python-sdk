@@ -145,6 +145,28 @@ def safe_set(span: DisseqtSpan, key: str, value: Any) -> None:
         span.set_attribute(key, value)
 
 
+def safe_call(fn: Any, *args: Any, **kwargs: Any) -> None:
+    """
+    Invoke ``fn(*args, **kwargs)`` and log-and-swallow any exception.
+
+    Every provider wrapper reaches into user-supplied kwargs (messages,
+    tools, config objects) and provider-returned responses. A malformed
+    input or an unexpected response shape must never break the user's
+    LLM call — observability code must degrade gracefully.
+
+    Return value from ``fn`` is discarded; use direct invocation when you
+    need the result.
+    """
+    try:
+        fn(*args, **kwargs)
+    except Exception as e:  # noqa: BLE001
+        _logger.warning(
+            "disseqt instrumentation error in %s: %s",
+            getattr(fn, "__qualname__", getattr(fn, "__name__", repr(fn))),
+            e,
+        )
+
+
 def serialize_messages(messages: Any) -> list[dict[str, Any]] | None:
     """
     Normalize a chat-messages input into `[{"role": str, "content": str}, ...]`.

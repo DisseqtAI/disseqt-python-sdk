@@ -20,7 +20,7 @@ from disseqt_agentic_sdk.instrumentation._oai_compat import (
     set_common_chat_request,
 )
 from disseqt_agentic_sdk.instrumentation._stream import AsyncStreamWrapper, SyncStreamWrapper
-from disseqt_agentic_sdk.instrumentation._utils import open_llm_span, safe_set
+from disseqt_agentic_sdk.instrumentation._utils import open_llm_span, safe_call, safe_set
 from disseqt_agentic_sdk.semantics import (
     AgenticAttributes,
     AgenticOperation,
@@ -48,7 +48,8 @@ def chat_completions_create(instrumentor: OpenAIInstrumentor) -> Callable[..., A
             instrumentor.client, "openai.chat.completions.create", SpanKind.MODEL_EXEC
         )
         span = scope.span
-        set_common_chat_request(
+        safe_call(
+            set_common_chat_request,
             span,
             kwargs,
             provider=PROVIDER,
@@ -71,7 +72,7 @@ def chat_completions_create(instrumentor: OpenAIInstrumentor) -> Callable[..., A
                 on_chunk=lambda chunk: state.absorb(chunk),
                 on_finish=lambda: state.finalize(span),
             )
-        set_chat_response(span, result)
+        safe_call(set_chat_response, span, result)
         scope.__exit__(None, None, None)
         return result
 
@@ -86,7 +87,8 @@ def async_chat_completions_create(instrumentor: OpenAIInstrumentor) -> Callable[
             instrumentor.client, "openai.chat.completions.create", SpanKind.MODEL_EXEC
         )
         span = scope.span
-        set_common_chat_request(
+        safe_call(
+            set_common_chat_request,
             span,
             kwargs,
             provider=PROVIDER,
@@ -109,7 +111,7 @@ def async_chat_completions_create(instrumentor: OpenAIInstrumentor) -> Callable[
                 on_chunk=lambda chunk: state.absorb(chunk),
                 on_finish=lambda: state.finalize(span),
             )
-        set_chat_response(span, result)
+        safe_call(set_chat_response, span, result)
         scope.__exit__(None, None, None)
         return result
 
@@ -123,7 +125,8 @@ def completions_create(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
     def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         scope = open_llm_span(instrumentor.client, "openai.completions.create", SpanKind.MODEL_EXEC)
         span = scope.span
-        set_common_chat_request(
+        safe_call(
+            set_common_chat_request,
             span,
             kwargs,
             provider=PROVIDER,
@@ -149,7 +152,7 @@ def completions_create(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
                 on_chunk=lambda chunk: None,
                 on_finish=lambda: None,
             )
-        set_chat_response(span, result)
+        safe_call(set_chat_response, span, result)
         scope.__exit__(None, None, None)
         return result
 
@@ -162,7 +165,8 @@ def async_completions_create(instrumentor: OpenAIInstrumentor) -> Callable[..., 
     ) -> Any:
         scope = open_llm_span(instrumentor.client, "openai.completions.create", SpanKind.MODEL_EXEC)
         span = scope.span
-        set_common_chat_request(
+        safe_call(
+            set_common_chat_request,
             span,
             kwargs,
             provider=PROVIDER,
@@ -188,7 +192,7 @@ def async_completions_create(instrumentor: OpenAIInstrumentor) -> Callable[..., 
                 on_chunk=lambda chunk: None,
                 on_finish=lambda: None,
             )
-        set_chat_response(span, result)
+        safe_call(set_chat_response, span, result)
         scope.__exit__(None, None, None)
         return result
 
@@ -202,15 +206,14 @@ def embeddings_create(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
     def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         scope = open_llm_span(instrumentor.client, "openai.embeddings.create", SpanKind.MODEL_EXEC)
         span = scope.span
-        _set_embeddings_request(span, kwargs)
-
+        safe_call(_set_embeddings_request, span, kwargs)
         try:
             result = wrapped(*args, **kwargs)
         except Exception as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
 
-        _set_embeddings_response(span, result)
+        safe_call(_set_embeddings_response, span, result)
         scope.__exit__(None, None, None)
         return result
 
@@ -223,15 +226,14 @@ def async_embeddings_create(instrumentor: OpenAIInstrumentor) -> Callable[..., A
     ) -> Any:
         scope = open_llm_span(instrumentor.client, "openai.embeddings.create", SpanKind.MODEL_EXEC)
         span = scope.span
-        _set_embeddings_request(span, kwargs)
-
+        safe_call(_set_embeddings_request, span, kwargs)
         try:
             result = await wrapped(*args, **kwargs)
         except Exception as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
 
-        _set_embeddings_response(span, result)
+        safe_call(_set_embeddings_response, span, result)
         scope.__exit__(None, None, None)
         return result
 
