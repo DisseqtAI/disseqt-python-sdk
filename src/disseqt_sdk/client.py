@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Mapping
 from typing import Any, Protocol, cast, runtime_checkable
 
 import requests
@@ -46,6 +47,89 @@ class HTTPError(Exception):
         self.message = message
         self.response_body = response_body
         super().__init__(f"HTTP {status_code}: {message}")
+
+
+class SDKVersionBlockedError(HTTPError):
+    """The server refused this call with HTTP 426 (DSQ-4260): the installed
+    disseqt-ai-sdk is below the enforced minimum version — permanently, or
+    during a scheduled brownout rehearsal ahead of the announced cutoff
+    (carried in :attr:`sunset`).
+
+    Subclasses :class:`HTTPError`, so existing ``except HTTPError`` handlers
+    keep working unchanged; catch this type to branch specifically on
+    "upgrade required" — page the platform team, apply a deliberate
+    fail-open/fail-closed policy, or trigger upgrade automation. The remedy
+    is always: ``pip install -U disseqt-ai-sdk``.
+    """
+
+    def __init__(
+        self,
+        status_code: int,
+        message: str,
+        response_body: str,
+        *,
+        latest: str | None = None,
+        notice: str | None = None,
+        sunset: str | None = None,
+    ) -> None:
+        """Initialize with the server's advertised version context.
+
+        Args:
+            status_code: HTTP status (426 in practice).
+            message: Self-explanatory refusal text (the server envelope's
+                ``error.external`` when available).
+            response_body: Truncated raw response body.
+            latest: ``X-SDK-Latest-Version`` response header, if present.
+            notice: ``X-SDK-Notice`` response header, if present.
+            sunset: RFC 8594 ``Sunset`` response header (the cutoff date),
+                if present.
+        """
+        super().__init__(status_code, message, response_body)
+        self.latest = latest
+        self.notice = notice
+        self.sunset = sunset
+
+
+def _version_blocked_error(
+    status_code: int, headers: Mapping[str, str], body_text: str | None
+) -> SDKVersionBlockedError | None:
+    """Build the typed 426 upgrade-required error, or ``None`` for any other
+    status.
+
+    Never raises — it runs on an error path that must stay dependable, so an
+    unreadable body or headers degrades to a generic self-explanatory
+    message. Headers are re-wrapped case-insensitively because one caller
+    (``DisseqtAPIClient._get_raw``) passes a plain dict and the gateway may
+    canonicalize header casing.
+    """
+    if status_code != 426:
+        return None
+    message = ""
+    try:
+        envelope = json.loads(body_text or "")
+        message = str((envelope.get("error") or {}).get("external") or "")
+    except Exception:
+        message = ""
+    try:
+        ci_headers = requests.structures.CaseInsensitiveDict(headers)
+        latest = ci_headers.get("X-SDK-Latest-Version") or None
+        notice = ci_headers.get("X-SDK-Notice") or None
+        sunset = ci_headers.get("Sunset") or None
+    except Exception:
+        latest = notice = sunset = None
+    if not message:
+        message = notice or (
+            "this disseqt-ai-sdk version is no longer supported; "
+            "upgrade with: pip install -U disseqt-ai-sdk"
+        )
+    return SDKVersionBlockedError(
+        status_code,
+        message,
+        (body_text or "")[:512],
+        latest=latest,
+        notice=notice,
+        sunset=sunset,
+    )
 
 
 class Client:
@@ -482,6 +566,9 @@ class Client:
                 latency_ms=latency_ms,
                 response_body_digest=digest(response.text or ""),
             )
+            blocked = _version_blocked_error(response.status_code, response.headers, response.text)
+            if blocked is not None:
+                raise blocked
             raise HTTPError(
                 status_code=response.status_code,
                 message="API request failed",
@@ -578,6 +665,11 @@ class Client:
                 status=http_resp.status_code,
                 latency_ms=latency_ms,
             )
+            blocked = _version_blocked_error(
+                http_resp.status_code, http_resp.headers, http_resp.text
+            )
+            if blocked is not None:
+                raise blocked
             raise HTTPError(
                 status_code=http_resp.status_code,
                 message="Policy evaluation failed",
