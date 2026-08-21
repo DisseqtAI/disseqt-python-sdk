@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from disseqt_agentic_sdk.instrumentation._kwargs import KW_MESSAGES, KW_MODEL, KW_STREAM
 from disseqt_agentic_sdk.instrumentation._utils import safe_set, serialize_messages
 from disseqt_agentic_sdk.semantics import AgenticAttributes, GenAIAttributes
 
@@ -40,7 +41,7 @@ def set_common_chat_request(
     temperature, max_tokens, top_p, frequency_penalty, presence_penalty,
     plus `stream` and `messages`.
     """
-    model = kwargs.get("model", "")
+    model = kwargs.get(KW_MODEL, "")
     span.set_model_info(model, provider)
     span.set_operation(operation_agentic)
 
@@ -68,10 +69,10 @@ def set_common_chat_request(
             safe_set(span, agentic_key, val)
             safe_set(span, gen_ai_key, val)
 
-    if "stream" in kwargs:
-        safe_set(span, GenAIAttributes.REQUEST_IS_STREAM, bool(kwargs["stream"]))
+    if KW_STREAM in kwargs:
+        safe_set(span, GenAIAttributes.REQUEST_IS_STREAM, bool(kwargs[KW_STREAM]))
 
-    messages = serialize_messages(kwargs.get("messages"))
+    messages = serialize_messages(kwargs.get(KW_MESSAGES))
     if messages:
         span.set_messages(input_messages=messages)
         safe_set(span, GenAIAttributes.PROMPT, messages)

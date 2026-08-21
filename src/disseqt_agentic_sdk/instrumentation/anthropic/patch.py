@@ -12,6 +12,12 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from disseqt_agentic_sdk.enums import SpanKind
+from disseqt_agentic_sdk.instrumentation._kwargs import (
+    KW_MESSAGES,
+    KW_MODEL,
+    KW_STREAM,
+    KW_SYSTEM,
+)
 from disseqt_agentic_sdk.instrumentation._stream import AsyncStreamWrapper, SyncStreamWrapper
 from disseqt_agentic_sdk.instrumentation._utils import (
     open_llm_span,
@@ -37,7 +43,7 @@ SYSTEM = GenAISystem.ANTHROPIC
 
 
 def _set_request_attrs(span: DisseqtSpan, kwargs: dict[str, Any]) -> None:
-    model = kwargs.get("model", "")
+    model = kwargs.get(KW_MODEL, "")
     span.set_model_info(model, PROVIDER)
     span.set_operation(AgenticOperation.CHAT)
 
@@ -56,14 +62,14 @@ def _set_request_attrs(span: DisseqtSpan, kwargs: dict[str, Any]) -> None:
             safe_set(span, agentic_key, val)
             safe_set(span, gen_ai_key, val)
 
-    if "stream" in kwargs:
-        safe_set(span, GenAIAttributes.REQUEST_IS_STREAM, bool(kwargs["stream"]))
+    if KW_STREAM in kwargs:
+        safe_set(span, GenAIAttributes.REQUEST_IS_STREAM, bool(kwargs[KW_STREAM]))
 
-    system_prompt = kwargs.get("system")
+    system_prompt = kwargs.get(KW_SYSTEM)
     if system_prompt:
         safe_set(span, AgenticAttributes.SYSTEM_INSTRUCTIONS, system_prompt)
 
-    messages = serialize_messages(kwargs.get("messages"))
+    messages = serialize_messages(kwargs.get(KW_MESSAGES))
     if messages:
         span.set_messages(input_messages=messages)
         safe_set(span, GenAIAttributes.PROMPT, messages)
@@ -116,7 +122,7 @@ def messages_create(instrumentor: AnthropicInstrumentor) -> Callable[..., Any]:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
 
-        if kwargs.get("stream"):
+        if kwargs.get(KW_STREAM):
             state = _StreamAccumulator()
             return SyncStreamWrapper(
                 stream=result,
@@ -143,7 +149,7 @@ def async_messages_create(instrumentor: AnthropicInstrumentor) -> Callable[..., 
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
 
-        if kwargs.get("stream"):
+        if kwargs.get(KW_STREAM):
             state = _StreamAccumulator()
             return AsyncStreamWrapper(
                 stream=result,

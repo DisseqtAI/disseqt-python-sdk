@@ -17,6 +17,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from disseqt_agentic_sdk.enums import SpanKind
+from disseqt_agentic_sdk.instrumentation._kwargs import KW_MESSAGES, KW_MODEL
 from disseqt_agentic_sdk.instrumentation._oai_compat import read
 from disseqt_agentic_sdk.instrumentation._stream import AsyncStreamWrapper, SyncStreamWrapper
 from disseqt_agentic_sdk.instrumentation._utils import (
@@ -59,7 +60,7 @@ class CohereInstrumentor(DisseqtInstrumentor):
 # Attribute writers
 # ---------------------------------------------------------------------
 def _set_request_attrs(span: DisseqtSpan, kwargs: dict[str, Any]) -> None:
-    model = kwargs.get("model", "")
+    model = kwargs.get(KW_MODEL, "")
     span.set_model_info(model, PROVIDER)
     span.set_operation(AgenticOperation.CHAT)
     safe_set(span, GenAIAttributes.SYSTEM, SYSTEM)
@@ -87,7 +88,7 @@ def _set_request_attrs(span: DisseqtSpan, kwargs: dict[str, Any]) -> None:
             safe_set(span, agentic_key, val)
             safe_set(span, gen_ai_key, val)
 
-    messages = serialize_messages(kwargs.get("messages"))
+    messages = serialize_messages(kwargs.get(KW_MESSAGES))
     if messages:
         span.set_messages(input_messages=messages)
         safe_set(span, GenAIAttributes.PROMPT, messages)

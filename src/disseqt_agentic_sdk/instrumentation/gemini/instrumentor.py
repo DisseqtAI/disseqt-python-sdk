@@ -20,6 +20,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from disseqt_agentic_sdk.enums import SpanKind
+from disseqt_agentic_sdk.instrumentation._kwargs import KW_CONFIG, KW_CONTENTS, KW_MODEL
 from disseqt_agentic_sdk.instrumentation._oai_compat import read
 from disseqt_agentic_sdk.instrumentation._stream import AsyncStreamWrapper, SyncStreamWrapper
 from disseqt_agentic_sdk.instrumentation._utils import (
@@ -61,7 +62,7 @@ class GeminiInstrumentor(DisseqtInstrumentor):
 # Attribute writers
 # ---------------------------------------------------------------------
 def _set_request_attrs(span: DisseqtSpan, kwargs: dict[str, Any]) -> None:
-    model = kwargs.get("model", "")
+    model = kwargs.get(KW_MODEL, "")
     span.set_model_info(model, PROVIDER)
     span.set_operation(AgenticOperation.GENERATE_CONTENT)
     safe_set(span, GenAIAttributes.SYSTEM, SYSTEM)
@@ -69,7 +70,7 @@ def _set_request_attrs(span: DisseqtSpan, kwargs: dict[str, Any]) -> None:
     safe_set(span, GenAIAttributes.OPERATION_NAME, GenAIOperation.GENERATE_CONTENT)
 
     # Gemini bundles generation params in a `config=GenerateContentConfig(...)` object.
-    config = kwargs.get("config")
+    config = kwargs.get(KW_CONFIG)
     for cfg_key, agentic_key, gen_ai_key in (
         ("temperature", AgenticAttributes.REQUEST_TEMPERATURE, GenAIAttributes.REQUEST_TEMPERATURE),
         (
@@ -89,7 +90,7 @@ def _set_request_attrs(span: DisseqtSpan, kwargs: dict[str, Any]) -> None:
     if system_instruction:
         safe_set(span, AgenticAttributes.SYSTEM_INSTRUCTIONS, str(system_instruction))
 
-    contents = kwargs.get("contents")
+    contents = kwargs.get(KW_CONTENTS)
     normalized = _normalize_contents(contents)
     if normalized:
         span.set_messages(input_messages=normalized)

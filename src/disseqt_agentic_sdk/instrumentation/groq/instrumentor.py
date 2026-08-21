@@ -12,6 +12,7 @@ from collections.abc import Callable
 from typing import Any
 
 from disseqt_agentic_sdk.enums import SpanKind
+from disseqt_agentic_sdk.instrumentation._kwargs import KW_STREAM
 from disseqt_agentic_sdk.instrumentation._oai_compat import (
     ChatStreamAccumulator,
     set_chat_response,
@@ -64,7 +65,7 @@ def _sync_chat(instrumentor: GroqInstrumentor) -> Callable[..., Any]:
         except Exception as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
-        if kwargs.get("stream"):
+        if kwargs.get(KW_STREAM):
             state = ChatStreamAccumulator()
             return SyncStreamWrapper(
                 stream=result,
@@ -98,7 +99,7 @@ def _async_chat(instrumentor: GroqInstrumentor) -> Callable[..., Any]:
         except Exception as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
-        if kwargs.get("stream"):
+        if kwargs.get(KW_STREAM):
             state = ChatStreamAccumulator()
             return AsyncStreamWrapper(
                 stream=result,

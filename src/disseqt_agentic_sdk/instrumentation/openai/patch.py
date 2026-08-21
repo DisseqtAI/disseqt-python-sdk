@@ -12,6 +12,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from disseqt_agentic_sdk.enums import SpanKind
+from disseqt_agentic_sdk.instrumentation._kwargs import KW_INPUT, KW_MODEL, KW_PROMPT, KW_STREAM
 from disseqt_agentic_sdk.instrumentation._oai_compat import (
     ChatStreamAccumulator,
     read,
@@ -62,7 +63,7 @@ def chat_completions_create(instrumentor: OpenAIInstrumentor) -> Callable[..., A
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
 
-        if kwargs.get("stream"):
+        if kwargs.get(KW_STREAM):
             state = ChatStreamAccumulator()
             return SyncStreamWrapper(
                 stream=result,
@@ -98,7 +99,7 @@ def async_chat_completions_create(instrumentor: OpenAIInstrumentor) -> Callable[
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
 
-        if kwargs.get("stream"):
+        if kwargs.get(KW_STREAM):
             state = ChatStreamAccumulator()
             return AsyncStreamWrapper(
                 stream=result,
@@ -128,7 +129,7 @@ def completions_create(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
             operation_agentic=AgenticOperation.TEXT_COMPLETION,
             operation_gen_ai=GenAIOperation.TEXT_COMPLETION,
         )
-        prompt = kwargs.get("prompt")
+        prompt = kwargs.get(KW_PROMPT)
         if prompt:
             safe_set(span, AgenticAttributes.INPUT_MESSAGES, [{"role": "user", "content": prompt}])
             safe_set(span, GenAIAttributes.PROMPT, prompt)
@@ -139,7 +140,7 @@ def completions_create(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
 
-        if kwargs.get("stream"):
+        if kwargs.get(KW_STREAM):
             return SyncStreamWrapper(
                 stream=result,
                 scope=scope,
@@ -165,7 +166,7 @@ def async_completions_create(instrumentor: OpenAIInstrumentor) -> Callable[..., 
             operation_agentic=AgenticOperation.TEXT_COMPLETION,
             operation_gen_ai=GenAIOperation.TEXT_COMPLETION,
         )
-        prompt = kwargs.get("prompt")
+        prompt = kwargs.get(KW_PROMPT)
         if prompt:
             safe_set(span, AgenticAttributes.INPUT_MESSAGES, [{"role": "user", "content": prompt}])
             safe_set(span, GenAIAttributes.PROMPT, prompt)
@@ -176,7 +177,7 @@ def async_completions_create(instrumentor: OpenAIInstrumentor) -> Callable[..., 
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
 
-        if kwargs.get("stream"):
+        if kwargs.get(KW_STREAM):
             return AsyncStreamWrapper(
                 stream=result,
                 scope=scope,
@@ -232,14 +233,14 @@ def async_embeddings_create(instrumentor: OpenAIInstrumentor) -> Callable[..., A
 
 
 def _set_embeddings_request(span: DisseqtSpan, kwargs: dict[str, Any]) -> None:
-    model = kwargs.get("model", "")
+    model = kwargs.get(KW_MODEL, "")
     span.set_model_info(model, PROVIDER)
     span.set_operation(AgenticOperation.EMBEDDINGS)
     safe_set(span, GenAIAttributes.SYSTEM, SYSTEM)
     safe_set(span, GenAIAttributes.REQUEST_MODEL, model)
     safe_set(span, GenAIAttributes.OPERATION_NAME, GenAIOperation.EMBEDDINGS)
 
-    inp = kwargs.get("input")
+    inp = kwargs.get(KW_INPUT)
     if isinstance(inp, str):
         safe_set(span, AgenticAttributes.INPUT_MESSAGES, [{"role": "user", "content": inp}])
     elif isinstance(inp, list) and inp and isinstance(inp[0], str):
