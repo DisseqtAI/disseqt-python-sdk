@@ -47,11 +47,15 @@ def sdk_identity_headers() -> dict[str, str]:
     """Return the request headers identifying this SDK build.
 
     ``X-SDK-Version`` is what production-monitoring's version middleware
-    compares against the latest release; ``User-Agent`` is the standard
-    duplicate for gateway/access logs.
+    compares against the latest release; ``X-SDK-Lang`` names this SDK's
+    release line so it is measured against the Python floor, never another
+    language's (the middleware assumes Python when the header is absent,
+    covering 0.8.0); ``User-Agent`` is the standard duplicate for
+    gateway/access logs.
     """
     return {
         "X-SDK-Version": SDK_VERSION,
+        "X-SDK-Lang": "python",
         "User-Agent": USER_AGENT,
     }
 

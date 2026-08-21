@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`X-SDK-Lang: python` identity header** — names this SDK's release
+  line so the backend's per-language version config compares it against
+  the Python floor, never the Node/Go one. (The middleware assumes
+  Python when the header is absent, so 0.8.0 clients stay correct.)
+- **`SDKVersionBlockedError`** — when the server refuses a call with
+  HTTP 426 (DSQ-4260, the SDK version enforcement tier — a permanent
+  cutoff or a scheduled brownout rehearsal), the SDK now raises this
+  typed exception instead of a generic `HTTPError`. It subclasses
+  `HTTPError`, so existing `except HTTPError` handlers keep working
+  unchanged; catch the new type to branch specifically on "upgrade
+  required". Carries `.latest`, `.notice`, and `.sunset` (RFC 8594
+  cutoff date) parsed from the response, and its message is the
+  server's self-explanatory refusal text. Raised from all request
+  paths (validator, policy-evaluate, Prompt Packs). `HTTPError` and
+  `SDKVersionBlockedError` are now exported from the package root.
+
 ## [0.8.0] - 2026-08-12
 
 ### Added

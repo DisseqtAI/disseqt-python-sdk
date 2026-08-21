@@ -8,7 +8,7 @@ from typing import Any, cast
 import requests
 
 from ._version import check_version_notice, sdk_identity_headers
-from .client import HTTPError
+from .client import HTTPError, _version_blocked_error
 from .models.prompt_packs import (
     CreateRunRequest,
     GeneratePromptPackRequest,
@@ -134,6 +134,11 @@ class DisseqtAPIClient:
 
             if not response.ok:
                 body = response.text[:512] if response.text else ""
+                blocked = _version_blocked_error(
+                    response.status_code, response.headers, response.text
+                )
+                if blocked is not None:
+                    raise blocked
                 raise HTTPError(
                     status_code=response.status_code,
                     message="API request failed",
@@ -218,6 +223,9 @@ class DisseqtAPIClient:
         """
         status, headers, text = self._get_raw(f"/{pack_id}/download")
         if status != 200:
+            blocked = _version_blocked_error(status, headers, text)
+            if blocked is not None:
+                raise blocked
             raise HTTPError(
                 status_code=status,
                 message="Download pack CSV failed",
