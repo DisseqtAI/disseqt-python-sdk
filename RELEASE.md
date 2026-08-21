@@ -53,6 +53,11 @@ This document outlines the release process for the Disseqt SDK.
 
 ### Post-Release
 
+- [ ] Bump the advertised SDK version in Vault so the server-driven
+      upgrade notice starts pointing at this release (stage, then prod;
+      `patch`, never `put`), and restart the deployment:
+      `vault kv patch -ns=disseqt secret/services/{staging,prod}/production-monitoring SDK_LATEST_VERSION=<new version>`
+      then `kubectl rollout restart deployment -n production-monitoring`
 - [ ] Verify release artifacts
 - [ ] Update documentation site (if applicable)
 - [ ] Announce release to stakeholders

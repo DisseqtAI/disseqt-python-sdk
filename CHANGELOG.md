@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-22
+
 ### Added
 - **`X-SDK-Lang: python` identity header** — names this SDK's release
   line so the backend's per-language version config compares it against
