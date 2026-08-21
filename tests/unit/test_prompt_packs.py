@@ -260,8 +260,9 @@ class TestDisseqtAPIClientHeaders:
         assert headers["Content-Type"] == "application/json"
         # SDK identity headers ride on every request (version notification).
         assert headers["X-SDK-Version"]
+        assert headers["X-SDK-Lang"] == "python"
         assert headers["User-Agent"].startswith("disseqt-ai-sdk/")
-        assert len(headers) == 5
+        assert len(headers) == 6
 
     def test_no_request_id_header(self, api_client):
         """Test that X-Request-Id is NOT included (handled by Kong)."""

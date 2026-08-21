@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`X-SDK-Lang: python` identity header** — names this SDK's release
+  line so the backend's per-language version config compares it against
+  the Python floor, never the Node/Go one. (The middleware assumes
+  Python when the header is absent, so 0.8.0 clients stay correct.)
 - **`SDKVersionBlockedError`** — when the server refuses a call with
   HTTP 426 (DSQ-4260, the SDK version enforcement tier — a permanent
   cutoff or a scheduled brownout rehearsal), the SDK now raises this

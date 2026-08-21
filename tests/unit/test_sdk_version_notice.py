@@ -55,6 +55,7 @@ class TestIdentityHeaders:
     def test_identity_header_values(self):
         headers = _version.sdk_identity_headers()
         assert headers["X-SDK-Version"] == SDK_VERSION
+        assert headers["X-SDK-Lang"] == "python"
         assert headers["User-Agent"] == f"disseqt-ai-sdk/{SDK_VERSION}"
 
     def test_validate_sends_version_headers(
