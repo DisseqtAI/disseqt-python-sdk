@@ -11,6 +11,7 @@ OTel dependency — patches call DisseqtSpan APIs directly.
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import importlib.metadata
 import inspect
@@ -170,21 +171,18 @@ class DisseqtInstrumentor(ABC):
         # Capture the wrapt FunctionWrapper we just installed so we can
         # identify our layer later even if another library stacks more
         # wrappers on top.
-        try:
+        installed: Any = None
+        with contextlib.suppress(Exception):
             module = importlib.import_module(module_name)
             installed = _get_attr(module, attr)
-        except Exception:  # noqa: BLE001
-            installed = None
         self._patched.append((module_name, attr, installed))
 
     def _unwind_patches(self) -> None:
         """Restore each tracked patch and clear the list."""
         for module_name, attr, installed in self._patched:
-            try:
+            with contextlib.suppress(Exception):
                 module = importlib.import_module(module_name)
                 _restore_wrapped(module, attr, installed, self.package_name)
-            except Exception:  # noqa: BLE001
-                pass
         self._patched.clear()
 
     @property

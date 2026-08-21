@@ -9,10 +9,15 @@ finishes (or errors).
 Two variants: `SyncStreamWrapper` for regular iterables, `AsyncStreamWrapper`
 for async iterables. Providers pass in `on_chunk` to update state and
 `on_finish` to write final attributes onto the span.
+
+Error-handling policy: instrumentation callbacks (on_chunk / on_finish)
+run under `contextlib.suppress(Exception)` — observability failures must
+never propagate into the caller's stream loop.
 """
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable
 from types import TracebackType
 from typing import TYPE_CHECKING, Any
@@ -49,10 +54,8 @@ class SyncStreamWrapper:
         except Exception as exc:
             self._finish(type(exc), exc, exc.__traceback__)
             raise
-        try:
+        with contextlib.suppress(Exception):
             self._on_chunk(chunk)
-        except Exception:  # noqa: BLE001 — never let observability break the caller
-            pass
         return chunk
 
     def _finish(
@@ -64,10 +67,8 @@ class SyncStreamWrapper:
         if self._closed:
             return
         self._closed = True
-        try:
+        with contextlib.suppress(Exception):
             self._on_finish()
-        except Exception:  # noqa: BLE001
-            pass
         self._scope.__exit__(exc_type, exc_val, exc_tb)
 
     # Some SDKs support with-statement on their stream objects.
@@ -111,10 +112,8 @@ class AsyncStreamWrapper:
         except Exception as exc:
             self._finish(type(exc), exc, exc.__traceback__)
             raise
-        try:
+        with contextlib.suppress(Exception):
             self._on_chunk(chunk)
-        except Exception:  # noqa: BLE001
-            pass
         return chunk
 
     def _finish(
@@ -126,10 +125,8 @@ class AsyncStreamWrapper:
         if self._closed:
             return
         self._closed = True
-        try:
+        with contextlib.suppress(Exception):
             self._on_finish()
-        except Exception:  # noqa: BLE001
-            pass
         self._scope.__exit__(exc_type, exc_val, exc_tb)
 
     async def __aenter__(self) -> AsyncStreamWrapper:
