@@ -12,6 +12,7 @@ Instrumentors are held per-client in a module-level registry so
 from __future__ import annotations
 
 import importlib
+import threading
 from typing import TYPE_CHECKING
 
 from disseqt_agentic_sdk.instrumentation._registry import INSTRUMENTOR_CLASSES
@@ -27,8 +28,10 @@ AVAILABLE_INSTRUMENTORS: list[str] = list(INSTRUMENTOR_CLASSES.keys())
 
 # name → active instrumentor instance. One per provider (a second
 # instrument() call on the same provider is a no-op unless uninstrumented
-# first).
+# first). Guarded by _LOCK so concurrent instrument_all() calls from
+# multiple threads can't race the check-then-set.
 _ACTIVE: dict[str, DisseqtInstrumentor] = {}
+_LOCK = threading.RLock()
 
 
 def instrument_all(client: DisseqtAgenticClient) -> list[str]:
@@ -50,9 +53,6 @@ def instrument(name: str, client: DisseqtAgenticClient) -> bool:
     provider is unknown, its package isn't installed, or instrumentation
     fails.
     """
-    if name in _ACTIVE:
-        logger.debug(f"{name} already instrumented on this process")
-        return False
     dotted = INSTRUMENTOR_CLASSES.get(name)
     if dotted is None:
         logger.warning(f"unknown instrumentor: {name}")
@@ -65,15 +65,20 @@ def instrument(name: str, client: DisseqtAgenticClient) -> bool:
         logger.debug(f"could not load instrumentor {name}: {e}")
         return False
     instrumentor = instrumentor_cls()
-    ok = instrumentor.instrument(client)
-    if ok:
-        _ACTIVE[name] = instrumentor
+    with _LOCK:
+        if name in _ACTIVE:
+            logger.debug(f"{name} already instrumented on this process")
+            return False
+        ok = instrumentor.instrument(client)
+        if ok:
+            _ACTIVE[name] = instrumentor
     return ok
 
 
 def uninstrument(name: str) -> bool:
     """Remove patches for a single provider. Returns True if we did anything."""
-    instrumentor = _ACTIVE.pop(name, None)
+    with _LOCK:
+        instrumentor = _ACTIVE.pop(name, None)
     if instrumentor is None:
         return False
     instrumentor.uninstrument()
@@ -82,5 +87,7 @@ def uninstrument(name: str) -> bool:
 
 def uninstrument_all() -> None:
     """Remove patches for every provider we've instrumented."""
-    for name in list(_ACTIVE.keys()):
+    with _LOCK:
+        names = list(_ACTIVE.keys())
+    for name in names:
         uninstrument(name)

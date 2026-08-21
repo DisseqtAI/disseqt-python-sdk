@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+
 from disseqt_agentic_sdk.instrumentation import (
     AVAILABLE_INSTRUMENTORS,
     instrument,
@@ -9,6 +11,7 @@ from disseqt_agentic_sdk.instrumentation import (
     uninstrument,
     uninstrument_all,
 )
+from disseqt_agentic_sdk.instrumentation import auto as auto_module
 from disseqt_agentic_sdk.instrumentation.base import DisseqtInstrumentor
 
 
@@ -36,3 +39,28 @@ class TestBase:
         assert "openai" in installed
         assert set(installed).issubset(set(AVAILABLE_INSTRUMENTORS))
         uninstrument_all()
+
+    def test_concurrent_instrument_calls_are_race_free(self, recording_client):
+        # Many threads racing on the same provider must produce exactly one
+        # successful instrument() and one registry entry — no duplicate
+        # patching, no corrupted _ACTIVE.
+        results: list[bool] = []
+        results_lock = threading.Lock()
+        barrier = threading.Barrier(16)
+
+        def worker() -> None:
+            barrier.wait()
+            ok = instrument("openai", recording_client)
+            with results_lock:
+                results.append(ok)
+
+        threads = [threading.Thread(target=worker) for _ in range(16)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert sum(results) == 1, f"expected exactly one winner, got {sum(results)}"
+        assert "openai" in auto_module._ACTIVE
+        uninstrument("openai")
+        assert "openai" not in auto_module._ACTIVE
