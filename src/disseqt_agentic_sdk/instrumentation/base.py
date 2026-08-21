@@ -201,6 +201,11 @@ class DisseqtInstrumentor(ABC):
     # Internal
     # ------------------------------------------------------------------
     def _detect_version(self) -> str | None:
+        """
+        Return the installed version of ``self.package_name``, or None if
+        the package isn't installed. Used by ``instrument()`` to gate the
+        min_version check and to record which SDK version we patched.
+        """
         try:
             return importlib.metadata.version(self.package_name)
         except importlib.metadata.PackageNotFoundError:
@@ -211,7 +216,15 @@ class DisseqtInstrumentor(ABC):
 # Module-level helpers
 # ----------------------------------------------------------------------
 def _version_lt(a: str, b: str) -> bool:
-    """Loose version compare — good enough for MAJOR.MINOR.PATCH gate checks."""
+    """
+    Return True if version string ``a`` is strictly less than ``b``.
+
+    Naive MAJOR.MINOR.PATCH-only comparator: strips non-digit characters
+    from each of the first three dot-separated parts. Sufficient for the
+    current min_version gates (all declared as X.Y.Z), but does not
+    handle rc / post / local versions correctly. A follow-up will swap
+    this out for ``packaging.version.Version``.
+    """
 
     def _parts(v: str) -> tuple[int, ...]:
         parts = []

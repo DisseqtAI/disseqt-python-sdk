@@ -135,6 +135,7 @@ class ChatStreamAccumulator:
     """
 
     def __init__(self) -> None:
+        """Initialize an empty accumulator; call absorb() per chunk."""
         self.buffer: list[str] = []
         self.role: str = "assistant"
         self.finish_reason: str | None = None
@@ -144,6 +145,14 @@ class ChatStreamAccumulator:
         self.completion_tokens: int | None = None
 
     def absorb(self, chunk: Any) -> None:
+        """
+        Fold one streaming chunk into the running totals.
+
+        Reads model/id from the first chunk that carries them, appends any
+        content delta to the buffer, and captures token counts and finish
+        reason when they appear (typically on the final chunk, or the
+        after-last chunk when ``stream_options={"include_usage": True}``).
+        """
         self.model = self.model or read(chunk, "model")
         self.response_id = self.response_id or read(chunk, "id")
 
@@ -173,6 +182,13 @@ class ChatStreamAccumulator:
                 self.finish_reason = finish_reason
 
     def finalize(self, span: DisseqtSpan) -> None:
+        """
+        Write the aggregated output attributes onto ``span`` at stream end.
+
+        Idempotent-friendly: fields left as None (e.g. missing token counts
+        when usage isn't included) are skipped rather than zeroed, so the
+        span reflects "unknown" not "0".
+        """
         text = "".join(self.buffer)
         if text:
             msgs = [{"role": self.role, "content": text}]
@@ -202,7 +218,15 @@ class ChatStreamAccumulator:
 # Utility
 # ---------------------------------------------------------------------
 def read(obj: Any, name: str) -> Any:
-    """Attribute-or-key read; tolerates both Pydantic models and dicts."""
+    """
+    Read a field from a provider response tolerating shape drift.
+
+    Provider SDKs occasionally shuffle between Pydantic models (attribute
+    access) and plain dicts (key access) across minor releases — sometimes
+    within the same response tree. This helper unifies both so instrumentors
+    don't need per-provider branches. Returns None on missing keys, missing
+    attributes, or ``obj is None``; never raises.
+    """
     if obj is None:
         return None
     if isinstance(obj, dict):
