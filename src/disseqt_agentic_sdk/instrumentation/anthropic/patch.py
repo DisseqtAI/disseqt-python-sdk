@@ -111,7 +111,7 @@ def _set_response_attrs(span: DisseqtSpan, response: Any) -> None:
 
 
 def messages_create(instrumentor: AnthropicInstrumentor) -> Callable[..., Any]:
-    def wrapper(wrapped, instance, args, kwargs):  # type: ignore[no-untyped-def]
+    def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         scope = open_llm_span(instrumentor.client, "anthropic.messages.create", SpanKind.MODEL_EXEC)
         span = scope.span
         _set_request_attrs(span, kwargs)
@@ -138,7 +138,9 @@ def messages_create(instrumentor: AnthropicInstrumentor) -> Callable[..., Any]:
 
 
 def async_messages_create(instrumentor: AnthropicInstrumentor) -> Callable[..., Any]:
-    async def wrapper(wrapped, instance, args, kwargs):  # type: ignore[no-untyped-def]
+    async def wrapper(
+        wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
+    ) -> Any:
         scope = open_llm_span(instrumentor.client, "anthropic.messages.create", SpanKind.MODEL_EXEC)
         span = scope.span
         _set_request_attrs(span, kwargs)

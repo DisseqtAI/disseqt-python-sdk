@@ -11,6 +11,7 @@ the auto-created trace (if any) is closed and flushed.
 from __future__ import annotations
 
 import contextlib
+from types import TracebackType
 from typing import TYPE_CHECKING, Any
 
 from disseqt_agentic_sdk.context import get_current_trace
@@ -42,7 +43,12 @@ class _SpanScope:
     def __enter__(self) -> DisseqtSpan:
         return self.span
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:  # type: ignore[no-untyped-def]
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         # Delegate to the span's own __exit__ so the incremental-send path runs.
         self.span.__exit__(exc_type, exc_val, exc_tb)
         if self._owns_trace:

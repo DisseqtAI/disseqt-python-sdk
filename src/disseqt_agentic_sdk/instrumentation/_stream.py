@@ -14,6 +14,7 @@ for async iterables. Providers pass in `on_chunk` to update state and
 from __future__ import annotations
 
 from collections.abc import Callable
+from types import TracebackType
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -54,7 +55,12 @@ class SyncStreamWrapper:
             pass
         return chunk
 
-    def _finish(self, exc_type, exc_val, exc_tb) -> None:  # type: ignore[no-untyped-def]
+    def _finish(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         if self._closed:
             return
         self._closed = True
@@ -68,7 +74,12 @@ class SyncStreamWrapper:
     def __enter__(self) -> SyncStreamWrapper:
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:  # type: ignore[no-untyped-def]
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         self._finish(exc_type, exc_val, exc_tb)
 
 
@@ -106,7 +117,12 @@ class AsyncStreamWrapper:
             pass
         return chunk
 
-    def _finish(self, exc_type, exc_val, exc_tb) -> None:  # type: ignore[no-untyped-def]
+    def _finish(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         if self._closed:
             return
         self._closed = True
@@ -119,5 +135,10 @@ class AsyncStreamWrapper:
     async def __aenter__(self) -> AsyncStreamWrapper:
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:  # type: ignore[no-untyped-def]
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         self._finish(exc_type, exc_val, exc_tb)

@@ -144,7 +144,7 @@ def _extract_message_text(message: Any) -> str:
 # Non-streaming
 # ---------------------------------------------------------------------
 def _sync_chat(instrumentor: CohereInstrumentor) -> Callable[..., Any]:
-    def wrapper(wrapped, instance, args, kwargs):  # type: ignore[no-untyped-def]
+    def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         scope = open_llm_span(instrumentor.client, "cohere.chat", SpanKind.MODEL_EXEC)
         span = scope.span
         _set_request_attrs(span, kwargs)
@@ -161,7 +161,9 @@ def _sync_chat(instrumentor: CohereInstrumentor) -> Callable[..., Any]:
 
 
 def _async_chat(instrumentor: CohereInstrumentor) -> Callable[..., Any]:
-    async def wrapper(wrapped, instance, args, kwargs):  # type: ignore[no-untyped-def]
+    async def wrapper(
+        wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
+    ) -> Any:
         scope = open_llm_span(instrumentor.client, "cohere.chat", SpanKind.MODEL_EXEC)
         span = scope.span
         _set_request_attrs(span, kwargs)
@@ -239,7 +241,7 @@ class _StreamAccumulator:
 
 
 def _sync_stream(instrumentor: CohereInstrumentor) -> Callable[..., Any]:
-    def wrapper(wrapped, instance, args, kwargs):  # type: ignore[no-untyped-def]
+    def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         scope = open_llm_span(instrumentor.client, "cohere.chat_stream", SpanKind.MODEL_EXEC)
         span = scope.span
         _set_request_attrs(span, kwargs)
@@ -260,7 +262,9 @@ def _sync_stream(instrumentor: CohereInstrumentor) -> Callable[..., Any]:
 
 
 def _async_stream(instrumentor: CohereInstrumentor) -> Callable[..., Any]:
-    async def wrapper(wrapped, instance, args, kwargs):  # type: ignore[no-untyped-def]
+    async def wrapper(
+        wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
+    ) -> Any:
         scope = open_llm_span(instrumentor.client, "cohere.chat_stream", SpanKind.MODEL_EXEC)
         span = scope.span
         _set_request_attrs(span, kwargs)

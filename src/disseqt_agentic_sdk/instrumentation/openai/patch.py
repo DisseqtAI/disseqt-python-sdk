@@ -43,7 +43,7 @@ SYSTEM = GenAISystem.OPENAI
 # Chat completions
 # ---------------------------------------------------------------------
 def chat_completions_create(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
-    def wrapper(wrapped, instance, args, kwargs):  # type: ignore[no-untyped-def]
+    def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         scope = open_llm_span(
             instrumentor.client, "openai.chat.completions.create", SpanKind.MODEL_EXEC
         )
@@ -79,7 +79,9 @@ def chat_completions_create(instrumentor: OpenAIInstrumentor) -> Callable[..., A
 
 
 def async_chat_completions_create(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
-    async def wrapper(wrapped, instance, args, kwargs):  # type: ignore[no-untyped-def]
+    async def wrapper(
+        wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
+    ) -> Any:
         scope = open_llm_span(
             instrumentor.client, "openai.chat.completions.create", SpanKind.MODEL_EXEC
         )
@@ -118,7 +120,7 @@ def async_chat_completions_create(instrumentor: OpenAIInstrumentor) -> Callable[
 # Legacy text completions (prompt= instead of messages=)
 # ---------------------------------------------------------------------
 def completions_create(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
-    def wrapper(wrapped, instance, args, kwargs):  # type: ignore[no-untyped-def]
+    def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         scope = open_llm_span(instrumentor.client, "openai.completions.create", SpanKind.MODEL_EXEC)
         span = scope.span
         set_common_chat_request(
@@ -155,7 +157,9 @@ def completions_create(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
 
 
 def async_completions_create(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
-    async def wrapper(wrapped, instance, args, kwargs):  # type: ignore[no-untyped-def]
+    async def wrapper(
+        wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
+    ) -> Any:
         scope = open_llm_span(instrumentor.client, "openai.completions.create", SpanKind.MODEL_EXEC)
         span = scope.span
         set_common_chat_request(
@@ -195,7 +199,7 @@ def async_completions_create(instrumentor: OpenAIInstrumentor) -> Callable[..., 
 # Embeddings — different response shape, own helpers.
 # ---------------------------------------------------------------------
 def embeddings_create(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
-    def wrapper(wrapped, instance, args, kwargs):  # type: ignore[no-untyped-def]
+    def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         scope = open_llm_span(instrumentor.client, "openai.embeddings.create", SpanKind.MODEL_EXEC)
         span = scope.span
         _set_embeddings_request(span, kwargs)
@@ -214,7 +218,9 @@ def embeddings_create(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
 
 
 def async_embeddings_create(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
-    async def wrapper(wrapped, instance, args, kwargs):  # type: ignore[no-untyped-def]
+    async def wrapper(
+        wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
+    ) -> Any:
         scope = open_llm_span(instrumentor.client, "openai.embeddings.create", SpanKind.MODEL_EXEC)
         span = scope.span
         _set_embeddings_request(span, kwargs)

@@ -165,7 +165,7 @@ def _extract_candidate_text(candidate: Any) -> str:
 # Wrappers
 # ---------------------------------------------------------------------
 def _sync_generate(instrumentor: GeminiInstrumentor) -> Callable[..., Any]:
-    def wrapper(wrapped, instance, args, kwargs):  # type: ignore[no-untyped-def]
+    def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         scope = open_llm_span(instrumentor.client, "gemini.generate_content", SpanKind.MODEL_EXEC)
         span = scope.span
         _set_request_attrs(span, kwargs)
@@ -182,7 +182,9 @@ def _sync_generate(instrumentor: GeminiInstrumentor) -> Callable[..., Any]:
 
 
 def _async_generate(instrumentor: GeminiInstrumentor) -> Callable[..., Any]:
-    async def wrapper(wrapped, instance, args, kwargs):  # type: ignore[no-untyped-def]
+    async def wrapper(
+        wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
+    ) -> Any:
         scope = open_llm_span(instrumentor.client, "gemini.generate_content", SpanKind.MODEL_EXEC)
         span = scope.span
         _set_request_attrs(span, kwargs)
@@ -259,7 +261,7 @@ class _StreamAccumulator:
 
 
 def _sync_stream(instrumentor: GeminiInstrumentor) -> Callable[..., Any]:
-    def wrapper(wrapped, instance, args, kwargs):  # type: ignore[no-untyped-def]
+    def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         scope = open_llm_span(
             instrumentor.client, "gemini.generate_content_stream", SpanKind.MODEL_EXEC
         )
@@ -282,7 +284,9 @@ def _sync_stream(instrumentor: GeminiInstrumentor) -> Callable[..., Any]:
 
 
 def _async_stream(instrumentor: GeminiInstrumentor) -> Callable[..., Any]:
-    async def wrapper(wrapped, instance, args, kwargs):  # type: ignore[no-untyped-def]
+    async def wrapper(
+        wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
+    ) -> Any:
         scope = open_llm_span(
             instrumentor.client, "gemini.generate_content_stream", SpanKind.MODEL_EXEC
         )

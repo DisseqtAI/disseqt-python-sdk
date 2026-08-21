@@ -51,7 +51,7 @@ class LiteLLMInstrumentor(DisseqtInstrumentor):
 
 
 def _sync_completion(instrumentor: LiteLLMInstrumentor) -> Callable[..., Any]:
-    def wrapper(wrapped, instance, args, kwargs):  # type: ignore[no-untyped-def]
+    def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         scope = open_llm_span(instrumentor.client, "litellm.completion", SpanKind.MODEL_EXEC)
         span = scope.span
         set_common_chat_request(
@@ -83,7 +83,9 @@ def _sync_completion(instrumentor: LiteLLMInstrumentor) -> Callable[..., Any]:
 
 
 def _async_completion(instrumentor: LiteLLMInstrumentor) -> Callable[..., Any]:
-    async def wrapper(wrapped, instance, args, kwargs):  # type: ignore[no-untyped-def]
+    async def wrapper(
+        wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
+    ) -> Any:
         scope = open_llm_span(instrumentor.client, "litellm.acompletion", SpanKind.MODEL_EXEC)
         span = scope.span
         set_common_chat_request(

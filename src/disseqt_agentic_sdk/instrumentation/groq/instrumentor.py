@@ -47,7 +47,7 @@ class GroqInstrumentor(DisseqtInstrumentor):
 
 
 def _sync_chat(instrumentor: GroqInstrumentor) -> Callable[..., Any]:
-    def wrapper(wrapped, instance, args, kwargs):  # type: ignore[no-untyped-def]
+    def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         scope = open_llm_span(
             instrumentor.client, "groq.chat.completions.create", SpanKind.MODEL_EXEC
         )
@@ -81,7 +81,9 @@ def _sync_chat(instrumentor: GroqInstrumentor) -> Callable[..., Any]:
 
 
 def _async_chat(instrumentor: GroqInstrumentor) -> Callable[..., Any]:
-    async def wrapper(wrapped, instance, args, kwargs):  # type: ignore[no-untyped-def]
+    async def wrapper(
+        wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
+    ) -> Any:
         scope = open_llm_span(
             instrumentor.client, "groq.chat.completions.create", SpanKind.MODEL_EXEC
         )
