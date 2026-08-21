@@ -40,6 +40,16 @@ class TestBase:
         assert set(installed).issubset(set(AVAILABLE_INSTRUMENTORS))
         uninstrument_all()
 
+    def test_uninstrument_drops_client_reference(self, recording_client):
+        # After uninstrument(), the instrumentor must not keep the client
+        # alive via wrapper closures — long-lived processes that repeatedly
+        # instrument/uninstrument would otherwise accumulate clients.
+        assert instrument("openai", recording_client) is True
+        instrumentor = auto_module._ACTIVE["openai"]
+        assert instrumentor._client is recording_client
+        uninstrument("openai")
+        assert instrumentor._client is None
+
     def test_concurrent_instrument_calls_are_race_free(self, recording_client):
         # Many threads racing on the same provider must produce exactly one
         # successful instrument() and one registry entry — no duplicate

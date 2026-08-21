@@ -101,6 +101,11 @@ class DisseqtInstrumentor(ABC):
                     pass
             self._patched.clear()
             self._is_instrumented = False
+            # Drop the client reference so wrapper closures created during
+            # _instrument() (which capture `self`) no longer keep the client
+            # alive. Long-running processes that instrument/uninstrument
+            # repeatedly would otherwise leak clients.
+            self._client = None
 
     # ------------------------------------------------------------------
     # Subclass hooks
