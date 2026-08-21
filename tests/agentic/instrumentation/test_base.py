@@ -203,6 +203,63 @@ class TestBase:
         assert reason == "instrument_failure"
         assert "boom" in detail
 
+    def test_on_install_hook_fires_with_name_and_version(self, recording_client):
+        calls: list[tuple[str, str]] = []
+        assert (
+            instrument("openai", recording_client, on_install=lambda n, v: calls.append((n, v)))
+            is True
+        )
+        try:
+            assert len(calls) == 1
+            name, version = calls[0]
+            assert name == "openai"
+            # openai is installed in the test env; version comes from importlib.metadata.
+            assert version and version != "unknown"
+        finally:
+            uninstrument("openai")
+
+    def test_on_install_hook_not_called_on_failure(self, recording_client):
+        calls: list[tuple[str, str]] = []
+        # Unknown provider — hook should not fire.
+        assert (
+            instrument(
+                "does-not-exist", recording_client, on_install=lambda n, v: calls.append((n, v))
+            )
+            is False
+        )
+        assert calls == []
+
+    def test_on_install_hook_exceptions_are_swallowed(self, recording_client):
+        # A broken user hook must not crash instrument() or corrupt _ACTIVE.
+        def broken(_name: str, _version: str) -> None:
+            raise RuntimeError("user hook exploded")
+
+        assert instrument("openai", recording_client, on_install=broken) is True
+        try:
+            assert "openai" in auto_module._ACTIVE
+        finally:
+            uninstrument("openai")
+
+    def test_on_uninstall_hook_fires(self, recording_client):
+        instrument("openai", recording_client)
+        calls: list[str] = []
+        assert uninstrument("openai", on_uninstall=lambda n: calls.append(n)) is True
+        assert calls == ["openai"]
+        # Second call — nothing to uninstall, hook must not fire.
+        assert uninstrument("openai", on_uninstall=lambda n: calls.append(n)) is False
+        assert calls == ["openai"]
+
+    def test_instrument_all_forwards_on_install_hook(self, recording_client):
+        installed_via_hook: list[str] = []
+        try:
+            names = instrument_all(
+                recording_client,
+                on_install=lambda n, _v: installed_via_hook.append(n),
+            )
+            assert set(installed_via_hook) == set(names)
+        finally:
+            uninstrument_all()
+
     def test_concurrent_instrument_calls_are_race_free(self, recording_client):
         # Many threads racing on the same provider must produce exactly one
         # successful instrument() and one registry entry — no duplicate

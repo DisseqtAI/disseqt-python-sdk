@@ -11,8 +11,10 @@ Instrumentors are held per-client in a module-level registry so
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import threading
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from disseqt_agentic_sdk.instrumentation._registry import INSTRUMENTOR_CLASSES
@@ -27,6 +29,12 @@ from disseqt_agentic_sdk.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from disseqt_agentic_sdk.client import DisseqtAgenticClient
+
+# Lifecycle-hook signatures. on_install fires after a successful patch,
+# on_uninstall fires after a successful unpatch. Both are wrapped in
+# contextlib.suppress so a bad user hook can't corrupt the registry.
+OnInstallHook = Callable[[str, str], None]  # (provider_name, detected_version)
+OnUninstallHook = Callable[[str], None]  # (provider_name,)
 
 logger = get_logger(__name__)
 
@@ -48,7 +56,12 @@ REASON_CLIENT_MISMATCH = "client_mismatch"
 _SKIP_REASONS = frozenset({REASON_PACKAGE_MISSING, REASON_ALREADY_INSTRUMENTED})
 
 
-def instrument_all(client: DisseqtAgenticClient, *, strict: bool = False) -> list[str]:
+def instrument_all(
+    client: DisseqtAgenticClient,
+    *,
+    strict: bool = False,
+    on_install: OnInstallHook | None = None,
+) -> list[str]:
     """
     Instrument every provider that's installed in the current environment.
     Returns the list of provider names that were successfully patched.
@@ -57,16 +70,26 @@ def instrument_all(client: DisseqtAgenticClient, *, strict: bool = False) -> lis
     (unknown_provider, load_failure, unsupported_version, client_mismatch,
     instrument_failure). Package-not-installed and already-instrumented are
     still treated as skips because they're the expected mass-init outcome.
+
+    on_install, if set, fires once per successfully patched provider with
+    ``(provider_name, detected_version)``. Exceptions raised by the hook
+    are swallowed — observability hooks must not break instrumentation.
     """
     installed: list[str] = []
     for name in INSTRUMENTOR_CLASSES:
-        if instrument(name, client, strict=strict):
+        if instrument(name, client, strict=strict, on_install=on_install):
             installed.append(name)
     logger.info(f"Auto-instrumented providers: {installed}")
     return installed
 
 
-def instrument(name: str, client: DisseqtAgenticClient, *, strict: bool = False) -> bool:
+def instrument(
+    name: str,
+    client: DisseqtAgenticClient,
+    *,
+    strict: bool = False,
+    on_install: OnInstallHook | None = None,
+) -> bool:
     """
     Instrument a single provider by name. Returns True on success, False on
     skip/failure.
@@ -80,6 +103,8 @@ def instrument(name: str, client: DisseqtAgenticClient, *, strict: bool = False)
     real failures (unknown_provider, load_failure, unsupported_version,
     client_mismatch, instrument_failure). Skips (package_missing,
     already_instrumented) still return False silently.
+
+    on_install fires after successful patching with ``(name, version)``.
     """
     dotted = INSTRUMENTOR_CLASSES.get(name)
     if dotted is None:
@@ -105,8 +130,13 @@ def instrument(name: str, client: DisseqtAgenticClient, *, strict: bool = False)
         ok = instrumentor.instrument(client)
         if ok:
             _ACTIVE[name] = instrumentor
-            return True
-        reason, detail = instrumentor._last_error or (REASON_INSTRUMENT_FAILURE, "unknown")
+            version = instrumentor.version
+    if ok:
+        if on_install is not None:
+            with contextlib.suppress(Exception):
+                on_install(name, version)
+        return True
+    reason, detail = instrumentor._last_error or (REASON_INSTRUMENT_FAILURE, "unknown")
     return _report(name, reason, detail, strict)
 
 
@@ -121,22 +151,34 @@ def _report(name: str, reason: str, detail: str, strict: bool) -> bool:
     return False
 
 
-def uninstrument(name: str) -> bool:
-    """Remove patches for a single provider. Returns True if we did anything."""
+def uninstrument(name: str, *, on_uninstall: OnUninstallHook | None = None) -> bool:
+    """
+    Remove patches for a single provider. Returns True if we did anything.
+
+    on_uninstall fires after successful unpatching with ``(name,)``.
+    Exceptions from the hook are swallowed.
+    """
     with _LOCK:
         instrumentor = _ACTIVE.pop(name, None)
     if instrumentor is None:
         return False
     instrumentor.uninstrument()
+    if on_uninstall is not None:
+        with contextlib.suppress(Exception):
+            on_uninstall(name)
     return True
 
 
-def uninstrument_all() -> None:
-    """Remove patches for every provider we've instrumented."""
+def uninstrument_all(*, on_uninstall: OnUninstallHook | None = None) -> None:
+    """
+    Remove patches for every provider we've instrumented.
+
+    on_uninstall fires once per unpatched provider with ``(name,)``.
+    """
     with _LOCK:
         names = list(_ACTIVE.keys())
     for name in names:
-        uninstrument(name)
+        uninstrument(name, on_uninstall=on_uninstall)
 
 
 def get_instrumented_client(name: str) -> DisseqtAgenticClient | None:
