@@ -260,6 +260,188 @@ class TestBase:
         finally:
             uninstrument_all()
 
+    def test_duration_ms_recorded_on_every_span(self, recording_client):
+        # Exercise the real openai wrapper; scope exit should attach
+        # agentic.request.duration_ms with a plausible positive value.
+        import json
+        from unittest.mock import patch as mp
+
+        from openai import OpenAI
+        from openai.types.chat import ChatCompletion, ChatCompletionMessage
+        from openai.types.chat.chat_completion import Choice
+        from openai.types.completion_usage import CompletionUsage
+
+        from disseqt_agentic_sdk.semantics import AgenticAttributes
+
+        instrument("openai", recording_client)
+        try:
+            client = OpenAI(api_key="fake")
+            fake = ChatCompletion(
+                id="c",
+                model="m",
+                object="chat.completion",
+                created=0,
+                choices=[
+                    Choice(
+                        index=0,
+                        finish_reason="stop",
+                        message=ChatCompletionMessage(role="assistant", content="ok"),
+                    )
+                ],
+                usage=CompletionUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            )
+            with mp.object(client.chat.completions, "_post", return_value=fake, create=True):
+                client.chat.completions.create(
+                    model="m", messages=[{"role": "user", "content": "x"}]
+                )
+        finally:
+            uninstrument("openai")
+
+        # find_span imported earlier via conftest; re-import for clarity.
+        from tests.agentic.instrumentation.conftest import find_span
+
+        span = find_span(recording_client, "openai.chat.completions.create")
+        attrs = json.loads(span.attributes_json)
+        duration = attrs[AgenticAttributes.REQUEST_DURATION_MS]
+        assert isinstance(duration, (int, float))
+        assert duration >= 0.0
+        # Local mocked call — must comfortably complete under a second.
+        assert duration < 1000.0
+
+    def test_slow_call_warning_fires_over_threshold(self, recording_client):
+        # Lower the threshold to near-zero so a trivially fast call trips it.
+        import json
+        import logging
+        from unittest.mock import patch as mp
+
+        from openai import OpenAI
+        from openai.types.chat import ChatCompletion, ChatCompletionMessage
+        from openai.types.chat.chat_completion import Choice
+        from openai.types.completion_usage import CompletionUsage
+
+        from disseqt_agentic_sdk.instrumentation import (
+            _utils as utils_module,
+        )
+        from disseqt_agentic_sdk.instrumentation import (
+            get_slow_call_threshold_ms,
+            set_slow_call_threshold_ms,
+        )
+        from disseqt_agentic_sdk.semantics import AgenticAttributes
+
+        original = get_slow_call_threshold_ms()
+        set_slow_call_threshold_ms(0.001)
+
+        # The SDK logger disables root propagation, so caplog can't see it.
+        # Attach a local handler directly for the duration of the test.
+        captured: list[logging.LogRecord] = []
+        handler = logging.Handler()
+        handler.setLevel(logging.WARNING)
+        handler.emit = captured.append  # type: ignore[assignment]
+        utils_module._logger.addHandler(handler)
+        # The SDK-wide logger factory silences the logger by default; bump
+        # our logger up so WARNINGs actually get emitted for the test.
+        prior_level = utils_module._logger.level
+        utils_module._logger.setLevel(logging.WARNING)
+
+        try:
+            instrument("openai", recording_client)
+            try:
+                client = OpenAI(api_key="fake")
+                fake = ChatCompletion(
+                    id="c",
+                    model="m",
+                    object="chat.completion",
+                    created=0,
+                    choices=[
+                        Choice(
+                            index=0,
+                            finish_reason="stop",
+                            message=ChatCompletionMessage(role="assistant", content="ok"),
+                        )
+                    ],
+                    usage=CompletionUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                )
+                with mp.object(client.chat.completions, "_post", return_value=fake, create=True):
+                    client.chat.completions.create(
+                        model="m", messages=[{"role": "user", "content": "x"}]
+                    )
+            finally:
+                uninstrument("openai")
+
+            assert any("slow LLM call" in rec.getMessage() for rec in captured)
+            # Duration is still recorded regardless.
+            from tests.agentic.instrumentation.conftest import find_span
+
+            span = find_span(recording_client, "openai.chat.completions.create")
+            attrs = json.loads(span.attributes_json)
+            assert AgenticAttributes.REQUEST_DURATION_MS in attrs
+        finally:
+            set_slow_call_threshold_ms(original)
+            utils_module._logger.removeHandler(handler)
+            utils_module._logger.setLevel(prior_level)
+
+    def test_set_threshold_none_disables_warning(self, recording_client):
+        # threshold=None → warning suppressed even for slow calls.
+        import logging
+        from unittest.mock import patch as mp
+
+        from openai import OpenAI
+        from openai.types.chat import ChatCompletion, ChatCompletionMessage
+        from openai.types.chat.chat_completion import Choice
+        from openai.types.completion_usage import CompletionUsage
+
+        from disseqt_agentic_sdk.instrumentation import (
+            _utils as utils_module,
+        )
+        from disseqt_agentic_sdk.instrumentation import (
+            get_slow_call_threshold_ms,
+            set_slow_call_threshold_ms,
+        )
+
+        original = get_slow_call_threshold_ms()
+        set_slow_call_threshold_ms(None)
+
+        captured: list[logging.LogRecord] = []
+        handler = logging.Handler()
+        handler.setLevel(logging.WARNING)
+        handler.emit = captured.append  # type: ignore[assignment]
+        utils_module._logger.addHandler(handler)
+        # The SDK-wide logger factory silences the logger by default; bump
+        # our logger up so WARNINGs actually get emitted for the test.
+        prior_level = utils_module._logger.level
+        utils_module._logger.setLevel(logging.WARNING)
+
+        try:
+            instrument("openai", recording_client)
+            try:
+                client = OpenAI(api_key="fake")
+                fake = ChatCompletion(
+                    id="c",
+                    model="m",
+                    object="chat.completion",
+                    created=0,
+                    choices=[
+                        Choice(
+                            index=0,
+                            finish_reason="stop",
+                            message=ChatCompletionMessage(role="assistant", content="ok"),
+                        )
+                    ],
+                    usage=CompletionUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                )
+                with mp.object(client.chat.completions, "_post", return_value=fake, create=True):
+                    client.chat.completions.create(
+                        model="m", messages=[{"role": "user", "content": "x"}]
+                    )
+            finally:
+                uninstrument("openai")
+
+            assert not any("slow LLM call" in rec.getMessage() for rec in captured)
+        finally:
+            set_slow_call_threshold_ms(original)
+            utils_module._logger.removeHandler(handler)
+            utils_module._logger.setLevel(prior_level)
+
     def test_concurrent_instrument_calls_are_race_free(self, recording_client):
         # Many threads racing on the same provider must produce exactly one
         # successful instrument() and one registry entry — no duplicate

@@ -14,6 +14,10 @@ Usage:
     # parented to any active trace/span in the current thread.
 """
 
+from disseqt_agentic_sdk.instrumentation._utils import (
+    get_slow_call_threshold_ms,
+    set_slow_call_threshold_ms,
+)
 from disseqt_agentic_sdk.instrumentation.auto import (
     AVAILABLE_INSTRUMENTORS,
     get_instrumented_client,
@@ -35,5 +39,7 @@ __all__ = [
     "uninstrument",
     "uninstrument_all",
     "get_instrumented_client",
+    "get_slow_call_threshold_ms",
+    "set_slow_call_threshold_ms",
     "AVAILABLE_INSTRUMENTORS",
 ]

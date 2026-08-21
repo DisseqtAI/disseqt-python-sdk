@@ -96,6 +96,8 @@ class AgenticAttributes:
     RESPONSE_ID = "agentic.response.id"
     RESPONSE_MODEL = "agentic.response.model"
     RESPONSE_FINISH_REASON = "agentic.response.finish_reason"
+    # Wall-clock duration of the wrapped SDK call, in milliseconds.
+    REQUEST_DURATION_MS = "agentic.request.duration_ms"
 
     # Cache
     CACHE_HIT = "agentic.cache.hit"
