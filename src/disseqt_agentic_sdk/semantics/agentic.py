@@ -17,6 +17,23 @@ class AgenticOperation:
     TEXT_COMPLETION = "text_completion"
     EMBEDDINGS = "embeddings"
     GENERATE_CONTENT = "generate_content"
+    # Async batch-inference lifecycle. Each SDK call gets its own span
+    # tagged with `agentic.batch.id` so consumers can group create/retrieve/
+    # cancel spans for the same job across time.
+    BATCH_CREATE = "batch.create"
+    BATCH_RETRIEVE = "batch.retrieve"
+    BATCH_CANCEL = "batch.cancel"
+
+
+class BatchStatus:
+    """Canonical batch-job status values, normalized across providers."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
 
 
 # Attribute name constants
@@ -88,6 +105,20 @@ class AgenticAttributes:
     ERROR_TYPE = "agentic.error.type"
     ERROR_MESSAGE = "agentic.error.message"
     ERROR_CODE = "agentic.error.code"
+
+    # Batch-job attributes. Emitted on every create/retrieve/cancel span
+    # tagged with the same batch id so downstream can group by lifecycle.
+    BATCH_ID = "agentic.batch.id"
+    BATCH_STATUS = "agentic.batch.status"
+    BATCH_ENDPOINT = "agentic.batch.endpoint"
+    BATCH_REQUEST_COUNT = "agentic.batch.request_count"
+    BATCH_COMPLETED_COUNT = "agentic.batch.completed_count"
+    BATCH_FAILED_COUNT = "agentic.batch.failed_count"
+    BATCH_INPUT_FILE_ID = "agentic.batch.input_file_id"
+    BATCH_OUTPUT_FILE_ID = "agentic.batch.output_file_id"
+    BATCH_ERROR_FILE_ID = "agentic.batch.error_file_id"
+    BATCH_CREATED_AT = "agentic.batch.created_at"
+    BATCH_COMPLETED_AT = "agentic.batch.completed_at"
 
 
 # Output types
