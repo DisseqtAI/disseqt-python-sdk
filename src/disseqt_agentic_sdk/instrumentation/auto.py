@@ -49,9 +49,14 @@ def instrument_all(client: DisseqtAgenticClient) -> list[str]:
 
 def instrument(name: str, client: DisseqtAgenticClient) -> bool:
     """
-    Instrument a single provider by name. Silently returns False if the
-    provider is unknown, its package isn't installed, or instrumentation
+    Instrument a single provider by name. Returns True on success, False if
+    the provider is unknown, its package isn't installed, or instrumentation
     fails.
+
+    Called twice for the same provider:
+    - Same client   → no-op, returns False, debug log.
+    - Different client → warn loudly and refuse; the caller must call
+      `uninstrument(name)` first if they intend to rebind.
     """
     dotted = INSTRUMENTOR_CLASSES.get(name)
     if dotted is None:
@@ -66,8 +71,15 @@ def instrument(name: str, client: DisseqtAgenticClient) -> bool:
         return False
     instrumentor = instrumentor_cls()
     with _LOCK:
-        if name in _ACTIVE:
-            logger.debug(f"{name} already instrumented on this process")
+        existing = _ACTIVE.get(name)
+        if existing is not None:
+            if existing._client is client:
+                logger.debug(f"{name} already instrumented on this process")
+            else:
+                logger.warning(
+                    f"{name} already instrumented with a different client; "
+                    "call uninstrument() first to rebind"
+                )
             return False
         ok = instrumentor.instrument(client)
         if ok:
@@ -91,3 +103,10 @@ def uninstrument_all() -> None:
         names = list(_ACTIVE.keys())
     for name in names:
         uninstrument(name)
+
+
+def get_instrumented_client(name: str) -> DisseqtAgenticClient | None:
+    """Return the client currently bound to `name`, or None if not instrumented."""
+    with _LOCK:
+        instrumentor = _ACTIVE.get(name)
+    return instrumentor._client if instrumentor is not None else None

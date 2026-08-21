@@ -16,6 +16,7 @@ Usage:
 
 from disseqt_agentic_sdk.instrumentation.auto import (
     AVAILABLE_INSTRUMENTORS,
+    get_instrumented_client,
     instrument,
     instrument_all,
     uninstrument,
@@ -29,5 +30,6 @@ __all__ = [
     "instrument_all",
     "uninstrument",
     "uninstrument_all",
+    "get_instrumented_client",
     "AVAILABLE_INSTRUMENTORS",
 ]

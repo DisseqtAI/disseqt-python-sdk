@@ -10,6 +10,7 @@ import wrapt
 
 from disseqt_agentic_sdk.instrumentation import (
     AVAILABLE_INSTRUMENTORS,
+    get_instrumented_client,
     instrument,
     instrument_all,
     uninstrument,
@@ -43,6 +44,40 @@ class TestBase:
         assert "openai" in installed
         assert set(installed).issubset(set(AVAILABLE_INSTRUMENTORS))
         uninstrument_all()
+
+    def test_get_instrumented_client_roundtrip(self, recording_client):
+        assert get_instrumented_client("openai") is None
+        assert instrument("openai", recording_client) is True
+        assert get_instrumented_client("openai") is recording_client
+        uninstrument("openai")
+        assert get_instrumented_client("openai") is None
+
+    def test_instrument_with_different_client_refuses(self, recording_client, monkeypatch):
+        # Build a second, distinct client — same fixture recipe as recording_client.
+        from unittest.mock import MagicMock
+
+        from disseqt_agentic_sdk import DisseqtAgenticClient
+        from tests.agentic.instrumentation.conftest import RecordingBuffer
+
+        monkeypatch.setattr("disseqt_agentic_sdk.client.client.HTTPTransport", MagicMock())
+        monkeypatch.setattr(
+            "disseqt_agentic_sdk.client.client.TraceBuffer",
+            lambda **kw: RecordingBuffer(),
+        )
+        other_client = DisseqtAgenticClient(
+            api_key="other",
+            project_id="other",
+            service_name="other",
+            endpoint="http://localhost/v1/traces",
+        )
+
+        assert instrument("openai", recording_client) is True
+        # Second call with a different client must refuse, not silently swap.
+        assert instrument("openai", other_client) is False
+        assert get_instrumented_client("openai") is recording_client
+
+        uninstrument("openai")
+        other_client.shutdown()
 
     def test_uninstrument_drops_client_reference(self, recording_client):
         # After uninstrument(), the instrumentor must not keep the client
