@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.metadata
+import inspect
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
@@ -47,7 +48,9 @@ class DisseqtInstrumentor(ABC):
 
     def __init__(self) -> None:
         self._client: DisseqtAgenticClient | None = None
-        self._patched: list[tuple[str, str]] = []  # (module, attr) pairs
+        # (module, attr, wrapper_fn) — wrapper_fn identifies our layer
+        # inside a wrapt FunctionWrapper chain (see _restore_wrapped).
+        self._patched: list[tuple[str, str, Any]] = []
         self._is_instrumented = False
 
     # ------------------------------------------------------------------
@@ -80,7 +83,11 @@ class DisseqtInstrumentor(ABC):
             logger.info(f"Instrumented {self.package_name} {version}")
             return True
         except Exception as e:
-            logger.warning(f"Failed to instrument {self.package_name}: {e}")
+            # Roll back any partial patches so we don't leave the SDK with
+            # some methods wrapped and no way to find them later.
+            logger.warning(f"Failed to instrument {self.package_name}: {e}; rolling back")
+            self._unwind_patches()
+            self._client = None
             return False
 
     def uninstrument(self) -> None:
@@ -90,16 +97,7 @@ class DisseqtInstrumentor(ABC):
         try:
             self._uninstrument()
         finally:
-            # Fallback: unwrap anything we tracked.
-            for module_name, attr in self._patched:
-                try:
-                    module = importlib.import_module(module_name)
-                    obj = _resolve_attr(module, attr)
-                    if hasattr(obj, "__wrapped__"):
-                        _restore_wrapped(module, attr)
-                except Exception:  # noqa: BLE001
-                    pass
-            self._patched.clear()
+            self._unwind_patches()
             self._is_instrumented = False
             # Drop the client reference so wrapper closures created during
             # _instrument() (which capture `self`) no longer keep the client
@@ -127,9 +125,28 @@ class DisseqtInstrumentor(ABC):
         """
         try:
             wrapt.wrap_function_wrapper(module_name, attr, wrapper)
-            self._patched.append((module_name, attr))
         except (ImportError, AttributeError) as e:
             logger.debug(f"{self.package_name}: skip patch {module_name}.{attr}: {e}")
+            return
+        # Capture the wrapt FunctionWrapper we just installed so we can
+        # identify our layer later even if another library stacks more
+        # wrappers on top.
+        try:
+            module = importlib.import_module(module_name)
+            installed = _get_attr(module, attr)
+        except Exception:  # noqa: BLE001
+            installed = None
+        self._patched.append((module_name, attr, installed))
+
+    def _unwind_patches(self) -> None:
+        """Restore each tracked patch and clear the list."""
+        for module_name, attr, installed in self._patched:
+            try:
+                module = importlib.import_module(module_name)
+                _restore_wrapped(module, attr, installed, self.package_name)
+            except Exception:  # noqa: BLE001
+                pass
+        self._patched.clear()
 
     @property
     def client(self) -> DisseqtAgenticClient:
@@ -169,20 +186,57 @@ def _version_lt(a: str, b: str) -> bool:
     return _parts(a) < _parts(b)
 
 
-def _resolve_attr(module: Any, dotted: str) -> Any:
+def _get_attr(module: Any, dotted: str) -> Any:
+    """
+    Resolve `module.dotted` without triggering descriptor protocol on the
+    leaf. Needed so we can capture the wrapt FunctionWrapper object that's
+    actually stored in a class's __dict__, not the BoundFunctionWrapper that
+    descriptor access would hand back.
+    """
+    parts = dotted.split(".")
     obj = module
-    for part in dotted.split("."):
+    for part in parts[:-1]:
         obj = getattr(obj, part)
-    return obj
+    return inspect.getattr_static(obj, parts[-1])
 
 
-def _restore_wrapped(module: Any, dotted: str) -> None:
-    """Walk `dotted` on `module`, replace the leaf with its `__wrapped__`."""
+def _restore_wrapped(module: Any, dotted: str, installed: Any, provider: str) -> None:
+    """
+    Splice our wrapt FunctionWrapper out of the chain at `module.dotted`.
+
+    `installed` is the exact FunctionWrapper we put in place. We identify
+    our layer by object identity, so subsequent wrappers added by other
+    libraries don't confuse us.
+
+    - If our wrapper is still on top: replace the leaf with its `__wrapped__`.
+    - If our wrapper is buried under another library's wrapper: skip and
+      warn. Splicing mid-chain requires rebuilding wrapt FunctionWrappers,
+      which isn't safe to do blindly; leave the other library's chain intact
+      and let their uninstall (or a process restart) restore the original.
+    - If our wrapper is gone from the chain: nothing to do.
+    """
+    if installed is None:
+        return
     parts = dotted.split(".")
     parent = module
     for part in parts[:-1]:
         parent = getattr(parent, part)
     leaf = parts[-1]
-    fn = getattr(parent, leaf)
-    if hasattr(fn, "__wrapped__"):
+    try:
+        fn = inspect.getattr_static(parent, leaf)
+    except AttributeError:
+        return
+
+    if fn is installed:
         setattr(parent, leaf, fn.__wrapped__)
+        return
+
+    node = getattr(fn, "__wrapped__", None)
+    while node is not None:
+        if node is installed:
+            logger.warning(
+                f"{provider}: cannot restore {dotted}: another library wrapped on top; "
+                "leaving chain intact"
+            )
+            return
+        node = getattr(node, "__wrapped__", None)
