@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 from disseqt_agentic_sdk.context import get_current_trace
 from disseqt_agentic_sdk.enums import SpanKind
+from disseqt_agentic_sdk.instrumentation._custom_attrs import _get_ambient_attrs
 from disseqt_agentic_sdk.semantics import AgenticAttributes
 from disseqt_agentic_sdk.utils.logging import get_logger
 
@@ -98,6 +99,12 @@ class _SpanScope:
                 duration_ms,
                 _slow_threshold_ms,
             )
+        # Merge user-supplied ambient attributes LAST — after every auto
+        # attribute, before span.__exit__. Any key the user set overrides
+        # the auto value. safe_set handles None/empty skips and swallows
+        # per-attribute errors so a single bad value can't poison the span.
+        for k, v in _get_ambient_attrs().items():
+            safe_set(self.span, k, v)
         # Delegate to the span's own __exit__ so the incremental-send path runs.
         self.span.__exit__(exc_type, exc_val, exc_tb)
         if self._owns_trace:
