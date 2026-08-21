@@ -22,10 +22,14 @@ from disseqt_agentic_sdk.instrumentation.auto import (
     uninstrument,
     uninstrument_all,
 )
-from disseqt_agentic_sdk.instrumentation.base import DisseqtInstrumentor
+from disseqt_agentic_sdk.instrumentation.base import (
+    DisseqtInstrumentor,
+    InstrumentationError,
+)
 
 __all__ = [
     "DisseqtInstrumentor",
+    "InstrumentationError",
     "instrument",
     "instrument_all",
     "uninstrument",

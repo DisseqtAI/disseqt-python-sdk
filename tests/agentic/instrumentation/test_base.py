@@ -6,10 +6,12 @@ import inspect
 import threading
 
 import openai
+import pytest
 import wrapt
 
 from disseqt_agentic_sdk.instrumentation import (
     AVAILABLE_INSTRUMENTORS,
+    InstrumentationError,
     get_instrumented_client,
     instrument,
     instrument_all,
@@ -18,6 +20,27 @@ from disseqt_agentic_sdk.instrumentation import (
 )
 from disseqt_agentic_sdk.instrumentation import auto as auto_module
 from disseqt_agentic_sdk.instrumentation.base import DisseqtInstrumentor
+
+
+class BrokenInstrumentor(DisseqtInstrumentor):
+    """Loadable and installed, but _instrument() always fails — used by
+    strict-mode tests. `openai` is chosen as package_name because it's a
+    real installed package, so we get past the version gate."""
+
+    package_name = "openai"
+
+    def _instrument(self) -> None:
+        raise RuntimeError("boom")
+
+
+class MissingPackageInstrumentor(DisseqtInstrumentor):
+    """Loadable but its package_name isn't installed — used to check that
+    strict mode treats package_missing as a skip, not a failure."""
+
+    package_name = "definitely-not-a-real-package-9x8x7"
+
+    def _instrument(self) -> None:  # pragma: no cover - shouldn't run
+        raise AssertionError("must not be called")
 
 
 class TestBase:
@@ -138,6 +161,47 @@ class TestBase:
         assert inspect.getattr_static(Completions, "create") is top_after_third_party
         # Restore the pristine method so we don't leak wrappers to other tests.
         Completions.create = original_create
+
+    def test_strict_raises_on_unknown_provider(self, recording_client):
+        with pytest.raises(InstrumentationError) as excinfo:
+            instrument("does-not-exist", recording_client, strict=True)
+        assert excinfo.value.name == "does-not-exist"
+        assert excinfo.value.reason == "unknown_provider"
+
+    def test_strict_raises_on_instrument_failure(self, recording_client):
+        # Register a broken instrumentor for a real installed package.
+        broken_key = "openai-broken-test"
+        auto_module.INSTRUMENTOR_CLASSES[broken_key] = (
+            "tests.agentic.instrumentation.test_base.BrokenInstrumentor"
+        )
+        try:
+            with pytest.raises(InstrumentationError) as excinfo:
+                instrument(broken_key, recording_client, strict=True)
+            assert excinfo.value.reason == "instrument_failure"
+            assert "boom" in excinfo.value.detail
+        finally:
+            auto_module.INSTRUMENTOR_CLASSES.pop(broken_key, None)
+
+    def test_strict_does_not_raise_on_missing_package(self, recording_client):
+        # Package not installed is a skip, not a failure — strict must not raise.
+        missing_key = "missing-test-provider"
+        auto_module.INSTRUMENTOR_CLASSES[missing_key] = (
+            "tests.agentic.instrumentation.test_base.MissingPackageInstrumentor"
+        )
+        try:
+            assert instrument(missing_key, recording_client, strict=True) is False
+        finally:
+            auto_module.INSTRUMENTOR_CLASSES.pop(missing_key, None)
+
+    def test_non_strict_returns_false_and_records_reason(self, recording_client):
+        # Non-strict path: bool return, no exception, reason captured on the
+        # instrumentor for direct inspection.
+        broken = BrokenInstrumentor()
+        assert broken.instrument(recording_client) is False
+        assert broken._last_error is not None
+        reason, detail = broken._last_error
+        assert reason == "instrument_failure"
+        assert "boom" in detail
 
     def test_concurrent_instrument_calls_are_race_free(self, recording_client):
         # Many threads racing on the same provider must produce exactly one

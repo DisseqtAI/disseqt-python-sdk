@@ -16,7 +16,13 @@ import threading
 from typing import TYPE_CHECKING
 
 from disseqt_agentic_sdk.instrumentation._registry import INSTRUMENTOR_CLASSES
-from disseqt_agentic_sdk.instrumentation.base import DisseqtInstrumentor
+from disseqt_agentic_sdk.instrumentation.base import (
+    REASON_ALREADY_INSTRUMENTED,
+    REASON_INSTRUMENT_FAILURE,
+    REASON_PACKAGE_MISSING,
+    DisseqtInstrumentor,
+    InstrumentationError,
+)
 from disseqt_agentic_sdk.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -33,58 +39,86 @@ AVAILABLE_INSTRUMENTORS: list[str] = list(INSTRUMENTOR_CLASSES.keys())
 _ACTIVE: dict[str, DisseqtInstrumentor] = {}
 _LOCK = threading.RLock()
 
+# Reason codes that mean "nothing to do here" rather than "something is
+# wrong". strict=True won't raise for these — they're the expected outcome
+# when a provider SDK isn't installed or was already instrumented.
+REASON_UNKNOWN_PROVIDER = "unknown_provider"
+REASON_LOAD_FAILURE = "load_failure"
+REASON_CLIENT_MISMATCH = "client_mismatch"
+_SKIP_REASONS = frozenset({REASON_PACKAGE_MISSING, REASON_ALREADY_INSTRUMENTED})
 
-def instrument_all(client: DisseqtAgenticClient) -> list[str]:
+
+def instrument_all(client: DisseqtAgenticClient, *, strict: bool = False) -> list[str]:
     """
     Instrument every provider that's installed in the current environment.
     Returns the list of provider names that were successfully patched.
+
+    strict=True raises InstrumentationError on the first non-skip failure
+    (unknown_provider, load_failure, unsupported_version, client_mismatch,
+    instrument_failure). Package-not-installed and already-instrumented are
+    still treated as skips because they're the expected mass-init outcome.
     """
     installed: list[str] = []
     for name in INSTRUMENTOR_CLASSES:
-        if instrument(name, client):
+        if instrument(name, client, strict=strict):
             installed.append(name)
     logger.info(f"Auto-instrumented providers: {installed}")
     return installed
 
 
-def instrument(name: str, client: DisseqtAgenticClient) -> bool:
+def instrument(name: str, client: DisseqtAgenticClient, *, strict: bool = False) -> bool:
     """
-    Instrument a single provider by name. Returns True on success, False if
-    the provider is unknown, its package isn't installed, or instrumentation
-    fails.
+    Instrument a single provider by name. Returns True on success, False on
+    skip/failure.
 
     Called twice for the same provider:
     - Same client   → no-op, returns False, debug log.
     - Different client → warn loudly and refuse; the caller must call
       `uninstrument(name)` first if they intend to rebind.
+
+    strict=True raises InstrumentationError instead of returning False for
+    real failures (unknown_provider, load_failure, unsupported_version,
+    client_mismatch, instrument_failure). Skips (package_missing,
+    already_instrumented) still return False silently.
     """
     dotted = INSTRUMENTOR_CLASSES.get(name)
     if dotted is None:
-        logger.warning(f"unknown instrumentor: {name}")
-        return False
+        return _report(name, REASON_UNKNOWN_PROVIDER, "not in registry", strict)
     module_path, class_name = dotted.rsplit(".", 1)
     try:
         module = importlib.import_module(module_path)
         instrumentor_cls = getattr(module, class_name)
     except Exception as e:  # noqa: BLE001
-        logger.debug(f"could not load instrumentor {name}: {e}")
-        return False
+        return _report(name, REASON_LOAD_FAILURE, str(e), strict)
     instrumentor = instrumentor_cls()
     with _LOCK:
         existing = _ACTIVE.get(name)
         if existing is not None:
             if existing._client is client:
-                logger.debug(f"{name} already instrumented on this process")
-            else:
-                logger.warning(
-                    f"{name} already instrumented with a different client; "
-                    "call uninstrument() first to rebind"
-                )
-            return False
+                return _report(name, REASON_ALREADY_INSTRUMENTED, "same client", strict)
+            return _report(
+                name,
+                REASON_CLIENT_MISMATCH,
+                "different client bound; call uninstrument() first to rebind",
+                strict,
+            )
         ok = instrumentor.instrument(client)
         if ok:
             _ACTIVE[name] = instrumentor
-    return ok
+            return True
+        reason, detail = instrumentor._last_error or (REASON_INSTRUMENT_FAILURE, "unknown")
+    return _report(name, reason, detail, strict)
+
+
+def _report(name: str, reason: str, detail: str, strict: bool) -> bool:
+    """Log and, if strict, raise. Always returns False for the non-strict path."""
+    if strict and reason not in _SKIP_REASONS:
+        raise InstrumentationError(name, reason, detail)
+    if reason in _SKIP_REASONS:
+        logger.debug(f"{name}: {reason} ({detail})")
+    else:
+        logger.warning(f"{name}: {reason} ({detail})")
+    return False
 
 
 def uninstrument(name: str) -> bool:

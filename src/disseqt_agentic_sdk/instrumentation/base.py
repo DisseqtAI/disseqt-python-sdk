@@ -27,6 +27,31 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+# Reason codes for instrumentation outcomes. Public strings — callers can
+# match on them via InstrumentationError.reason without importing symbols.
+REASON_PACKAGE_MISSING = "package_missing"
+REASON_UNSUPPORTED_VERSION = "unsupported_version"
+REASON_ALREADY_INSTRUMENTED = "already_instrumented"
+REASON_INSTRUMENT_FAILURE = "instrument_failure"
+
+
+class InstrumentationError(RuntimeError):
+    """
+    Raised when instrument()/instrument_all() is called with strict=True and
+    the requested provider can't be instrumented. The .reason attribute is
+    one of the REASON_* strings; .detail is a human-readable elaboration.
+    """
+
+    def __init__(self, name: str, reason: str, detail: str = "") -> None:
+        self.name = name
+        self.reason = reason
+        self.detail = detail
+        msg = f"instrument({name!r}) failed: {reason}"
+        if detail:
+            msg += f" ({detail})"
+        super().__init__(msg)
+
+
 class DisseqtInstrumentor(ABC):
     """
     Abstract base for provider instrumentors.
@@ -52,6 +77,9 @@ class DisseqtInstrumentor(ABC):
         # inside a wrapt FunctionWrapper chain (see _restore_wrapped).
         self._patched: list[tuple[str, str, Any]] = []
         self._is_instrumented = False
+        # Populated on failure so callers can inspect the reason without
+        # scraping log output. Cleared at the start of every instrument().
+        self._last_error: tuple[str, str] | None = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -60,18 +88,28 @@ class DisseqtInstrumentor(ABC):
         """
         Apply instrumentation. Returns True on success, False if skipped
         (package not installed, version too old, or already instrumented).
+
+        On failure, self._last_error is set to (reason, detail) so callers
+        wanting a structured error (e.g. auto.instrument(strict=True))
+        can distinguish the outcome without scraping log output.
         """
+        self._last_error = None
+
         if self._is_instrumented:
+            self._last_error = (REASON_ALREADY_INSTRUMENTED, "already instrumented")
             logger.debug(f"{self.package_name}: already instrumented, skipping")
             return False
 
         version = self._detect_version()
         if version is None:
+            self._last_error = (REASON_PACKAGE_MISSING, f"{self.package_name} not installed")
             logger.debug(f"{self.package_name}: package not installed, skipping")
             return False
 
         if self.min_version and _version_lt(version, self.min_version):
-            logger.warning(f"{self.package_name} {version} < required {self.min_version}, skipping")
+            detail = f"{self.package_name} {version} < required {self.min_version}"
+            self._last_error = (REASON_UNSUPPORTED_VERSION, detail)
+            logger.warning(f"{detail}, skipping")
             return False
 
         self._client = client
@@ -83,6 +121,7 @@ class DisseqtInstrumentor(ABC):
             logger.info(f"Instrumented {self.package_name} {version}")
             return True
         except Exception as e:
+            self._last_error = (REASON_INSTRUMENT_FAILURE, str(e))
             # Roll back any partial patches so we don't leave the SDK with
             # some methods wrapped and no way to find them later.
             logger.warning(f"Failed to instrument {self.package_name}: {e}; rolling back")
