@@ -16,13 +16,20 @@ Gemini's shape is unique:
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from disseqt_agentic_sdk.enums import SpanKind
-from disseqt_agentic_sdk.instrumentation._kwargs import KW_CONFIG, KW_CONTENTS, KW_MODEL
+from disseqt_agentic_sdk.instrumentation._kwargs import (
+    KW_CONFIG,
+    KW_CONTENTS,
+    KW_MODEL,
+    KW_TOOLS,
+)
 from disseqt_agentic_sdk.instrumentation._oai_compat import read
 from disseqt_agentic_sdk.instrumentation._stream import AsyncStreamWrapper, SyncStreamWrapper
+from disseqt_agentic_sdk.instrumentation._tool_calls import from_gemini as _tc_from_gemini
 from disseqt_agentic_sdk.instrumentation._utils import (
     open_llm_span,
     safe_set,
@@ -96,6 +103,18 @@ def _set_request_attrs(span: DisseqtSpan, kwargs: dict[str, Any]) -> None:
         span.set_messages(input_messages=normalized)
         safe_set(span, GenAIAttributes.PROMPT, normalized)
 
+    # google-genai callers pass tools either at top level or inside `config`.
+    tools = kwargs.get(KW_TOOLS)
+    if tools is None and config is not None:
+        tools = read(config, "tools")
+    if tools:
+        try:
+            tools_json = json.dumps(tools, default=str)
+        except (TypeError, ValueError):
+            tools_json = str(tools)
+        safe_set(span, AgenticAttributes.REQUEST_TOOLS, tools_json)
+        safe_set(span, GenAIAttributes.REQUEST_TOOLS, tools_json)
+
 
 def _normalize_contents(contents: Any) -> list[dict[str, Any]]:
     """Coerce Gemini contents (str | Content | list[...]) into role/content dicts."""
@@ -152,13 +171,38 @@ def _set_response_attrs(span: DisseqtSpan, response: Any) -> None:
             span.set_messages(output_messages=msgs)
             safe_set(span, GenAIAttributes.COMPLETION, msgs)
 
+        parts = _candidate_parts(first)
+        tool_calls = _tc_from_gemini(parts)
+        if tool_calls:
+            safe_set(span, AgenticAttributes.TOOL_CALLS, tool_calls)
+            safe_set(span, GenAIAttributes.TOOL_CALLS, tool_calls)
+            tc0 = tool_calls[0]
+            safe_set(span, AgenticAttributes.TOOL_NAME, tc0["name"])
+            safe_set(span, GenAIAttributes.TOOL_NAME, tc0["name"])
+            safe_set(span, AgenticAttributes.TOOL_CALL_ID, tc0["id"])
+            safe_set(span, GenAIAttributes.TOOL_CALL_ID, tc0["id"])
+            safe_set(span, AgenticAttributes.TOOL_ARGS, tc0["arguments"])
+            safe_set(span, GenAIAttributes.TOOL_ARGS, tc0["arguments"])
+
+
+def _candidate_parts(candidate: Any) -> list[Any]:
+    content = read(candidate, "content")
+    if content is None:
+        return []
+    return read(content, "parts") or []
+
 
 def _extract_candidate_text(candidate: Any) -> str:
     content = read(candidate, "content")
     if content is None:
         return ""
     parts = read(content, "parts") or []
-    return "".join(read(p, "text") or "" for p in parts)
+    out: list[str] = []
+    for p in parts:
+        text = read(p, "text")
+        if isinstance(text, str) and text:
+            out.append(text)
+    return "".join(out)
 
 
 # ---------------------------------------------------------------------
@@ -210,6 +254,10 @@ class _StreamAccumulator:
         self.response_id: str | None = None
         self.prompt_tokens: int | None = None
         self.response_tokens: int | None = None
+        # De-duped by (name, arguments-json) so repeated chunks carrying the
+        # same function_call don't inflate the list.
+        self._tool_parts: list[Any] = []
+        self._seen_tool_keys: set[tuple[str, str]] = set()
 
     def absorb(self, chunk: Any) -> None:
         self.model_version = self.model_version or read(chunk, "model_version")
@@ -233,6 +281,21 @@ class _StreamAccumulator:
             text = _extract_candidate_text(first)
             if text:
                 self.buffer.append(text)
+            for part in _candidate_parts(first):
+                fc = read(part, "function_call")
+                if fc is None:
+                    continue
+                name = read(fc, "name") or ""
+                args = read(fc, "args")
+                try:
+                    args_key = json.dumps(args, sort_keys=True, default=str)
+                except (TypeError, ValueError):
+                    args_key = str(args)
+                key = (name, args_key)
+                if key in self._seen_tool_keys:
+                    continue
+                self._seen_tool_keys.add(key)
+                self._tool_parts.append(part)
 
     def finalize(self, span: DisseqtSpan) -> None:
         text = "".join(self.buffer)
@@ -258,6 +321,18 @@ class _StreamAccumulator:
                 GenAIAttributes.USAGE_TOTAL_TOKENS,
                 self.prompt_tokens + self.response_tokens,
             )
+
+        tool_calls = _tc_from_gemini(self._tool_parts)
+        if tool_calls:
+            safe_set(span, AgenticAttributes.TOOL_CALLS, tool_calls)
+            safe_set(span, GenAIAttributes.TOOL_CALLS, tool_calls)
+            tc0 = tool_calls[0]
+            safe_set(span, AgenticAttributes.TOOL_NAME, tc0["name"])
+            safe_set(span, GenAIAttributes.TOOL_NAME, tc0["name"])
+            safe_set(span, AgenticAttributes.TOOL_CALL_ID, tc0["id"])
+            safe_set(span, GenAIAttributes.TOOL_CALL_ID, tc0["id"])
+            safe_set(span, AgenticAttributes.TOOL_ARGS, tc0["arguments"])
+            safe_set(span, GenAIAttributes.TOOL_ARGS, tc0["arguments"])
 
 
 def _sync_stream(instrumentor: GeminiInstrumentor) -> Callable[..., Any]:

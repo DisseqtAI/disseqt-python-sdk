@@ -21,3 +21,6 @@ KW_INPUT = "input"  # openai embeddings
 KW_SYSTEM = "system"  # anthropic system prompt
 KW_CONTENTS = "contents"  # gemini
 KW_CONFIG = "config"  # gemini generation config
+
+# Tool / function-calling.
+KW_TOOLS = "tools"

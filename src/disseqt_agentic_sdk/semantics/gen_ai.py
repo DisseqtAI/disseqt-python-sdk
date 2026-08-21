@@ -44,6 +44,11 @@ class GenAIAttributes:
     # Tools
     TOOL_NAME = "gen_ai.tool.name"
     TOOL_CALL_ID = "gen_ai.tool.call_id"
+    TOOL_ARGS = "gen_ai.tool.args"
+    TOOL_RESULT = "gen_ai.tool.result"
+    # Array of tool-call dicts (canonical shape: {id, name, arguments}).
+    TOOL_CALLS = "gen_ai.tool_calls"
+    REQUEST_TOOLS = "gen_ai.request.tools"
 
 
 class GenAISystem:

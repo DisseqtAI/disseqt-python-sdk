@@ -8,6 +8,7 @@ chunks land token counts on the span.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -17,8 +18,10 @@ from disseqt_agentic_sdk.instrumentation._kwargs import (
     KW_MODEL,
     KW_STREAM,
     KW_SYSTEM,
+    KW_TOOLS,
 )
 from disseqt_agentic_sdk.instrumentation._stream import AsyncStreamWrapper, SyncStreamWrapper
+from disseqt_agentic_sdk.instrumentation._tool_calls import from_anthropic as _tc_from_anthropic
 from disseqt_agentic_sdk.instrumentation._utils import (
     open_llm_span,
     safe_set,
@@ -74,6 +77,15 @@ def _set_request_attrs(span: DisseqtSpan, kwargs: dict[str, Any]) -> None:
         span.set_messages(input_messages=messages)
         safe_set(span, GenAIAttributes.PROMPT, messages)
 
+    tools = kwargs.get(KW_TOOLS)
+    if tools:
+        try:
+            tools_json = json.dumps(tools, default=str)
+        except (TypeError, ValueError):
+            tools_json = str(tools)
+        safe_set(span, AgenticAttributes.REQUEST_TOOLS, tools_json)
+        safe_set(span, GenAIAttributes.REQUEST_TOOLS, tools_json)
+
 
 def _set_response_attrs(span: DisseqtSpan, response: Any) -> None:
     resp_id = _read(response, "id")
@@ -97,7 +109,8 @@ def _set_response_attrs(span: DisseqtSpan, response: Any) -> None:
         safe_set(span, GenAIAttributes.USAGE_OUTPUT_TOKENS, output_tokens)
         safe_set(span, GenAIAttributes.USAGE_TOTAL_TOKENS, input_tokens + output_tokens)
 
-    # Anthropic returns response.content as a list of blocks ({"type":"text","text":...}).
+    # Anthropic returns response.content as a list of blocks
+    # ({"type":"text","text":...} or {"type":"tool_use","id":..,"name":..,"input":..}).
     content_blocks = _read(response, "content") or []
     text_parts: list[str] = []
     for block in content_blocks:
@@ -108,6 +121,18 @@ def _set_response_attrs(span: DisseqtSpan, response: Any) -> None:
         msgs = [{"role": "assistant", "content": "".join(text_parts)}]
         span.set_messages(output_messages=msgs)
         safe_set(span, GenAIAttributes.COMPLETION, msgs)
+
+    tool_calls = _tc_from_anthropic(content_blocks)
+    if tool_calls:
+        safe_set(span, AgenticAttributes.TOOL_CALLS, tool_calls)
+        safe_set(span, GenAIAttributes.TOOL_CALLS, tool_calls)
+        first = tool_calls[0]
+        safe_set(span, AgenticAttributes.TOOL_NAME, first["name"])
+        safe_set(span, GenAIAttributes.TOOL_NAME, first["name"])
+        safe_set(span, AgenticAttributes.TOOL_CALL_ID, first["id"])
+        safe_set(span, GenAIAttributes.TOOL_CALL_ID, first["id"])
+        safe_set(span, AgenticAttributes.TOOL_ARGS, first["arguments"])
+        safe_set(span, GenAIAttributes.TOOL_ARGS, first["arguments"])
 
 
 def messages_create(instrumentor: AnthropicInstrumentor) -> Callable[..., Any]:
@@ -180,6 +205,11 @@ class _StreamAccumulator:
         self.stop_reason: str | None = None
         self.input_tokens: int | None = None
         self.output_tokens: int | None = None
+        # Tool-use blocks arrive across multiple events: `content_block_start`
+        # carries the id + name (with input often empty), then
+        # `content_block_delta` events with delta.type == "input_json_delta"
+        # concatenate the JSON arguments piece by piece. Key by block index.
+        self._tool_use: dict[int, dict[str, Any]] = {}
 
     def absorb(self, chunk: Any) -> None:
         event_type = _read(chunk, "type")
@@ -194,12 +224,29 @@ class _StreamAccumulator:
                     self.input_tokens = _read(usage, "input_tokens") or self.input_tokens
                     self.output_tokens = _read(usage, "output_tokens") or self.output_tokens
 
+        elif event_type == "content_block_start":
+            block = _read(chunk, "content_block")
+            if block is not None and _read(block, "type") == "tool_use":
+                idx = _read(chunk, "index")
+                if idx is not None:
+                    self._tool_use[idx] = {
+                        "id": _read(block, "id"),
+                        "name": _read(block, "name"),
+                        "input_json": "",
+                    }
+
         elif event_type == "content_block_delta":
             delta = _read(chunk, "delta")
-            if delta is not None and _read(delta, "type") == "text_delta":
+            delta_type = _read(delta, "type") if delta is not None else None
+            if delta_type == "text_delta":
                 text_val = _read(delta, "text") or ""
                 if text_val:
                     self.buffer.append(text_val)
+            elif delta_type == "input_json_delta":
+                idx = _read(chunk, "index")
+                if idx is not None and idx in self._tool_use:
+                    frag = _read(delta, "partial_json") or ""
+                    self._tool_use[idx]["input_json"] += frag
 
         elif event_type == "message_delta":
             delta = _read(chunk, "delta")
@@ -237,6 +284,35 @@ class _StreamAccumulator:
                 GenAIAttributes.USAGE_TOTAL_TOKENS,
                 self.input_tokens + self.output_tokens,
             )
+
+        if self._tool_use:
+            # Rebuild anthropic-shaped tool_use blocks and feed through the
+            # canonical adapter. Accumulated `input_json` is already a JSON
+            # string; parse to dict here so the adapter's json.dumps yields
+            # the exact same string.
+            blocks = []
+            for _idx, entry in sorted(self._tool_use.items()):
+                if not entry.get("name"):
+                    continue
+                raw = entry["input_json"] or "{}"
+                try:
+                    parsed = json.loads(raw)
+                except (TypeError, ValueError):
+                    parsed = raw
+                blocks.append(
+                    {"type": "tool_use", "id": entry["id"], "name": entry["name"], "input": parsed}
+                )
+            tool_calls = _tc_from_anthropic(blocks)
+            if tool_calls:
+                safe_set(span, AgenticAttributes.TOOL_CALLS, tool_calls)
+                safe_set(span, GenAIAttributes.TOOL_CALLS, tool_calls)
+                first = tool_calls[0]
+                safe_set(span, AgenticAttributes.TOOL_NAME, first["name"])
+                safe_set(span, GenAIAttributes.TOOL_NAME, first["name"])
+                safe_set(span, AgenticAttributes.TOOL_CALL_ID, first["id"])
+                safe_set(span, GenAIAttributes.TOOL_CALL_ID, first["id"])
+                safe_set(span, AgenticAttributes.TOOL_ARGS, first["arguments"])
+                safe_set(span, GenAIAttributes.TOOL_ARGS, first["arguments"])
 
 
 def _read(obj: Any, name: str) -> Any:

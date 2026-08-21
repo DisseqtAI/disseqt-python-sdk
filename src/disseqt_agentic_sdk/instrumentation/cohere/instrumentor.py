@@ -13,13 +13,15 @@ Streaming events use `event.type`:
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from disseqt_agentic_sdk.enums import SpanKind
-from disseqt_agentic_sdk.instrumentation._kwargs import KW_MESSAGES, KW_MODEL
+from disseqt_agentic_sdk.instrumentation._kwargs import KW_MESSAGES, KW_MODEL, KW_TOOLS
 from disseqt_agentic_sdk.instrumentation._oai_compat import read
 from disseqt_agentic_sdk.instrumentation._stream import AsyncStreamWrapper, SyncStreamWrapper
+from disseqt_agentic_sdk.instrumentation._tool_calls import from_openai as _tc_from_openai
 from disseqt_agentic_sdk.instrumentation._utils import (
     open_llm_span,
     safe_set,
@@ -93,6 +95,15 @@ def _set_request_attrs(span: DisseqtSpan, kwargs: dict[str, Any]) -> None:
         span.set_messages(input_messages=messages)
         safe_set(span, GenAIAttributes.PROMPT, messages)
 
+    tools = kwargs.get(KW_TOOLS)
+    if tools:
+        try:
+            tools_json = json.dumps(tools, default=str)
+        except (TypeError, ValueError):
+            tools_json = str(tools)
+        safe_set(span, AgenticAttributes.REQUEST_TOOLS, tools_json)
+        safe_set(span, GenAIAttributes.REQUEST_TOOLS, tools_json)
+
 
 def _set_response_attrs(span: DisseqtSpan, response: Any) -> None:
     resp_id = read(response, "id")
@@ -117,6 +128,20 @@ def _set_response_attrs(span: DisseqtSpan, response: Any) -> None:
         msgs = [{"role": read(message, "role") or "assistant", "content": text}]
         span.set_messages(output_messages=msgs)
         safe_set(span, GenAIAttributes.COMPLETION, msgs)
+
+    # Cohere v2 tool calls sit on message.tool_calls in OpenAI shape.
+    raw_tool_calls = read(message, "tool_calls") if message is not None else None
+    tool_calls = _tc_from_openai(raw_tool_calls)
+    if tool_calls:
+        safe_set(span, AgenticAttributes.TOOL_CALLS, tool_calls)
+        safe_set(span, GenAIAttributes.TOOL_CALLS, tool_calls)
+        first = tool_calls[0]
+        safe_set(span, AgenticAttributes.TOOL_NAME, first["name"])
+        safe_set(span, GenAIAttributes.TOOL_NAME, first["name"])
+        safe_set(span, AgenticAttributes.TOOL_CALL_ID, first["id"])
+        safe_set(span, GenAIAttributes.TOOL_CALL_ID, first["id"])
+        safe_set(span, AgenticAttributes.TOOL_ARGS, first["arguments"])
+        safe_set(span, GenAIAttributes.TOOL_ARGS, first["arguments"])
 
 
 def _extract_usage(usage: Any) -> tuple[int | None, int | None]:

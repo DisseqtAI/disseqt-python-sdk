@@ -70,3 +70,51 @@ class TestCohereChat:
         assert attrs[GenAIAttributes.SYSTEM] == "cohere"
         assert attrs[GenAIAttributes.OPERATION_NAME] == "chat"
         assert attrs[GenAIAttributes.RESPONSE_FINISH_REASONS] == ["COMPLETE"]
+
+
+class TestCohereToolCalls:
+    def test_captures_tool_calls_on_message(self, recording_client):
+        # Cohere v2 puts tool calls on `response.message.tool_calls` in the
+        # OpenAI-shape (id, function.name, function.arguments).
+        instrument("cohere", recording_client)
+        try:
+            client = cohere.ClientV2(api_key="fake")
+
+            fn = MagicMock()
+            fn.name = "get_weather"
+            fn.arguments = '{"location":"Paris"}'
+            tc = MagicMock(id="tool_c1", function=fn)
+            message = MagicMock(role="assistant", content=[MagicMock(text="")], tool_calls=[tc])
+            tokens = MagicMock(input_tokens=9, output_tokens=5)
+            usage = MagicMock(tokens=tokens)
+            fake = MagicMock(
+                id="cohere-tools",
+                finish_reason="TOOL_CALL",
+                message=message,
+                usage=usage,
+            )
+            http_response = MagicMock(data=fake)
+            tools_arg = [
+                {"type": "function", "function": {"name": "get_weather"}},
+            ]
+            with patch.object(client._raw_client, "chat", return_value=http_response, create=True):
+                client.chat(
+                    model="command-r-plus",
+                    messages=[{"role": "user", "content": "weather?"}],
+                    tools=tools_arg,
+                )
+        finally:
+            uninstrument("cohere")
+
+        span = find_span(recording_client, "cohere.chat")
+        attrs = json.loads(span.attributes_json)
+
+        req_tools = json.loads(attrs[AgenticAttributes.REQUEST_TOOLS])
+        assert req_tools[0]["function"]["name"] == "get_weather"
+
+        calls = attrs[AgenticAttributes.TOOL_CALLS]
+        assert calls == [
+            {"id": "tool_c1", "name": "get_weather", "arguments": '{"location":"Paris"}'}
+        ]
+        assert attrs[AgenticAttributes.TOOL_NAME] == "get_weather"
+        assert attrs[AgenticAttributes.TOOL_CALL_ID] == "tool_c1"

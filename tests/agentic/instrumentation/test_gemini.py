@@ -10,6 +10,7 @@ import pytest
 pytest.importorskip("google.genai")
 
 from google import genai  # noqa: E402
+from google.genai import types as genai_types  # noqa: E402
 
 from disseqt_agentic_sdk.instrumentation import instrument, uninstrument  # noqa: E402
 from disseqt_agentic_sdk.semantics import AgenticAttributes, GenAIAttributes  # noqa: E402
@@ -66,3 +67,71 @@ class TestGeminiGenerate:
 
         assert attrs[GenAIAttributes.SYSTEM] == "gemini"
         assert attrs[GenAIAttributes.OPERATION_NAME] == "generate_content"
+
+
+class TestGeminiToolCalls:
+    def test_captures_function_call_parts(self, recording_client):
+        # Gemini surfaces tool calls as `candidates[0].content.parts[].function_call`
+        # with a parsed `args` dict; the adapter synthesizes an id.
+        instrument("google-genai", recording_client)
+        try:
+            client = genai.Client(api_key="fake")
+
+            fc = MagicMock()
+            fc.name = "get_weather"
+            fc.args = {"location": "Paris"}
+            # Function-call parts don't carry text; force to None so
+            # MagicMock's auto-attribute doesn't accidentally look like text.
+            part = MagicMock(function_call=fc, text=None)
+            # A plain-text part alongside a function-call part is realistic.
+            text_part = MagicMock(text="Let me check.", function_call=None)
+            content = MagicMock(parts=[text_part, part], role="model")
+            candidate = MagicMock(content=content, finish_reason="STOP")
+            usage = MagicMock(prompt_token_count=8, response_token_count=4, total_token_count=12)
+            fake = MagicMock(
+                response_id="gemini-tools",
+                model_version="gemini-2.0-flash-001",
+                candidates=[candidate],
+                usage_metadata=usage,
+            )
+
+            config = genai_types.GenerateContentConfig(
+                tools=[
+                    genai_types.Tool(
+                        function_declarations=[
+                            genai_types.FunctionDeclaration(
+                                name="get_weather",
+                                description="Get current weather",
+                            )
+                        ]
+                    )
+                ],
+            )
+            with patch(
+                "google.genai.models.Models._generate_content",
+                return_value=fake,
+                create=True,
+            ):
+                client.models.generate_content(
+                    model="gemini-2.0-flash-001",
+                    contents="weather in Paris?",
+                    config=config,
+                )
+        finally:
+            uninstrument("google-genai")
+
+        span = find_span(recording_client, "gemini.generate_content")
+        attrs = json.loads(span.attributes_json)
+
+        req_tools = json.loads(attrs[AgenticAttributes.REQUEST_TOOLS])
+        # google-genai's Tool model stringifies with its own repr; just
+        # confirm the tool name is somewhere in the serialized payload.
+        assert "get_weather" in json.dumps(req_tools)
+
+        calls = attrs[AgenticAttributes.TOOL_CALLS]
+        assert len(calls) == 1
+        assert calls[0]["name"] == "get_weather"
+        # id is synthesized by the adapter since Gemini emits none.
+        assert calls[0]["id"] == "call_0"
+        assert json.loads(calls[0]["arguments"]) == {"location": "Paris"}
+        assert attrs[AgenticAttributes.TOOL_NAME] == "get_weather"

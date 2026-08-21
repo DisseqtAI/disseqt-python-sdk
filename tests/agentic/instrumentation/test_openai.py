@@ -19,6 +19,10 @@ pytest.importorskip("openai")
 from openai import OpenAI  # noqa: E402
 from openai.types.chat import ChatCompletion, ChatCompletionMessage  # noqa: E402
 from openai.types.chat.chat_completion import Choice  # noqa: E402
+from openai.types.chat.chat_completion_message_tool_call import (  # noqa: E402
+    ChatCompletionMessageToolCall,
+    Function,
+)
 from openai.types.completion_usage import CompletionUsage  # noqa: E402
 
 from disseqt_agentic_sdk.instrumentation import instrument, uninstrument  # noqa: E402
@@ -41,6 +45,53 @@ def _fake_chat_completion() -> ChatCompletion:
         ],
         usage=CompletionUsage(prompt_tokens=7, completion_tokens=2, total_tokens=9),
     )
+
+
+def _fake_chat_completion_with_tools() -> ChatCompletion:
+    return ChatCompletion(
+        id="chatcmpl-tools",
+        model="gpt-4o-mini",
+        object="chat.completion",
+        created=0,
+        choices=[
+            Choice(
+                index=0,
+                finish_reason="tool_calls",
+                message=ChatCompletionMessage(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        ChatCompletionMessageToolCall(
+                            id="call_abc123",
+                            type="function",
+                            function=Function(
+                                name="get_weather",
+                                arguments='{"location":"Paris","unit":"celsius"}',
+                            ),
+                        ),
+                    ],
+                ),
+            )
+        ],
+        usage=CompletionUsage(prompt_tokens=12, completion_tokens=8, total_tokens=20),
+    )
+
+
+_WEATHER_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Get current weather for a location",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "location": {"type": "string"},
+                "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+            },
+            "required": ["location"],
+        },
+    },
+}
 
 
 class TestOpenAIChat:
@@ -155,6 +206,107 @@ class TestOpenAIChat:
         assert attrs[AgenticAttributes.RESPONSE_FINISH_REASON] == "stop"
         assert attrs[AgenticAttributes.USAGE_INPUT_TOKENS] == 5
         assert attrs[AgenticAttributes.USAGE_OUTPUT_TOKENS] == 3
+
+
+class TestOpenAIToolCalls:
+    def test_captures_request_tools_and_response_tool_calls(self, recording_client):
+        instrument("openai", recording_client)
+        try:
+            client = OpenAI(api_key="fake")
+            fake = _fake_chat_completion_with_tools()
+            with patch.object(client.chat.completions, "_post", return_value=fake, create=True):
+                client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": "What's the weather in Paris?"}],
+                    tools=[_WEATHER_TOOL],
+                )
+        finally:
+            uninstrument("openai")
+
+        span = find_span(recording_client, "openai.chat.completions.create")
+        attrs = json.loads(span.attributes_json)
+
+        # Request-side: tools schema captured as JSON string.
+        req_tools = json.loads(attrs[AgenticAttributes.REQUEST_TOOLS])
+        assert req_tools[0]["function"]["name"] == "get_weather"
+        assert attrs[GenAIAttributes.REQUEST_TOOLS] == attrs[AgenticAttributes.REQUEST_TOOLS]
+
+        # Response-side: canonical tool_calls list.
+        calls = attrs[AgenticAttributes.TOOL_CALLS]
+        assert calls == [
+            {
+                "id": "call_abc123",
+                "name": "get_weather",
+                "arguments": '{"location":"Paris","unit":"celsius"}',
+            }
+        ]
+        assert attrs[GenAIAttributes.TOOL_CALLS] == calls
+
+        # First-call convenience columns for the enriched-table lookup.
+        assert attrs[AgenticAttributes.TOOL_NAME] == "get_weather"
+        assert attrs[AgenticAttributes.TOOL_CALL_ID] == "call_abc123"
+        assert attrs[AgenticAttributes.TOOL_ARGS] == '{"location":"Paris","unit":"celsius"}'
+        assert attrs[GenAIAttributes.TOOL_NAME] == "get_weather"
+
+    def test_streaming_aggregates_tool_calls(self, recording_client):
+        instrument("openai", recording_client)
+        try:
+            client = OpenAI(api_key="fake")
+
+            def _tc_chunk(index, id_=None, name=None, args_frag=None, finish=None):
+                ch = MagicMock()
+                ch.id = "chatcmpl-tools-stream"
+                ch.model = "gpt-4o-mini"
+                ch.usage = None
+                choice = MagicMock()
+                fn = MagicMock(name=name, arguments=args_frag)
+                # MagicMock intercepts `.name`; set explicitly.
+                fn.name = name
+                fn.arguments = args_frag
+                tc = MagicMock(index=index, id=id_, function=fn)
+                choice.delta = MagicMock(
+                    role="assistant" if index == 0 else None,
+                    content=None,
+                    tool_calls=[tc],
+                )
+                choice.finish_reason = finish
+                ch.choices = [choice]
+                return ch
+
+            usage_obj = MagicMock(prompt_tokens=10, completion_tokens=6, total_tokens=16)
+            final_chunk = MagicMock()
+            final_chunk.id = "chatcmpl-tools-stream"
+            final_chunk.model = "gpt-4o-mini"
+            final_chunk.usage = usage_obj
+            final_chunk.choices = []
+
+            fake_stream = iter(
+                [
+                    _tc_chunk(0, id_="call_xyz", name="get_weather", args_frag='{"loc'),
+                    _tc_chunk(0, args_frag='ation":"Paris"}', finish="tool_calls"),
+                    final_chunk,
+                ]
+            )
+            with patch.object(
+                client.chat.completions, "_post", return_value=fake_stream, create=True
+            ):
+                stream = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": "weather?"}],
+                    stream=True,
+                    tools=[_WEATHER_TOOL],
+                )
+                list(stream)
+        finally:
+            uninstrument("openai")
+
+        span = find_span(recording_client, "openai.chat.completions.create")
+        attrs = json.loads(span.attributes_json)
+        calls = attrs[AgenticAttributes.TOOL_CALLS]
+        assert calls == [
+            {"id": "call_xyz", "name": "get_weather", "arguments": '{"location":"Paris"}'}
+        ]
+        assert attrs[AgenticAttributes.TOOL_NAME] == "get_weather"
 
 
 class TestOpenAIParentLinkage:

@@ -13,9 +13,16 @@ Provider-specific instrumentors just pass the right `provider`
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
-from disseqt_agentic_sdk.instrumentation._kwargs import KW_MESSAGES, KW_MODEL, KW_STREAM
+from disseqt_agentic_sdk.instrumentation._kwargs import (
+    KW_MESSAGES,
+    KW_MODEL,
+    KW_STREAM,
+    KW_TOOLS,
+)
+from disseqt_agentic_sdk.instrumentation._tool_calls import from_openai as _tc_from_openai
 from disseqt_agentic_sdk.instrumentation._utils import safe_set, serialize_messages
 from disseqt_agentic_sdk.semantics import AgenticAttributes, GenAIAttributes
 
@@ -77,6 +84,17 @@ def set_common_chat_request(
         span.set_messages(input_messages=messages)
         safe_set(span, GenAIAttributes.PROMPT, messages)
 
+    tools = kwargs.get(KW_TOOLS)
+    if tools:
+        # Serialize to JSON so downstream consumers see a stable string
+        # regardless of whether the caller passed dicts or Pydantic models.
+        try:
+            tools_json = json.dumps(tools, default=str)
+        except (TypeError, ValueError):
+            tools_json = str(tools)
+        safe_set(span, AgenticAttributes.REQUEST_TOOLS, tools_json)
+        safe_set(span, GenAIAttributes.REQUEST_TOOLS, tools_json)
+
 
 # ---------------------------------------------------------------------
 # Response-side (non-streaming)
@@ -106,12 +124,16 @@ def set_chat_response(span: DisseqtSpan, response: Any) -> None:
     choices = read(response, "choices") or []
     output_messages: list[dict[str, Any]] = []
     finish_reasons: list[str] = []
+    raw_tool_calls: list[Any] = []
     for choice in choices:
         message = read(choice, "message")
         if message is not None:
             role = read(message, "role") or "assistant"
             content = read(message, "content") or ""
             output_messages.append({"role": role, "content": content})
+            msg_tool_calls = read(message, "tool_calls")
+            if msg_tool_calls:
+                raw_tool_calls.extend(msg_tool_calls)
         finish_reason = read(choice, "finish_reason")
         if finish_reason:
             finish_reasons.append(finish_reason)
@@ -122,6 +144,22 @@ def set_chat_response(span: DisseqtSpan, response: Any) -> None:
     if finish_reasons:
         safe_set(span, AgenticAttributes.RESPONSE_FINISH_REASON, finish_reasons[0])
         safe_set(span, GenAIAttributes.RESPONSE_FINISH_REASONS, finish_reasons)
+
+    tool_calls = _tc_from_openai(raw_tool_calls)
+    if tool_calls:
+        safe_set(span, AgenticAttributes.TOOL_CALLS, tool_calls)
+        safe_set(span, GenAIAttributes.TOOL_CALLS, tool_calls)
+        # Populate the single-tool columns from the first call so the
+        # backend's enriched-table columns (agentic.tool.name /
+        # agentic.tool.call_id / agentic.tool.args) get a value even for
+        # dashboards that don't query the JSON array.
+        first = tool_calls[0]
+        safe_set(span, AgenticAttributes.TOOL_NAME, first["name"])
+        safe_set(span, GenAIAttributes.TOOL_NAME, first["name"])
+        safe_set(span, AgenticAttributes.TOOL_CALL_ID, first["id"])
+        safe_set(span, GenAIAttributes.TOOL_CALL_ID, first["id"])
+        safe_set(span, AgenticAttributes.TOOL_ARGS, first["arguments"])
+        safe_set(span, GenAIAttributes.TOOL_ARGS, first["arguments"])
 
 
 # ---------------------------------------------------------------------
@@ -143,6 +181,9 @@ class ChatStreamAccumulator:
         self.response_id: str | None = None
         self.prompt_tokens: int | None = None
         self.completion_tokens: int | None = None
+        # OpenAI streams tool calls one index at a time, with `function.arguments`
+        # arriving as concatenatable text fragments. Merge by `index`.
+        self._tool_calls: dict[int, dict[str, Any]] = {}
 
     def absorb(self, chunk: Any) -> None:
         """
@@ -177,9 +218,38 @@ class ChatStreamAccumulator:
                 content = read(delta, "content")
                 if content:
                     self.buffer.append(content)
+                self._absorb_tool_call_deltas(read(delta, "tool_calls"))
             finish_reason = read(choice, "finish_reason")
             if finish_reason:
                 self.finish_reason = finish_reason
+
+    def _absorb_tool_call_deltas(self, deltas: Any) -> None:
+        """
+        Fold streamed ``delta.tool_calls`` fragments into ``self._tool_calls``.
+
+        OpenAI emits each tool call across multiple chunks: the first chunk
+        for a given ``index`` carries ``id``, ``function.name`` and an opening
+        ``function.arguments`` fragment; subsequent chunks for the same index
+        carry additional ``function.arguments`` text that must be concatenated.
+        """
+        if not deltas:
+            return
+        for delta in deltas:
+            idx = read(delta, "index")
+            if idx is None:
+                continue
+            slot = self._tool_calls.setdefault(idx, {"id": None, "name": None, "arguments": ""})
+            new_id = read(delta, "id")
+            if new_id:
+                slot["id"] = new_id
+            function = read(delta, "function")
+            if function is not None:
+                new_name = read(function, "name")
+                if new_name:
+                    slot["name"] = new_name
+                arg_frag = read(function, "arguments")
+                if arg_frag:
+                    slot["arguments"] = (slot["arguments"] or "") + arg_frag
 
     def finalize(self, span: DisseqtSpan) -> None:
         """
@@ -212,6 +282,30 @@ class ChatStreamAccumulator:
                 GenAIAttributes.USAGE_TOTAL_TOKENS,
                 self.prompt_tokens + self.completion_tokens,
             )
+
+        if self._tool_calls:
+            # Flatten index-keyed dict into list ordered by index, drop entries
+            # missing a name, then feed through the OpenAI adapter for canonical
+            # {id, name, arguments} shape.
+            ordered = [
+                {
+                    "id": slot["id"],
+                    "function": {"name": slot["name"], "arguments": slot["arguments"]},
+                }
+                for _idx, slot in sorted(self._tool_calls.items())
+                if slot.get("name")
+            ]
+            tool_calls = _tc_from_openai(ordered)
+            if tool_calls:
+                safe_set(span, AgenticAttributes.TOOL_CALLS, tool_calls)
+                safe_set(span, GenAIAttributes.TOOL_CALLS, tool_calls)
+                first = tool_calls[0]
+                safe_set(span, AgenticAttributes.TOOL_NAME, first["name"])
+                safe_set(span, GenAIAttributes.TOOL_NAME, first["name"])
+                safe_set(span, AgenticAttributes.TOOL_CALL_ID, first["id"])
+                safe_set(span, GenAIAttributes.TOOL_CALL_ID, first["id"])
+                safe_set(span, AgenticAttributes.TOOL_ARGS, first["arguments"])
+                safe_set(span, GenAIAttributes.TOOL_ARGS, first["arguments"])
 
 
 # ---------------------------------------------------------------------

@@ -10,7 +10,7 @@ import pytest
 pytest.importorskip("anthropic")
 
 from anthropic import Anthropic  # noqa: E402
-from anthropic.types import Message, TextBlock, Usage  # noqa: E402
+from anthropic.types import Message, TextBlock, ToolUseBlock, Usage  # noqa: E402
 
 from disseqt_agentic_sdk.instrumentation import instrument, uninstrument  # noqa: E402
 from disseqt_agentic_sdk.semantics import AgenticAttributes, GenAIAttributes  # noqa: E402
@@ -126,3 +126,62 @@ class TestAnthropicMessages:
         assert attrs[AgenticAttributes.USAGE_INPUT_TOKENS] == 5
         assert attrs[AgenticAttributes.USAGE_OUTPUT_TOKENS] == 3
         assert attrs[AgenticAttributes.RESPONSE_FINISH_REASON] == "end_turn"
+
+
+class TestAnthropicToolCalls:
+    def test_captures_tool_use_block(self, recording_client):
+        # Anthropic embeds tool calls as `content` blocks with type="tool_use".
+        # `input` arrives as a parsed dict; we normalize to a JSON string.
+        instrument("anthropic", recording_client)
+        try:
+            client = Anthropic(api_key="fake")
+            fake = Message(
+                id="msg-tools",
+                type="message",
+                role="assistant",
+                model="claude-3-5-haiku-latest",
+                content=[
+                    ToolUseBlock(
+                        type="tool_use",
+                        id="toolu_01ABC",
+                        name="get_weather",
+                        input={"location": "Paris", "unit": "celsius"},
+                    ),
+                ],
+                stop_reason="tool_use",
+                stop_sequence=None,
+                usage=Usage(input_tokens=12, output_tokens=8),
+            )
+            weather_tool = {
+                "name": "get_weather",
+                "description": "Get weather",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                    "required": ["location"],
+                },
+            }
+            with patch.object(client.messages, "_post", return_value=fake, create=True):
+                client.messages.create(
+                    model="claude-3-5-haiku-latest",
+                    max_tokens=64,
+                    messages=[{"role": "user", "content": "weather in Paris?"}],
+                    tools=[weather_tool],
+                )
+        finally:
+            uninstrument("anthropic")
+
+        span = find_span(recording_client, "anthropic.messages.create")
+        attrs = json.loads(span.attributes_json)
+
+        req_tools = json.loads(attrs[AgenticAttributes.REQUEST_TOOLS])
+        assert req_tools[0]["name"] == "get_weather"
+
+        calls = attrs[AgenticAttributes.TOOL_CALLS]
+        assert len(calls) == 1
+        assert calls[0]["id"] == "toolu_01ABC"
+        assert calls[0]["name"] == "get_weather"
+        # arguments is a JSON string; dict ordering isn't guaranteed so parse.
+        assert json.loads(calls[0]["arguments"]) == {"location": "Paris", "unit": "celsius"}
+        assert attrs[AgenticAttributes.TOOL_NAME] == "get_weather"
+        assert attrs[AgenticAttributes.TOOL_CALL_ID] == "toolu_01ABC"

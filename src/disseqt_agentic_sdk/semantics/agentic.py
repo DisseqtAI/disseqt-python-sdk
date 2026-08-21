@@ -35,6 +35,13 @@ class AgenticAttributes:
     TOOL_NAME = "agentic.tool.name"
     TOOL_CALL_ID = "agentic.tool.call_id"
     TOOL_DEFINITIONS = "agentic.tool.definitions"
+    TOOL_ARGS = "agentic.tool.args"
+    TOOL_RESULT = "agentic.tool.result"
+    # Full list of tool calls emitted by the model on a MODEL_EXEC span, or
+    # accumulated across an AGENT_EXEC span. Read by the tool-call-accuracy,
+    # plan-optimality, plan-coherence, and tool-failure-rate validators.
+    TOOL_CALLS = "agentic.tool_calls"
+    REQUEST_TOOLS = "agentic.request.tools"
 
     # Model/Provider attributes
     REQUEST_MODEL = "agentic.request.model"
