@@ -113,11 +113,25 @@ class TestBase:
         assert instrumentor._client is None
 
     def test_partial_instrument_failure_rolls_back(self, recording_client):
-        # If _instrument() raises after patching some methods, those patches
-        # must be rolled back — otherwise the SDK is left partly wrapped
-        # with nothing tracking the leftovers.
+        """
+        If _instrument() raises after patching some methods, ALL earlier
+        patches must be rolled back — otherwise the SDK is left partly
+        wrapped with nothing tracking the leftovers.
+
+        TP-2128 P5: the earlier version of this test wrapped only ONE
+        method before failing, so it couldn't tell "unwound everything"
+        apart from "unwound only the last patch." This one wraps THREE
+        distinct methods (Completions.create, AsyncCompletions.create,
+        Embeddings.create) before raising, then asserts each of the
+        three is restored to its pristine identity.
+        """
         Completions = openai.resources.chat.completions.Completions
-        original_create = inspect.getattr_static(Completions, "create")
+        AsyncCompletions = openai.resources.chat.completions.AsyncCompletions
+        Embeddings = openai.resources.embeddings.Embeddings
+
+        pristine_create = inspect.getattr_static(Completions, "create")
+        pristine_async_create = inspect.getattr_static(AsyncCompletions, "create")
+        pristine_emb_create = inspect.getattr_static(Embeddings, "create")
 
         class FlakyInstrumentor(DisseqtInstrumentor):
             package_name = "openai"
@@ -128,12 +142,32 @@ class TestBase:
                     "Completions.create",
                     lambda w, i, a, kw: w(*a, **kw),
                 )
-                raise RuntimeError("boom halfway through")
+                self._wrap(
+                    "openai.resources.chat.completions",
+                    "AsyncCompletions.create",
+                    lambda w, i, a, kw: w(*a, **kw),
+                )
+                self._wrap(
+                    "openai.resources.embeddings",
+                    "Embeddings.create",
+                    lambda w, i, a, kw: w(*a, **kw),
+                )
+                raise RuntimeError("boom after three patches")
 
         assert FlakyInstrumentor().instrument(recording_client) is False
-        # The Completions.create attribute on the class must be the pristine
-        # original — the failed instrumentor's wrapper was unwound.
-        assert inspect.getattr_static(Completions, "create") is original_create
+
+        # All three methods must be pristine — if unwind only rolled back
+        # the last patch, the first two would still be wrapt-wrapped and
+        # these identity checks would fail.
+        assert (
+            inspect.getattr_static(Completions, "create") is pristine_create
+        ), "Completions.create was not unwound"
+        assert (
+            inspect.getattr_static(AsyncCompletions, "create") is pristine_async_create
+        ), "AsyncCompletions.create was not unwound"
+        assert (
+            inspect.getattr_static(Embeddings, "create") is pristine_emb_create
+        ), "Embeddings.create was not unwound"
 
     def test_nested_wrap_by_another_lib_is_not_corrupted(self, recording_client):
         # Simulate another instrumentation library wrapping the same method
