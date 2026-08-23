@@ -62,9 +62,19 @@ class _ToolCallAggregator:
 
     def __init__(self) -> None:
         self._calls: dict[str, dict[str, Any]] = {}
+        # Flipped True by flush_onto so writes reaching this aggregator
+        # via a captured reference (after the enclosing agent_span
+        # already exited) can log instead of mutating a dict no one
+        # will ever read from.
+        self.closed: bool = False
 
     def add_planned(self, tool_calls: list[dict[str, Any]]) -> None:
         """Merge planned tool_calls from a nested MODEL_EXEC span."""
+        if self.closed:
+            # A nested MODEL_EXEC that finished after agent_span exited
+            # (e.g. a fire-and-forget async LLM call). Not a user API
+            # misuse, so no warning — just skip.
+            return
         for tc in tool_calls or []:
             if not isinstance(tc, dict):
                 continue
@@ -87,6 +97,20 @@ class _ToolCallAggregator:
         status: str = "success",
     ) -> None:
         """Record execution outcome for one tool call."""
+        if self.closed:
+            # Reached via a captured reference after agent_span exited —
+            # the outcome will never appear on the AGENT_EXEC span. Warn
+            # loudly; this is a real API misuse worth surfacing.
+            _logger.warning(
+                "record_tool_result(call_id=%r, status=%r) reached a "
+                "flushed aggregator (agent_span already exited); this "
+                "outcome will NOT appear on the AGENT_EXEC span. Move "
+                "the record_tool_result call inside the `with agent_span"
+                "(...):` block, or await the tool before block exit.",
+                call_id,
+                status,
+            )
+            return
         entry = self._calls.setdefault(call_id, {"id": call_id})
         if name is not None:
             entry["name"] = str(name)
@@ -98,6 +122,7 @@ class _ToolCallAggregator:
 
     def flush_onto(self, span: DisseqtSpan) -> None:
         """Write the fused tool_calls list onto ``span``. Safe to no-op."""
+        self.closed = True
         if not self._calls:
             return
         calls = list(self._calls.values())

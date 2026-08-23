@@ -247,6 +247,52 @@ class TestLaneB:
         assert [c["id"] for c in beta_calls] == ["call_b"]
         assert beta_calls[0]["status"] == "failure"
 
+    def test_record_after_agent_span_exit_warns_and_no_ops(self, recording_client):
+        """
+        TP-2128 P2 #2.2: if the user captures a live aggregator reference
+        (e.g. inside a background task) and calls record_tool_result on it
+        after the enclosing agent_span exits, the outcome cannot land on
+        the AGENT_EXEC span. Warn loudly instead of silently mutating a
+        flushed dict.
+        """
+        from disseqt_agentic_sdk.instrumentation import _tool_result as tr_mod
+        from disseqt_agentic_sdk.instrumentation._tool_result import (
+            _current_agg,
+            _ToolCallAggregator,
+        )
+
+        captured: list[_ToolCallAggregator] = []
+
+        instrument("openai", recording_client)
+        try:
+            with agent_span(recording_client, "leaky_agent"):
+                agg = _current_agg.get()
+                assert agg is not None
+                captured.append(agg)
+        finally:
+            uninstrument("openai")
+
+        assert captured[0].closed is True
+
+        # Patch the module logger to capture warnings directly (the SDK
+        # logger uses disseqt_logging and may be silent by default).
+        with patch.object(tr_mod, "_logger") as fake_logger:
+            captured[0].add_result("stale_call", result="late", status="success")
+            fake_logger.warning.assert_called_once()
+            msg = fake_logger.warning.call_args.args[0]
+            assert "flushed aggregator" in msg
+            assert "stale_call" in fake_logger.warning.call_args.args
+
+        # Data must NOT have landed in the closed aggregator dict.
+        assert "stale_call" not in captured[0]._calls
+
+        # add_planned is a silent no-op — normal for fire-and-forget async
+        # LLM calls, not user misuse.
+        with patch.object(tr_mod, "_logger") as fake_logger:
+            captured[0].add_planned([{"id": "late_plan", "name": "x"}])
+            fake_logger.warning.assert_not_called()
+        assert "late_plan" not in captured[0]._calls
+
     def test_plain_llm_call_inside_agent_span_leaves_tool_calls_absent(self, recording_client):
         # LLM call inside agent_span but no tool_calls in the response —
         # the AGENT_EXEC span should still have no tool_calls attribute.
