@@ -33,21 +33,24 @@ dependencies = [
 #   pip install "disseqt-ai-sdk[openai]"          # one provider
 #   pip install "disseqt-ai-sdk[openai,anthropic]"# a few
 #   pip install "disseqt-ai-sdk[instrumentation]" # everything we auto-instrument
+# Floors match each instrumentor's runtime `min_version` — a looser
+# declaration here lets pip install a version the runtime check refuses,
+# so `instrument_all()` silently no-ops the provider (TP-2128 P1 #1.5).
 [project.optional-dependencies]
-openai = ["openai>=1.0.0"]
-anthropic = ["anthropic>=0.20.0"]
+openai = ["openai>=1.50.0"]
+anthropic = ["anthropic>=0.40.0"]
 groq = ["groq>=0.11.0"]
-mistral = ["mistralai>=1.0.0"]
-cohere = ["cohere>=5.0.0"]
+mistral = ["mistralai>=1.5.0"]
+cohere = ["cohere>=5.11.0"]
 gemini = ["google-genai>=1.0.0"]
 litellm = ["litellm>=1.40.0"]
 # Convenience: pull every provider our instrumentation supports today.
 instrumentation = [
-    "openai>=1.0.0",
-    "anthropic>=0.20.0",
+    "openai>=1.50.0",
+    "anthropic>=0.40.0",
     "groq>=0.11.0",
-    "mistralai>=1.0.0",
-    "cohere>=5.0.0",
+    "mistralai>=1.5.0",
+    "cohere>=5.11.0",
     "google-genai>=1.0.0",
     "litellm>=1.40.0",
 ]
