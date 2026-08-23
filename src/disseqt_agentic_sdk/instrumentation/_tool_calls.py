@@ -30,14 +30,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
-
-def _read(obj: Any, name: str) -> Any:
-    """Attribute-or-key read; tolerates dicts and Pydantic models."""
-    if obj is None:
-        return None
-    if isinstance(obj, dict):
-        return obj.get(name)
-    return getattr(obj, name, None)
+from disseqt_agentic_sdk.instrumentation._utils import (
+    read as _read,  # noqa: F401 — re-exported for local callers
+)
 
 
 def _stringify_args(value: Any) -> str:

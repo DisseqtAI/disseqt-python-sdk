@@ -233,6 +233,29 @@ def open_llm_span(
     return _SpanScope(span=span, trace=trace, owns_trace=owns_trace)
 
 
+def read(obj: Any, name: str) -> Any:
+    """
+    Read a field from a provider response tolerating shape drift.
+
+    Provider SDKs occasionally shuffle between Pydantic models
+    (attribute access) and plain dicts (key access) across minor
+    releases — sometimes within the same response tree. This helper
+    unifies both so instrumentors don't need per-provider branches.
+    Returns None on missing keys, missing attributes, or ``obj is
+    None``; never raises.
+
+    Canonical implementation for the whole instrumentation package —
+    ``_oai_compat``, ``_tool_calls``, ``_batches``, ``_embeddings``,
+    and ``anthropic/patch`` all used to carry an identical local copy
+    (TP-2128 P4 #4.1). They re-export from here now.
+    """
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        return obj.get(name)
+    return getattr(obj, name, None)
+
+
 def safe_set(span: DisseqtSpan, key: str, value: Any) -> None:
     """
     Set an attribute if the value is non-empty / non-None. Never raises.

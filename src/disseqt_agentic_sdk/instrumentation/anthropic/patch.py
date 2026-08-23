@@ -33,6 +33,9 @@ from disseqt_agentic_sdk.instrumentation._utils import (
     set_first_tool_call_attrs,
     set_messages_if_capturing,
 )
+from disseqt_agentic_sdk.instrumentation._utils import (
+    read as _read,
+)
 from disseqt_agentic_sdk.semantics import (
     AgenticAttributes,
     AgenticOperation,
@@ -340,11 +343,3 @@ class _StreamAccumulator:
                 _notify_planned_tool_calls(tool_calls)
                 safe_set(span, GenAIAttributes.TOOL_CALLS, tool_calls)
                 set_first_tool_call_attrs(span, tool_calls)
-
-
-def _read(obj: Any, name: str) -> Any:
-    if obj is None:
-        return None
-    if isinstance(obj, dict):
-        return obj.get(name)
-    return getattr(obj, name, None)

@@ -31,6 +31,7 @@ from disseqt_agentic_sdk.instrumentation._tool_result import (
 )
 from disseqt_agentic_sdk.instrumentation._utils import (
     open_llm_span,
+    read,
     safe_call,
     safe_set,
     serialize_messages,
@@ -467,21 +468,8 @@ def make_openai_shape_chat_wrappers(
     return sync_wrapper, async_wrapper
 
 
-# ---------------------------------------------------------------------
-# Utility
-# ---------------------------------------------------------------------
-def read(obj: Any, name: str) -> Any:
-    """
-    Read a field from a provider response tolerating shape drift.
-
-    Provider SDKs occasionally shuffle between Pydantic models (attribute
-    access) and plain dicts (key access) across minor releases — sometimes
-    within the same response tree. This helper unifies both so instrumentors
-    don't need per-provider branches. Returns None on missing keys, missing
-    attributes, or ``obj is None``; never raises.
-    """
-    if obj is None:
-        return None
-    if isinstance(obj, dict):
-        return obj.get(name)
-    return getattr(obj, name, None)
+# ``read`` is re-exported from this module for the cohere and gemini
+# instrumentors, which import it via ``from ._oai_compat import read``.
+# The canonical implementation lives in ``_utils.read`` (TP-2128 P4
+# #4.1) — the top-of-file import above brings it into this module's
+# namespace, so no work is needed here to keep the re-export alive.
