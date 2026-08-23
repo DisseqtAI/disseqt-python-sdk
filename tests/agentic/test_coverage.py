@@ -243,6 +243,116 @@ class TestBufferCoverage:
         assert self.buffer.should_flush() is True
 
 
+class TestBufferFailurePolicy:
+    """
+    TP-2128 P2 #2.4: buffer used to clear before send_spans and discard the
+    return value — a 401/403 or 5xx dropped every batch silently. Now the
+    buffer only clears on success, retries on failure up to
+    max_retained_spans, and drops the oldest first once the cap is hit.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        self.transport = Mock(spec=HTTPTransport)
+        # Small cap keeps the overflow test fast.
+        self.buffer = TraceBuffer(
+            self.transport,
+            max_batch_size=3,
+            flush_interval=0.1,
+            max_retained_spans=5,
+        )
+        self.buffer._stop_flush_thread = True
+        if self.buffer._flush_thread:
+            self.buffer._flush_thread.join(timeout=0.5)
+        yield
+
+    def _mk(self, i):
+        return EnrichedSpan(
+            trace_id=f"t{i}",
+            span_id=f"s{i}",
+            name="test",
+            org_id="o",
+            project_id="p",
+            service_name="s",
+        )
+
+    def test_failed_send_retains_spans_for_retry(self):
+        self.transport.send_spans.return_value = False
+        self.buffer.buffer.extend([self._mk(0), self._mk(1)])
+        self.buffer.flush()
+
+        # Spans are still there — a retry could recover them.
+        assert (
+            len(self.buffer.buffer) == 2
+        ), f"failed send must retain spans, got {len(self.buffer.buffer)}"
+        self.transport.send_spans.assert_called_once()
+
+    def test_successful_send_clears_only_sent_spans(self):
+        # 2 spans staged, send succeeds → buffer becomes empty.
+        self.transport.send_spans.return_value = True
+        self.buffer.buffer.extend([self._mk(0), self._mk(1)])
+        self.buffer.flush()
+        assert self.buffer.buffer == []
+
+    def test_buffer_caps_at_max_retained_on_repeated_failure(self):
+        self.transport.send_spans.return_value = False
+        # Feed 8 spans across two failing flushes; cap is 5.
+        for i in range(4):
+            self.buffer.buffer.append(self._mk(i))
+        self.buffer.flush()
+        assert len(self.buffer.buffer) == 4  # under cap, all retained
+
+        for i in range(4, 8):
+            self.buffer.buffer.append(self._mk(i))
+        self.buffer.flush()
+        assert (
+            len(self.buffer.buffer) == 5
+        ), f"buffer must cap at max_retained_spans=5, got {len(self.buffer.buffer)}"
+        # Oldest dropped first: span_ids should be the newest 5 (s3..s7).
+        remaining_ids = [s.span_id for s in self.buffer.buffer]
+        assert remaining_ids == ["s3", "s4", "s5", "s6", "s7"]
+
+
+class TestTransportAuthFailures:
+    """TP-2128 P2 #2.4: 401/403 must log at CRITICAL and set status_code
+    in extras so ops can route on it."""
+
+    def test_401_logs_critical(self, caplog):
+        import logging
+
+        import requests as _requests
+
+        transport = HTTPTransport("http://localhost:8080/v1/traces", api_key="k")
+        span = EnrichedSpan(
+            trace_id="t1", span_id="s1", name="test", org_id="o", project_id="p", service_name="s"
+        )
+        with patch("disseqt_agentic_sdk.transport.http.requests.Session.post") as mock_post:
+            fake = Mock()
+            fake.status_code = 401
+            fake.raise_for_status.side_effect = _requests.exceptions.HTTPError(
+                "401 Unauthorized", response=fake
+            )
+            mock_post.return_value = fake
+
+            with caplog.at_level(logging.CRITICAL, logger="disseqt_agentic_sdk"):
+                # Bump the transport logger too — it uses the same tree
+                # but may be silenced by disseqt_logging by default.
+                from disseqt_agentic_sdk.transport import http as http_mod
+
+                prior_level = http_mod.logger.level
+                http_mod.logger.setLevel(logging.CRITICAL)
+                try:
+                    ok = transport.send_spans([span])
+                finally:
+                    http_mod.logger.setLevel(prior_level)
+
+        assert ok is False
+        critical = [r for r in caplog.records if r.levelno == logging.CRITICAL]
+        assert critical, "401 must log at CRITICAL"
+        assert any("auth rejected" in r.getMessage() for r in critical)
+        assert any(getattr(r, "status_code", None) == 401 for r in critical)
+
+
 class TestTransportCoverage:
     """Tests to cover missing transport.py lines."""
 

@@ -27,6 +27,7 @@ class TraceBuffer:
         transport: HTTPTransport,
         max_batch_size: int = 100,
         flush_interval: float = 1.0,
+        max_retained_spans: int | None = None,
     ):
         """
         Initialize buffer.
@@ -35,10 +36,17 @@ class TraceBuffer:
             transport: HTTPTransport instance for sending
             max_batch_size: Maximum number of spans per batch (triggers immediate flush)
             flush_interval: Flush interval in seconds (time-based flushing)
+            max_retained_spans: Hard cap on retained spans across failed
+                sends. Prevents unbounded growth when the backend is down
+                or auth is misconfigured. Oldest spans are dropped first
+                with a WARNING log. Defaults to ``max_batch_size * 10``.
         """
         self.transport = transport
         self.max_batch_size = max_batch_size
         self.flush_interval = flush_interval
+        self.max_retained_spans = (
+            max_retained_spans if max_retained_spans is not None else max_batch_size * 10
+        )
 
         self.buffer: list[EnrichedSpan] = []
         self.last_flush_time = time.time()
@@ -93,7 +101,6 @@ class TraceBuffer:
 
         spans_to_send = self.buffer.copy()
         span_count = len(spans_to_send)
-        self.buffer.clear()
         self.last_flush_time = time.time()
 
         logger.debug(
@@ -104,8 +111,42 @@ class TraceBuffer:
             },
         )
 
-        # Send spans (release lock before network call)
-        self.transport.send_spans(spans_to_send)
+        # Only clear the buffer if the send actually succeeded — the old
+        # code cleared unconditionally and discarded send_spans()' return,
+        # so a 401/403/network failure silently dropped user telemetry.
+        # On failure, keep the spans and let the next flush retry, but
+        # cap retained spans to avoid unbounded growth against a hard
+        # outage.
+        ok = self.transport.send_spans(spans_to_send)
+        if ok:
+            # Newer spans may have been appended while the send was in
+            # flight (we hold the lock, so actually no — but keep the
+            # semantic explicit). Drop the sent prefix; keep the rest.
+            self.buffer = self.buffer[span_count:]
+        else:
+            logger.warning(
+                "Buffer flush failed — retaining spans for retry",
+                extra={
+                    "span_count": span_count,
+                    "buffer_size_after": len(self.buffer),
+                    "max_retained_spans": self.max_retained_spans,
+                },
+            )
+            # Guard against runaway growth if the backend stays down or
+            # auth is permanently misconfigured. Drop the oldest first;
+            # the newer spans are more useful for live debugging.
+            if len(self.buffer) > self.max_retained_spans:
+                overflow = len(self.buffer) - self.max_retained_spans
+                dropped = self.buffer[:overflow]
+                self.buffer = self.buffer[overflow:]
+                logger.error(
+                    "Buffer exceeded max_retained_spans — dropping oldest",
+                    extra={
+                        "dropped_count": len(dropped),
+                        "retained_count": len(self.buffer),
+                        "max_retained_spans": self.max_retained_spans,
+                    },
+                )
 
     def should_flush(self) -> bool:
         """

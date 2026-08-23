@@ -196,16 +196,38 @@ class HTTPTransport:
             )
             return True
         except requests.exceptions.RequestException as e:
-            logger.error(
-                "Failed to send spans to backend",
-                extra={
-                    "endpoint": self.endpoint,
-                    "span_count": len(spans),
-                    "error": str(e),
-                    "error_type": type(e).__name__,
-                },
-                exc_info=True,
-            )
+            # Auth failures (401/403) are operator-actionable — a bad
+            # API key or missing X-Application-Id will drop every span
+            # forever until it's fixed. Surface them at CRITICAL with a
+            # deploy-visible message, distinct from a transient 5xx or
+            # network blip.
+            status_code = getattr(getattr(e, "response", None), "status_code", None)
+            if status_code in (401, 403):
+                logger.critical(
+                    "Ingest auth rejected (%s) — spans will keep failing "
+                    "until credentials are fixed. Check DISSEQT_API_KEY / "
+                    "X-Application-Id and the traces-auth policy binding.",
+                    status_code,
+                    extra={
+                        "endpoint": self.endpoint,
+                        "span_count": len(spans),
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                        "status_code": status_code,
+                    },
+                )
+            else:
+                logger.error(
+                    "Failed to send spans to backend",
+                    extra={
+                        "endpoint": self.endpoint,
+                        "span_count": len(spans),
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                        "status_code": status_code,
+                    },
+                    exc_info=True,
+                )
             return False
 
     def send_trace(self, trace_spans: list[EnrichedSpan]) -> bool:
