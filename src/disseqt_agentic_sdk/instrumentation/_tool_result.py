@@ -68,8 +68,19 @@ class _ToolCallAggregator:
         # will ever read from.
         self.closed: bool = False
 
-    def add_planned(self, tool_calls: list[dict[str, Any]]) -> None:
-        """Merge planned tool_calls from a nested MODEL_EXEC span."""
+    def add_planned(self, tool_calls: list[Any]) -> None:
+        """
+        Merge planned tool_calls from a nested MODEL_EXEC span.
+
+        Parameter is ``list[Any]`` — not ``list[dict]`` — because the
+        adapters upstream (``_tool_calls.from_openai`` /
+        ``from_anthropic`` / ``from_gemini``) are defensive-by-contract
+        and callers can hand us a partially-normalized batch. The
+        ``isinstance(tc, dict)`` guard below documents that real intent
+        and prevents a stray non-dict entry from crashing the merge
+        loop; declaring the parameter as ``list[dict[str, Any]]`` would
+        make mypy flag the guard as dead code.
+        """
         if self.closed:
             # A nested MODEL_EXEC that finished after agent_span exited
             # (e.g. a fire-and-forget async LLM call). Not a user API
@@ -137,12 +148,16 @@ _current_agg: contextvars.ContextVar[_ToolCallAggregator | None] = contextvars.C
 )
 
 
-def _notify_planned_tool_calls(tool_calls: list[dict[str, Any]]) -> None:
+def _notify_planned_tool_calls(tool_calls: list[Any]) -> None:
     """
     Called from provider wrappers when tool_calls are captured on a
     MODEL_EXEC span. Adds them to the enclosing agent_span aggregator
     if any is active; otherwise no-op (Lane A capture still happens on
     the MODEL_EXEC span itself).
+
+    Parameter is ``list[Any]`` to match ``_ToolCallAggregator.add_planned``
+    — see its docstring for why the aggregator's defensive
+    isinstance(dict) guard needs the looser type.
     """
     agg = _current_agg.get()
     if agg is not None:
