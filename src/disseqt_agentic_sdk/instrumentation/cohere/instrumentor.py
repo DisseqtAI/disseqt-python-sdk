@@ -22,6 +22,9 @@ from disseqt_agentic_sdk.instrumentation._kwargs import KW_MESSAGES, KW_MODEL, K
 from disseqt_agentic_sdk.instrumentation._oai_compat import read
 from disseqt_agentic_sdk.instrumentation._stream import AsyncStreamWrapper, SyncStreamWrapper
 from disseqt_agentic_sdk.instrumentation._tool_calls import from_openai as _tc_from_openai
+from disseqt_agentic_sdk.instrumentation._tool_result import (
+    _notify_planned_tool_calls,
+)
 from disseqt_agentic_sdk.instrumentation._utils import (
     open_llm_span,
     safe_call,
@@ -135,6 +138,7 @@ def _set_response_attrs(span: DisseqtSpan, response: Any) -> None:
     tool_calls = _tc_from_openai(raw_tool_calls)
     if tool_calls:
         safe_set(span, AgenticAttributes.TOOL_CALLS, tool_calls)
+        _notify_planned_tool_calls(tool_calls)
         safe_set(span, GenAIAttributes.TOOL_CALLS, tool_calls)
         first = tool_calls[0]
         safe_set(span, AgenticAttributes.TOOL_NAME, first["name"])

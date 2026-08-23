@@ -23,6 +23,9 @@ from disseqt_agentic_sdk.instrumentation._kwargs import (
     KW_TOOLS,
 )
 from disseqt_agentic_sdk.instrumentation._tool_calls import from_openai as _tc_from_openai
+from disseqt_agentic_sdk.instrumentation._tool_result import (
+    _notify_planned_tool_calls,
+)
 from disseqt_agentic_sdk.instrumentation._utils import safe_set, serialize_messages
 from disseqt_agentic_sdk.semantics import AgenticAttributes, GenAIAttributes
 
@@ -148,6 +151,7 @@ def set_chat_response(span: DisseqtSpan, response: Any) -> None:
     tool_calls = _tc_from_openai(raw_tool_calls)
     if tool_calls:
         safe_set(span, AgenticAttributes.TOOL_CALLS, tool_calls)
+        _notify_planned_tool_calls(tool_calls)
         safe_set(span, GenAIAttributes.TOOL_CALLS, tool_calls)
         # Populate the single-tool columns from the first call so the
         # backend's enriched-table columns (agentic.tool.name /
@@ -298,6 +302,7 @@ class ChatStreamAccumulator:
             tool_calls = _tc_from_openai(ordered)
             if tool_calls:
                 safe_set(span, AgenticAttributes.TOOL_CALLS, tool_calls)
+                _notify_planned_tool_calls(tool_calls)
                 safe_set(span, GenAIAttributes.TOOL_CALLS, tool_calls)
                 first = tool_calls[0]
                 safe_set(span, AgenticAttributes.TOOL_NAME, first["name"])

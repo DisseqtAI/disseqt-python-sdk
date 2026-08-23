@@ -134,7 +134,9 @@ def from_openai_response(response: Any) -> CanonicalEmbeddingResponse:
 def set_embedding_request_attrs(span: DisseqtSpan, req: CanonicalEmbeddingRequest) -> None:
     """Emit canonical embedding request attributes onto ``span``."""
     safe_set(span, AgenticAttributes.EMBEDDINGS_INPUT_COUNT, req.get("input_count"))
-    safe_set(span, AgenticAttributes.EMBEDDINGS_DIMENSIONS_REQUESTED, req.get("dimensions_requested"))
+    safe_set(
+        span, AgenticAttributes.EMBEDDINGS_DIMENSIONS_REQUESTED, req.get("dimensions_requested")
+    )
     safe_set(span, AgenticAttributes.EMBEDDINGS_ENCODING_FORMAT, req.get("encoding_format"))
     safe_set(span, AgenticAttributes.REQUEST_USER, req.get("user"))
 

@@ -52,8 +52,10 @@ from disseqt_agentic_sdk.enums import (
 
 # Auto-instrumentation
 from disseqt_agentic_sdk.instrumentation import (
+    agent_span,
     instrument,
     instrument_all,
+    record_tool_result,
     uninstrument,
     uninstrument_all,
 )
@@ -109,6 +111,8 @@ __all__ = [
     "instrument_all",
     "uninstrument",
     "uninstrument_all",
+    "agent_span",
+    "record_tool_result",
     # Logging
     "get_logger",
     "set_log_level",

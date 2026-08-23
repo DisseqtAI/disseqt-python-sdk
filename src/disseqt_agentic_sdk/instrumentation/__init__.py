@@ -19,6 +19,10 @@ from disseqt_agentic_sdk.instrumentation._custom_attrs import (
     set_span_attributes,
     span_context,
 )
+from disseqt_agentic_sdk.instrumentation._tool_result import (
+    agent_span,
+    record_tool_result,
+)
 from disseqt_agentic_sdk.instrumentation._utils import (
     get_slow_call_threshold_ms,
     set_slow_call_threshold_ms,
@@ -49,5 +53,7 @@ __all__ = [
     "set_span_attributes",
     "clear_span_attributes",
     "span_context",
+    "agent_span",
+    "record_tool_result",
     "AVAILABLE_INSTRUMENTORS",
 ]
