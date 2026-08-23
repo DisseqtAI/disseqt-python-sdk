@@ -199,6 +199,76 @@ class TestGeminiToolCalls:
         assert calls[0]["id"] == "gemini-tools_call_0"
 
 
+class TestGeminiStreamingDedup:
+    def test_two_identical_parallel_calls_both_survive(self, recording_client):
+        """
+        Regression: streaming accumulator used to dedup tool calls by
+        ``(name, args-as-JSON)``. Two legitimate parallel calls to the
+        same tool with the same args (e.g. two ``roll_die()``, two
+        zero-arg calls, two identical shard queries) collapsed onto a
+        single key and the second was silently dropped. Now dedup is by
+        position within ``candidate.content.parts``, so identical calls
+        at different positions each get their own slot.
+        TP-2128 P1 #1.6.
+        """
+        instrument("google-genai", recording_client)
+        try:
+            client = genai.Client(api_key="fake")
+
+            # Build one chunk containing two identical parallel function
+            # calls at parts positions 0 and 1.
+            def _fc(name: str, args: dict) -> MagicMock:
+                fc = MagicMock()
+                fc.name = name
+                fc.args = args
+                fc.id = None
+                return fc
+
+            part0 = MagicMock(function_call=_fc("roll_die", {}), text=None)
+            part1 = MagicMock(function_call=_fc("roll_die", {}), text=None)
+            content = MagicMock(parts=[part0, part1], role="model")
+            candidate = MagicMock(content=content, finish_reason="STOP")
+            chunk = MagicMock(
+                response_id="stream-resp",
+                model_version="gemini-2.0-flash-001",
+                candidates=[candidate],
+                usage_metadata=genai_types.GenerateContentResponseUsageMetadata(
+                    prompt_token_count=1,
+                    candidates_token_count=1,
+                    total_token_count=2,
+                ),
+            )
+
+            # Same chunk arrives twice — simulates Gemini emitting the
+            # accumulated snapshot on successive stream frames.
+            def _fake_stream(*_a, **_kw):
+                yield chunk
+                yield chunk
+
+            with patch(
+                "google.genai.models.Models._generate_content_stream",
+                side_effect=_fake_stream,
+                create=True,
+            ):
+                stream = client.models.generate_content_stream(
+                    model="gemini-2.0-flash-001",
+                    contents="roll two dice",
+                )
+                # Drain the wrapped stream.
+                list(stream)
+        finally:
+            uninstrument("google-genai")
+
+        span = find_span(recording_client, "gemini.generate_content_stream")
+        attrs = json.loads(span.attributes_json)
+        calls = attrs[AgenticAttributes.TOOL_CALLS]
+        # Before the fix: len == 1 (content-hash dedup collapsed the two
+        # identical roll_die() calls). After: len == 2 because dedup is
+        # by position within parts, not by content.
+        assert len(calls) == 2, f"expected both roll_die calls; got {calls}"
+        assert all(c["name"] == "roll_die" for c in calls)
+
+
 class TestGeminiLaneBCallIdCollision:
     def test_two_calls_in_one_agent_span_dont_collide(self, recording_client):
         """

@@ -268,10 +268,16 @@ class _StreamAccumulator:
         self.response_id: str | None = None
         self.prompt_tokens: int | None = None
         self.response_tokens: int | None = None
-        # De-duped by (name, arguments-json) so repeated chunks carrying the
-        # same function_call don't inflate the list.
-        self._tool_parts: list[Any] = []
-        self._seen_tool_keys: set[tuple[str, str]] = set()
+        # Keyed by position within `candidate.content.parts` so:
+        #   * repeated chunks carrying the same function_call at the same
+        #     position overwrite each other cleanly (last-write-wins for
+        #     the latest snapshot);
+        #   * two legitimately-parallel calls to the same tool with the
+        #     same arguments (e.g. two ``roll_die()``, two zero-arg calls,
+        #     two identical shard queries) at positions 0 and 1 stay
+        #     distinct instead of colliding under a content-hash key.
+        # Fix for TP-2128 P1 #1.6.
+        self._tool_parts_by_position: dict[int, Any] = {}
 
     def absorb(self, chunk: Any) -> None:
         self.model_version = self.model_version or read(chunk, "model_version")
@@ -297,21 +303,14 @@ class _StreamAccumulator:
             text = _extract_candidate_text(first)
             if text:
                 self.buffer.append(text)
-            for part in _candidate_parts(first):
+            for position, part in enumerate(_candidate_parts(first)):
                 fc = read(part, "function_call")
                 if fc is None:
                     continue
-                name = read(fc, "name") or ""
-                args = read(fc, "args")
-                try:
-                    args_key = json.dumps(args, sort_keys=True, default=str)
-                except (TypeError, ValueError):
-                    args_key = str(args)
-                key = (name, args_key)
-                if key in self._seen_tool_keys:
-                    continue
-                self._seen_tool_keys.add(key)
-                self._tool_parts.append(part)
+                # Overwrite by position: later chunks carry newer snapshots
+                # of the same call, and distinct calls at different
+                # positions each get their own slot.
+                self._tool_parts_by_position[position] = part
 
     def finalize(self, span: DisseqtSpan) -> None:
         text = "".join(self.buffer)
@@ -338,7 +337,11 @@ class _StreamAccumulator:
                 self.prompt_tokens + self.response_tokens,
             )
 
-        tool_calls = _tc_from_gemini(self._tool_parts, response_id=self.response_id)
+        # Emit in position order — matches the order the model produced.
+        ordered_parts = [
+            self._tool_parts_by_position[i] for i in sorted(self._tool_parts_by_position)
+        ]
+        tool_calls = _tc_from_gemini(ordered_parts, response_id=self.response_id)
         if tool_calls:
             safe_set(span, AgenticAttributes.TOOL_CALLS, tool_calls)
             _notify_planned_tool_calls(tool_calls)
