@@ -153,12 +153,18 @@ def _set_response_attrs(span: DisseqtSpan, response: Any) -> None:
 
     usage = read(response, "usage_metadata")
     if usage is not None:
+        # NOTE: the real google-genai `GenerateContentResponseUsageMetadata`
+        # exposes `candidates_token_count`, not `response_token_count`
+        # (which only exists on the unrelated Live-API type). Reading the
+        # wrong field silently zeroed output-token telemetry for every real
+        # Gemini call — the earlier bare-MagicMock test invented the field
+        # so the bug went unnoticed. See TP-2128 P0 #0.3.
         prompt_tokens = read(usage, "prompt_token_count") or 0
-        response_tokens = read(usage, "response_token_count") or 0
-        total = read(usage, "total_token_count") or (prompt_tokens + response_tokens)
-        span.set_token_usage(prompt_tokens, response_tokens)
+        candidates_tokens = read(usage, "candidates_token_count") or 0
+        total = read(usage, "total_token_count") or (prompt_tokens + candidates_tokens)
+        span.set_token_usage(prompt_tokens, candidates_tokens)
         safe_set(span, GenAIAttributes.USAGE_INPUT_TOKENS, prompt_tokens)
-        safe_set(span, GenAIAttributes.USAGE_OUTPUT_TOKENS, response_tokens)
+        safe_set(span, GenAIAttributes.USAGE_OUTPUT_TOKENS, candidates_tokens)
         safe_set(span, GenAIAttributes.USAGE_TOTAL_TOKENS, total)
 
     candidates = read(response, "candidates") or []
@@ -271,7 +277,9 @@ class _StreamAccumulator:
         usage = read(chunk, "usage_metadata")
         if usage is not None:
             pt = read(usage, "prompt_token_count")
-            rt = read(usage, "response_token_count")
+            # Real field is `candidates_token_count`; see the note on the
+            # non-streaming path above.
+            rt = read(usage, "candidates_token_count")
             if pt is not None:
                 self.prompt_tokens = pt
             if rt is not None:

@@ -18,10 +18,19 @@ from tests.agentic.instrumentation.conftest import find_span  # noqa: E402
 
 
 def _fake_response():
+    # NOTE: usage_metadata uses the real google-genai Pydantic type so a
+    # future field-name typo (e.g. reading `response_token_count`, which
+    # doesn't exist on this type) fails loudly instead of silently
+    # returning a fresh MagicMock. See TP-2128 P0 #0.3 for the bug this
+    # test now guards.
     part = MagicMock(text="Paris.")
     content = MagicMock(parts=[part], role="model")
     candidate = MagicMock(content=content, finish_reason="STOP")
-    usage = MagicMock(prompt_token_count=7, response_token_count=2, total_token_count=9)
+    usage = genai_types.GenerateContentResponseUsageMetadata(
+        prompt_token_count=7,
+        candidates_token_count=2,
+        total_token_count=9,
+    )
     response = MagicMock(
         response_id="gemini-fake",
         model_version="gemini-2.0-flash-001",
@@ -68,6 +77,55 @@ class TestGeminiGenerate:
         assert attrs[GenAIAttributes.SYSTEM] == "gemini"
         assert attrs[GenAIAttributes.OPERATION_NAME] == "generate_content"
 
+    def test_reads_candidates_token_count_field(self, recording_client):
+        """
+        Regression guard for TP-2128 P0 #0.3.
+
+        The instrumentor previously read ``response_token_count`` — a
+        field that does not exist on
+        ``GenerateContentResponseUsageMetadata`` (it only exists on the
+        Live-API `GenerateContentResponse` type). This test uses a
+        real-typed usage-metadata instance so a future rename to a
+        non-existent field fails loudly at Pydantic construction time
+        rather than silently returning 0 tokens.
+        """
+        instrument("google-genai", recording_client)
+        try:
+            client = genai.Client(api_key="fake")
+            usage = genai_types.GenerateContentResponseUsageMetadata(
+                prompt_token_count=42,
+                candidates_token_count=17,
+                total_token_count=59,
+            )
+            part = MagicMock(text="hello")
+            content = MagicMock(parts=[part], role="model")
+            candidate = MagicMock(content=content, finish_reason="STOP")
+            fake = MagicMock(
+                response_id="gemini-tokens",
+                model_version="gemini-2.0-flash-001",
+                candidates=[candidate],
+                usage_metadata=usage,
+            )
+            with patch(
+                "google.genai.models.Models._generate_content",
+                return_value=fake,
+                create=True,
+            ):
+                client.models.generate_content(
+                    model="gemini-2.0-flash-001",
+                    contents="x",
+                )
+        finally:
+            uninstrument("google-genai")
+
+        span = find_span(recording_client, "gemini.generate_content")
+        attrs = json.loads(span.attributes_json)
+        assert attrs[AgenticAttributes.USAGE_INPUT_TOKENS] == 42
+        assert attrs[AgenticAttributes.USAGE_OUTPUT_TOKENS] == 17
+        assert attrs[GenAIAttributes.USAGE_INPUT_TOKENS] == 42
+        assert attrs[GenAIAttributes.USAGE_OUTPUT_TOKENS] == 17
+        assert attrs[GenAIAttributes.USAGE_TOTAL_TOKENS] == 59
+
 
 class TestGeminiToolCalls:
     def test_captures_function_call_parts(self, recording_client):
@@ -87,7 +145,11 @@ class TestGeminiToolCalls:
             text_part = MagicMock(text="Let me check.", function_call=None)
             content = MagicMock(parts=[text_part, part], role="model")
             candidate = MagicMock(content=content, finish_reason="STOP")
-            usage = MagicMock(prompt_token_count=8, response_token_count=4, total_token_count=12)
+            usage = genai_types.GenerateContentResponseUsageMetadata(
+                prompt_token_count=8,
+                candidates_token_count=4,
+                total_token_count=12,
+            )
             fake = MagicMock(
                 response_id="gemini-tools",
                 model_version="gemini-2.0-flash-001",
