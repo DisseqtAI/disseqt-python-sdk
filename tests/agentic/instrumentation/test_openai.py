@@ -531,6 +531,74 @@ class TestOpenAIStreamingMultiChoice:
         ]
 
 
+class TestOpenAILegacyCompletionsStreaming:
+    """
+    TP-2128 P2 #2.5: legacy /v1/completions streaming path used to wire
+    on_chunk/on_finish to no-ops, so a streamed legacy completion
+    recorded ZERO response attrs (no model, no id, no completion text,
+    no tokens, no finish_reason). Now a dedicated accumulator handles
+    the ``choices[i].text`` shape.
+    """
+
+    def test_streaming_records_response_attrs(self, recording_client):
+        instrument("openai", recording_client)
+        try:
+            client = OpenAI(api_key="fake")
+
+            def _chunk(text=None, finish=None, usage=None):
+                ch = MagicMock()
+                ch.id = "cmpl-legacy-stream"
+                ch.model = "gpt-3.5-turbo-instruct"
+                ch.usage = usage
+                choice = MagicMock()
+                choice.index = 0
+                choice.text = text
+                choice.finish_reason = finish
+                ch.choices = [choice]
+                return ch
+
+            usage_obj = MagicMock(prompt_tokens=5, completion_tokens=3, total_tokens=8)
+            final = MagicMock()
+            final.id = "cmpl-legacy-stream"
+            final.model = "gpt-3.5-turbo-instruct"
+            final.usage = usage_obj
+            final.choices = []
+
+            fake_stream = iter(
+                [
+                    _chunk(text="Once "),
+                    _chunk(text="upon "),
+                    _chunk(text="a time.", finish="stop"),
+                    final,
+                ]
+            )
+
+            with patch.object(client.completions, "_post", return_value=fake_stream, create=True):
+                stream = client.completions.create(
+                    model="gpt-3.5-turbo-instruct",
+                    prompt="Continue the story: Once",
+                    stream=True,
+                )
+                list(stream)
+        finally:
+            uninstrument("openai")
+
+        span = find_span(recording_client, "openai.completions.create")
+        attrs = json.loads(span.attributes_json)
+
+        # Before the fix: none of these were set.
+        assert attrs[AgenticAttributes.RESPONSE_MODEL] == "gpt-3.5-turbo-instruct"
+        assert attrs[AgenticAttributes.RESPONSE_ID] == "cmpl-legacy-stream"
+        assert attrs[AgenticAttributes.RESPONSE_FINISH_REASON] == "stop"
+        assert attrs[AgenticAttributes.OUTPUT_MESSAGES] == [
+            {"role": "assistant", "content": "Once upon a time."}
+        ]
+        assert attrs[GenAIAttributes.COMPLETION] == "Once upon a time."
+        assert attrs[AgenticAttributes.USAGE_INPUT_TOKENS] == 5
+        assert attrs[AgenticAttributes.USAGE_OUTPUT_TOKENS] == 3
+        assert attrs[AgenticAttributes.USAGE_TOTAL_TOKENS] == 8
+
+
 class TestOpenAIParentLinkage:
     def test_auto_span_nests_under_user_trace(self, recording_client):
         """If the user has opened a trace, the auto-span parents to it."""

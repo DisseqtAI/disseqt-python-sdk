@@ -25,11 +25,17 @@ from disseqt_agentic_sdk.instrumentation._embeddings import (
 from disseqt_agentic_sdk.instrumentation._kwargs import KW_INPUT, KW_MODEL, KW_PROMPT, KW_STREAM
 from disseqt_agentic_sdk.instrumentation._oai_compat import (
     ChatStreamAccumulator,
+    read,
     set_chat_response,
     set_common_chat_request,
 )
 from disseqt_agentic_sdk.instrumentation._stream import AsyncStreamWrapper, SyncStreamWrapper
-from disseqt_agentic_sdk.instrumentation._utils import open_llm_span, safe_call, safe_set
+from disseqt_agentic_sdk.instrumentation._utils import (
+    open_llm_span,
+    safe_call,
+    safe_set,
+    set_messages_if_capturing,
+)
 from disseqt_agentic_sdk.semantics import (
     AgenticAttributes,
     AgenticOperation,
@@ -130,6 +136,79 @@ def async_chat_completions_create(instrumentor: OpenAIInstrumentor) -> Callable[
 # ---------------------------------------------------------------------
 # Legacy text completions (prompt= instead of messages=)
 # ---------------------------------------------------------------------
+class _LegacyCompletionsStreamAccumulator:
+    """
+    Streaming accumulator for legacy /v1/completions responses.
+
+    Legacy chunks carry ``choices[i].text`` and ``choices[i].finish_reason``
+    at the top level (there is no ``.delta`` wrapper — that's a chat-
+    specific shape). Usage arrives on a final chunk when
+    ``stream_options={"include_usage": True}``. This mirrors the shape
+    ``set_chat_response`` handles for non-streaming completions, adapted
+    for a text-only response (no tool calls, no assistant role).
+    TP-2128 P2 #2.5.
+    """
+
+    def __init__(self) -> None:
+        self.buffer: list[str] = []
+        self.model: str | None = None
+        self.response_id: str | None = None
+        self.finish_reason: str | None = None
+        self.prompt_tokens: int | None = None
+        self.completion_tokens: int | None = None
+
+    def absorb(self, chunk: Any) -> None:
+        self.model = self.model or read(chunk, "model")
+        self.response_id = self.response_id or read(chunk, "id")
+
+        usage = read(chunk, "usage")
+        if usage is not None:
+            self.prompt_tokens = read(usage, "prompt_tokens") or self.prompt_tokens
+            self.completion_tokens = read(usage, "completion_tokens") or self.completion_tokens
+
+        for choice in read(chunk, "choices") or []:
+            # Only choice 0 — mirrors the chat-streaming policy from
+            # TP-2128 P2 #2.7 for consistency.
+            choice_idx = read(choice, "index")
+            if isinstance(choice_idx, int) and choice_idx != 0:
+                continue
+            text = read(choice, "text")
+            if isinstance(text, str) and text:
+                self.buffer.append(text)
+            fr = read(choice, "finish_reason")
+            if fr:
+                self.finish_reason = fr
+
+    def finalize(self, span: DisseqtSpan) -> None:
+        text = "".join(self.buffer)
+        if text:
+            # Legacy completions emit a raw string, not a chat message.
+            # Record both shapes so consumers that read either land the
+            # payload.
+            set_messages_if_capturing(
+                span, output_messages=[{"role": "assistant", "content": text}]
+            )
+            safe_set(span, GenAIAttributes.COMPLETION, text)
+        if self.model:
+            safe_set(span, AgenticAttributes.RESPONSE_MODEL, self.model)
+            safe_set(span, GenAIAttributes.RESPONSE_MODEL, self.model)
+        if self.response_id:
+            safe_set(span, AgenticAttributes.RESPONSE_ID, self.response_id)
+            safe_set(span, GenAIAttributes.RESPONSE_ID, self.response_id)
+        if self.finish_reason:
+            safe_set(span, AgenticAttributes.RESPONSE_FINISH_REASON, self.finish_reason)
+            safe_set(span, GenAIAttributes.RESPONSE_FINISH_REASONS, [self.finish_reason])
+        if self.prompt_tokens is not None and self.completion_tokens is not None:
+            span.set_token_usage(self.prompt_tokens, self.completion_tokens)
+            safe_set(span, GenAIAttributes.USAGE_INPUT_TOKENS, self.prompt_tokens)
+            safe_set(span, GenAIAttributes.USAGE_OUTPUT_TOKENS, self.completion_tokens)
+            safe_set(
+                span,
+                GenAIAttributes.USAGE_TOTAL_TOKENS,
+                self.prompt_tokens + self.completion_tokens,
+            )
+
+
 def completions_create(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
     def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         scope = open_llm_span(instrumentor.client, "openai.completions.create", SpanKind.MODEL_EXEC)
@@ -155,11 +234,12 @@ def completions_create(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
             raise
 
         if kwargs.get(KW_STREAM):
+            state = _LegacyCompletionsStreamAccumulator()
             return SyncStreamWrapper(
                 stream=result,
                 scope=scope,
-                on_chunk=lambda chunk: None,
-                on_finish=lambda: None,
+                on_chunk=lambda chunk: state.absorb(chunk),
+                on_finish=lambda: state.finalize(span),
             )
         safe_call(set_chat_response, span, result)
         scope.__exit__(None, None, None)
@@ -195,11 +275,12 @@ def async_completions_create(instrumentor: OpenAIInstrumentor) -> Callable[..., 
             raise
 
         if kwargs.get(KW_STREAM):
+            state = _LegacyCompletionsStreamAccumulator()
             return AsyncStreamWrapper(
                 stream=result,
                 scope=scope,
-                on_chunk=lambda chunk: None,
-                on_finish=lambda: None,
+                on_chunk=lambda chunk: state.absorb(chunk),
+                on_finish=lambda: state.finalize(span),
             )
         safe_call(set_chat_response, span, result)
         scope.__exit__(None, None, None)
