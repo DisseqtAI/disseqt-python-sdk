@@ -56,7 +56,19 @@ def from_openai(tool_calls: Any) -> list[dict[str, str]]:
     """
     Normalize OpenAI-shape tool_calls (also Groq, Mistral, LiteLLM, Cohere v2).
 
-    Input entries have ``id``, ``function.name``, ``function.arguments``.
+    Recognized shapes, in order:
+
+    1. **Function tool call** (default): entry has ``function.name`` +
+       ``function.arguments`` (already a JSON string on OpenAI).
+    2. **Custom tool call**: entry has ``type == "custom"`` +
+       ``custom.name`` + ``custom.input`` (a free-form string, not
+       necessarily JSON). This is OpenAI's currently-shipping "custom
+       tool calling" feature — before the fix, `.function` came back
+       None, `.name` came back None, and the entry was silently dropped
+       (TP-2128 P1 #1.4).
+    3. Legacy / permissive fallback: entry has top-level ``name`` +
+       ``arguments``.
+
     Returns [] on falsy input; skips entries missing a name.
     """
     if not tool_calls:
@@ -64,10 +76,21 @@ def from_openai(tool_calls: Any) -> list[dict[str, str]]:
     out: list[dict[str, str]] = []
     for tc in tool_calls:
         function = _read(tc, "function")
-        name = _read(function, "name") if function is not None else _read(tc, "name")
+        custom = _read(tc, "custom")
+
+        if function is not None:
+            name = _read(function, "name")
+            args = _read(function, "arguments")
+        elif custom is not None:
+            name = _read(custom, "name")
+            # OpenAI custom tools use `input` (free-form text), not `arguments`.
+            args = _read(custom, "input")
+        else:
+            name = _read(tc, "name")
+            args = _read(tc, "arguments")
+
         if not name:
             continue
-        args = _read(function, "arguments") if function is not None else _read(tc, "arguments")
         out.append(
             {
                 "id": str(_read(tc, "id") or f"call_{len(out)}"),
