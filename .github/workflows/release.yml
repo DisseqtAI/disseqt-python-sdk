@@ -1,0 +1,75 @@
+name: Release
+
+# One-click release: bump the version, stamp the CHANGELOG, gate on the
+# test suite, commit + tag + GitHub release, then dispatch the existing
+# publish.yml (trusted publishing to PyPI). The explicit dispatch is
+# required: a release created with the default GITHUB_TOKEN does not fire
+# other workflows' `release:` triggers — but workflow_dispatch is the
+# documented exception, so no PAT is needed. After PyPI, the backend
+# advertises the new version automatically via its registry polling
+# (SDK_VERSION_POLL_INTERVAL in production-monitoring) — no Vault bump,
+# no restart.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump type"
+        type: choice
+        options: [patch, minor, major]
+        default: minor
+        required: true
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Bump version and stamp CHANGELOG
+        id: prep
+        run: |
+          VERSION=$(python3 .github/scripts/prepare_release.py "${{ inputs.bump }}")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing v$VERSION"
+
+      - name: Lock and run the test suite
+        run: |
+          uv lock
+          uv run pytest tests/unit/ tests/agentic/ -q
+
+      - name: Commit, tag, and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml CHANGELOG.md uv.lock
+          git commit -m "Release v${{ steps.prep.outputs.version }}"
+          git tag "v${{ steps.prep.outputs.version }}"
+          git push origin HEAD:main --follow-tags
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ steps.prep.outputs.version }}" \
+            --target main \
+            --title "v${{ steps.prep.outputs.version }}" \
+            --notes-file release_notes.md
+
+      - name: Dispatch PyPI publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run publish.yml --ref main
