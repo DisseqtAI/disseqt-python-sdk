@@ -62,6 +62,11 @@ class GenAISystem:
     GEMINI = "gemini"
     VERTEX_AI = "vertex_ai"
     AWS_BEDROCK = "aws.bedrock"
+    # OTEL spec literal for Azure AI Inference; deliberately different
+    # from AgenticProvider.AZURE_AI = "azure.ai" (see the note on that
+    # class). A future Azure instrumentor must set both attributes
+    # from their respective constants — do not reuse this string for
+    # the ``agentic.provider.name`` attribute. TP-2128 Appendix.
     AZURE_AI = "az.ai.inference"
     # LiteLLM proxies to other providers. Downstream tools should read
     # `gen_ai.response.model` / `agentic.provider.name` for the real target.

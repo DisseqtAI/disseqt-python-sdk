@@ -175,13 +175,23 @@ class AgenticCacheOperation:
 
 # Provider names
 class AgenticProvider:
-    """Agentic provider names"""
+    """Agentic provider names.
+
+    Every value here should generally match its ``GenAISystem`` sibling
+    so consumers reading either ``agentic.provider.name`` or
+    ``gen_ai.system`` see identical strings. The one exception is
+    ``AZURE_AI``: ``GenAISystem.AZURE_AI`` follows the OpenTelemetry
+    spec value ``az.ai.inference`` while this side uses ``azure.ai``
+    (dotted namespace, matches ``aws.bedrock``). A future Azure
+    instrumentor must set both attributes explicitly rather than
+    reusing one value for both — TP-2128 Appendix.
+    """
 
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
     GOOGLE = "google"
     AWS_BEDROCK = "aws.bedrock"
-    AZURE_AI = "azure.ai"
+    AZURE_AI = "azure.ai"  # NOTE: paired with GenAISystem.AZURE_AI = "az.ai.inference"
     COHERE = "cohere"
     MISTRAL_AI = "mistral_ai"
     GROQ = "groq"
