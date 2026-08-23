@@ -69,7 +69,7 @@ def chat_completions_create(instrumentor: OpenAIInstrumentor) -> Callable[..., A
 
         try:
             result = wrapped(*args, **kwargs)
-        except Exception as exc:
+        except BaseException as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
 
@@ -108,7 +108,7 @@ def async_chat_completions_create(instrumentor: OpenAIInstrumentor) -> Callable[
 
         try:
             result = await wrapped(*args, **kwargs)
-        except Exception as exc:
+        except BaseException as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
 
@@ -150,7 +150,7 @@ def completions_create(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
 
         try:
             result = wrapped(*args, **kwargs)
-        except Exception as exc:
+        except BaseException as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
 
@@ -190,7 +190,7 @@ def async_completions_create(instrumentor: OpenAIInstrumentor) -> Callable[..., 
 
         try:
             result = await wrapped(*args, **kwargs)
-        except Exception as exc:
+        except BaseException as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
 
@@ -218,7 +218,7 @@ def embeddings_create(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
         safe_call(_set_embeddings_request, span, kwargs)
         try:
             result = wrapped(*args, **kwargs)
-        except Exception as exc:
+        except BaseException as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
 
@@ -238,7 +238,7 @@ def async_embeddings_create(instrumentor: OpenAIInstrumentor) -> Callable[..., A
         safe_call(_set_embeddings_request, span, kwargs)
         try:
             result = await wrapped(*args, **kwargs)
-        except Exception as exc:
+        except BaseException as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
 

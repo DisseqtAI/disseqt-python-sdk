@@ -135,6 +135,55 @@ class TestOpenAIChat:
         assert attrs[GenAIAttributes.USAGE_TOTAL_TOKENS] == 9
         assert attrs[GenAIAttributes.RESPONSE_FINISH_REASONS] == ["stop"]
 
+    def test_cancelled_await_still_finalizes_span(self, recording_client):
+        """
+        Regression: `except Exception` in the async wrapper missed
+        `asyncio.CancelledError` (a BaseException), so a cancelled
+        `await client.chat.completions.create(...)` leaked the span
+        with no error status recorded. Fix widens to `except BaseException`.
+
+        Simulate cancellation with asyncio.wait_for + a slow patched
+        HTTP path.
+        """
+        import asyncio
+
+        from openai import AsyncOpenAI
+
+        instrument("openai", recording_client)
+        try:
+            aclient = AsyncOpenAI(api_key="fake")
+
+            async def _slow_post(*_a, **_kw):
+                await asyncio.sleep(10)
+                return _fake_chat_completion()
+
+            with patch.object(
+                aclient.chat.completions,
+                "_post",
+                side_effect=_slow_post,
+                create=True,
+            ):
+
+                async def _drive():
+                    with pytest.raises(asyncio.TimeoutError):
+                        await asyncio.wait_for(
+                            aclient.chat.completions.create(
+                                model="gpt-4o-mini",
+                                messages=[{"role": "user", "content": "x"}],
+                            ),
+                            timeout=0.05,
+                        )
+
+                asyncio.run(_drive())
+        finally:
+            uninstrument("openai")
+
+        # The span must be present (scope.__exit__ ran because
+        # `except BaseException` caught the CancelledError) and must be
+        # marked ERROR so downstream dashboards see the failed call.
+        span = find_span(recording_client, "openai.chat.completions.create")
+        assert span.status_code == "ERROR"
+
     def test_records_error_on_exception(self, recording_client):
         instrument("openai", recording_client)
         try:

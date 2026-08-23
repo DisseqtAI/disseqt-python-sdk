@@ -226,7 +226,7 @@ def _sync_generate(instrumentor: GeminiInstrumentor) -> Callable[..., Any]:
         safe_call(_set_request_attrs, span, kwargs)
         try:
             result = wrapped(*args, **kwargs)
-        except Exception as exc:
+        except BaseException as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
         safe_call(_set_response_attrs, span, result)
@@ -245,7 +245,7 @@ def _async_generate(instrumentor: GeminiInstrumentor) -> Callable[..., Any]:
         safe_call(_set_request_attrs, span, kwargs)
         try:
             result = await wrapped(*args, **kwargs)
-        except Exception as exc:
+        except BaseException as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
         safe_call(_set_response_attrs, span, result)
@@ -358,7 +358,7 @@ def _sync_stream(instrumentor: GeminiInstrumentor) -> Callable[..., Any]:
         safe_call(_set_request_attrs, span, kwargs)
         try:
             result = wrapped(*args, **kwargs)
-        except Exception as exc:
+        except BaseException as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
         state = _StreamAccumulator()
@@ -383,7 +383,7 @@ def _async_stream(instrumentor: GeminiInstrumentor) -> Callable[..., Any]:
         safe_call(_set_request_attrs, span, kwargs)
         try:
             result = await wrapped(*args, **kwargs)
-        except Exception as exc:
+        except BaseException as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
         state = _StreamAccumulator()

@@ -59,7 +59,7 @@ def _sync_chat(instrumentor: MistralInstrumentor) -> Callable[..., Any]:
         )
         try:
             result = wrapped(*args, **kwargs)
-        except Exception as exc:
+        except BaseException as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
         safe_call(set_chat_response, span, result)
@@ -86,7 +86,7 @@ def _async_chat(instrumentor: MistralInstrumentor) -> Callable[..., Any]:
         )
         try:
             result = await wrapped(*args, **kwargs)
-        except Exception as exc:
+        except BaseException as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
         safe_call(set_chat_response, span, result)
@@ -111,7 +111,7 @@ def _sync_stream(instrumentor: MistralInstrumentor) -> Callable[..., Any]:
         )
         try:
             result = wrapped(*args, **kwargs)
-        except Exception as exc:
+        except BaseException as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
         state = ChatStreamAccumulator()
@@ -142,7 +142,7 @@ def _async_stream(instrumentor: MistralInstrumentor) -> Callable[..., Any]:
         )
         try:
             result = await wrapped(*args, **kwargs)
-        except Exception as exc:
+        except BaseException as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
         state = ChatStreamAccumulator()

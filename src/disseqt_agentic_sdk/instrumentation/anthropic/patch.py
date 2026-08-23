@@ -147,7 +147,7 @@ def messages_create(instrumentor: AnthropicInstrumentor) -> Callable[..., Any]:
         safe_call(_set_request_attrs, span, kwargs)
         try:
             result = wrapped(*args, **kwargs)
-        except Exception as exc:
+        except BaseException as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
 
@@ -175,7 +175,7 @@ def async_messages_create(instrumentor: AnthropicInstrumentor) -> Callable[..., 
         safe_call(_set_request_attrs, span, kwargs)
         try:
             result = await wrapped(*args, **kwargs)
-        except Exception as exc:
+        except BaseException as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
 

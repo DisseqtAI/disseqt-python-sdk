@@ -52,7 +52,7 @@ def batches_create(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
         _emit_provider_tags(span)
         try:
             batch = wrapped(*args, **kwargs)
-        except Exception as exc:
+        except BaseException as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
         try:
@@ -73,7 +73,7 @@ def async_batches_create(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]
         _emit_provider_tags(span)
         try:
             batch = await wrapped(*args, **kwargs)
-        except Exception as exc:
+        except BaseException as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
         try:
@@ -95,7 +95,7 @@ def batches_retrieve(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
         _emit_provider_tags(span)
         try:
             batch = wrapped(*args, **kwargs)
-        except Exception as exc:
+        except BaseException as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
         try:
@@ -116,7 +116,7 @@ def async_batches_retrieve(instrumentor: OpenAIInstrumentor) -> Callable[..., An
         _emit_provider_tags(span)
         try:
             batch = await wrapped(*args, **kwargs)
-        except Exception as exc:
+        except BaseException as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
         try:
@@ -138,7 +138,7 @@ def batches_cancel(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
         _emit_provider_tags(span)
         try:
             batch = wrapped(*args, **kwargs)
-        except Exception as exc:
+        except BaseException as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
         try:
@@ -159,7 +159,7 @@ def async_batches_cancel(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]
         _emit_provider_tags(span)
         try:
             batch = await wrapped(*args, **kwargs)
-        except Exception as exc:
+        except BaseException as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
         try:

@@ -63,7 +63,7 @@ def _sync_chat(instrumentor: GroqInstrumentor) -> Callable[..., Any]:
         )
         try:
             result = wrapped(*args, **kwargs)
-        except Exception as exc:
+        except BaseException as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
         if kwargs.get(KW_STREAM):
@@ -100,7 +100,7 @@ def _async_chat(instrumentor: GroqInstrumentor) -> Callable[..., Any]:
         )
         try:
             result = await wrapped(*args, **kwargs)
-        except Exception as exc:
+        except BaseException as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
         if kwargs.get(KW_STREAM):
