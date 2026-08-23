@@ -358,6 +358,179 @@ class TestOpenAIToolCalls:
         assert attrs[AgenticAttributes.TOOL_NAME] == "get_weather"
 
 
+class TestOpenAINMultiChoice:
+    """
+    TP-2128 P2 #2.7: n>1 responses used to mix tool_calls across
+    choices (flattened list from every choice) while finish_reason kept
+    coming from choice 0 only. That misattributed which choice owned a
+    given tool call and broke the AGENT_EXEC plan-coherence validator.
+    Now tool_calls come from choice 0 exclusively — matches how
+    RESPONSE_FINISH_REASON (singular) and TOOL_NAME/TOOL_CALL_ID/
+    TOOL_ARGS already behave. RESPONSE_FINISH_REASONS (plural) still
+    lists every choice.
+    """
+
+    def _build_multi_choice_response(self):
+        from openai.types.chat import ChatCompletion, ChatCompletionMessage
+        from openai.types.chat.chat_completion import Choice
+        from openai.types.chat.chat_completion_message_tool_call import (
+            ChatCompletionMessageToolCall,
+            Function,
+        )
+        from openai.types.completion_usage import CompletionUsage
+
+        def _tc(id_, name, args):
+            return ChatCompletionMessageToolCall(
+                id=id_, type="function", function=Function(name=name, arguments=args)
+            )
+
+        return ChatCompletion(
+            id="chatcmpl-multi",
+            model="gpt-4o-mini",
+            object="chat.completion",
+            created=0,
+            choices=[
+                Choice(
+                    index=0,
+                    finish_reason="tool_calls",
+                    message=ChatCompletionMessage(
+                        role="assistant",
+                        content=None,
+                        tool_calls=[_tc("call_0", "get_weather", '{"loc":"Paris"}')],
+                    ),
+                ),
+                Choice(
+                    index=1,
+                    finish_reason="tool_calls",
+                    message=ChatCompletionMessage(
+                        role="assistant",
+                        content=None,
+                        tool_calls=[_tc("call_1", "get_stock", '{"sym":"AAPL"}')],
+                    ),
+                ),
+                Choice(
+                    index=2,
+                    finish_reason="stop",
+                    message=ChatCompletionMessage(role="assistant", content="plain text"),
+                ),
+            ],
+            usage=CompletionUsage(prompt_tokens=5, completion_tokens=5, total_tokens=10),
+        )
+
+    def test_tool_calls_come_from_choice_zero_only(self, recording_client):
+        instrument("openai", recording_client)
+        try:
+            client = OpenAI(api_key="fake")
+            with patch.object(
+                client.chat.completions,
+                "_post",
+                return_value=self._build_multi_choice_response(),
+                create=True,
+            ):
+                client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    n=3,
+                    messages=[{"role": "user", "content": "give me options"}],
+                )
+        finally:
+            uninstrument("openai")
+
+        span = find_span(recording_client, "openai.chat.completions.create")
+        attrs = json.loads(span.attributes_json)
+
+        # Only choice 0's tool call lands — choice 1's is dropped.
+        calls = attrs[AgenticAttributes.TOOL_CALLS]
+        assert len(calls) == 1
+        assert calls[0]["id"] == "call_0"
+        assert calls[0]["name"] == "get_weather"
+
+        # Convenience columns match choice 0.
+        assert attrs[AgenticAttributes.TOOL_NAME] == "get_weather"
+        assert attrs[AgenticAttributes.TOOL_CALL_ID] == "call_0"
+
+        # Plural finish_reasons still lists every choice.
+        assert attrs[GenAIAttributes.RESPONSE_FINISH_REASONS] == [
+            "tool_calls",
+            "tool_calls",
+            "stop",
+        ]
+        # Singular keeps choice-0 value (back-compat).
+        assert attrs[AgenticAttributes.RESPONSE_FINISH_REASON] == "tool_calls"
+
+        # output_messages still lists every choice — content is
+        # per-choice and callers reading this array shouldn't lose the
+        # multi-choice fan-out.
+        msgs = attrs[AgenticAttributes.OUTPUT_MESSAGES]
+        assert len(msgs) == 3
+
+
+class TestOpenAIStreamingMultiChoice:
+    """
+    Streaming n>1: tool-call deltas from non-zero choices must be
+    ignored. Their fragment indexes restart at 0 for each choice and
+    would collide into choice 0's slot, corrupting the accumulated
+    arguments. TP-2128 P2 #2.7 (streaming side).
+    """
+
+    def test_only_choice_zero_tool_calls_accumulate(self, recording_client):
+        instrument("openai", recording_client)
+        try:
+            client = OpenAI(api_key="fake")
+
+            def _chunk_for_choice(choice_index, tc_id, tc_name, args_frag, finish=None):
+                ch = MagicMock()
+                ch.id = "chatcmpl-n2-stream"
+                ch.model = "gpt-4o-mini"
+                ch.usage = None
+                choice = MagicMock()
+                choice.index = choice_index
+                fn = MagicMock()
+                fn.name = tc_name
+                fn.arguments = args_frag
+                tc = MagicMock(index=0, id=tc_id, function=fn)
+                choice.delta = MagicMock(
+                    role="assistant" if tc_id else None,
+                    content=None,
+                    tool_calls=[tc] if tc_name or args_frag else None,
+                )
+                choice.finish_reason = finish
+                ch.choices = [choice]
+                return ch
+
+            # Choice 0 tool call: get_weather → {"loc":"Paris"}
+            # Choice 1 tool call: DIFFERENT tool that MUST be ignored.
+            fake_stream = iter(
+                [
+                    _chunk_for_choice(0, "call_c0", "get_weather", '{"loc'),
+                    _chunk_for_choice(1, "call_c1", "get_stock", '{"sym'),  # ignore
+                    _chunk_for_choice(0, None, None, 'ation":"Paris"}', finish="tool_calls"),
+                    _chunk_for_choice(1, None, None, '":"AAPL"}', finish="tool_calls"),  # ignore
+                ]
+            )
+            with patch.object(
+                client.chat.completions, "_post", return_value=fake_stream, create=True
+            ):
+                stream = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    n=2,
+                    messages=[{"role": "user", "content": "two answers"}],
+                    stream=True,
+                    tools=[_WEATHER_TOOL],
+                )
+                list(stream)
+        finally:
+            uninstrument("openai")
+
+        span = find_span(recording_client, "openai.chat.completions.create")
+        attrs = json.loads(span.attributes_json)
+        calls = attrs[AgenticAttributes.TOOL_CALLS]
+        # Only choice-0's call. If choice-1's deltas leaked in, we'd see
+        # either 2 tool calls or a corrupted arguments string.
+        assert calls == [
+            {"id": "call_c0", "name": "get_weather", "arguments": '{"location":"Paris"}'}
+        ]
+
+
 class TestOpenAIParentLinkage:
     def test_auto_span_nests_under_user_trace(self, recording_client):
         """If the user has opened a trace, the auto-span parents to it."""

@@ -131,8 +131,15 @@ def set_chat_response(span: DisseqtSpan, response: Any) -> None:
     choices = read(response, "choices") or []
     output_messages: list[dict[str, Any]] = []
     finish_reasons: list[str] = []
+    # Tool calls come from choice 0 only (TP-2128 P2 #2.7). Flattening
+    # tool_calls across choices misattributes ownership — the backend
+    # validators fire on the AGENT_EXEC span and score plan-coherence
+    # against a single planned tool list, so mixing choices in produces
+    # false-positive plan divergence when n>1. Choice-0 matches how
+    # RESPONSE_FINISH_REASON (singular) and the single-value convenience
+    # attrs (TOOL_NAME / TOOL_CALL_ID / TOOL_ARGS) already behave.
     raw_tool_calls: list[Any] = []
-    for choice in choices:
+    for i, choice in enumerate(choices):
         message = read(choice, "message")
         if message is not None:
             role = read(message, "role") or "assistant"
@@ -140,9 +147,10 @@ def set_chat_response(span: DisseqtSpan, response: Any) -> None:
             # ship a list of ContentChunks here; normalize to str.
             content = _extract_content_text(read(message, "content")) or ""
             output_messages.append({"role": role, "content": content})
-            msg_tool_calls = read(message, "tool_calls")
-            if msg_tool_calls:
-                raw_tool_calls.extend(msg_tool_calls)
+            if i == 0:
+                msg_tool_calls = read(message, "tool_calls")
+                if msg_tool_calls:
+                    raw_tool_calls.extend(msg_tool_calls)
         finish_reason = read(choice, "finish_reason")
         if finish_reason:
             finish_reasons.append(finish_reason)
@@ -267,6 +275,21 @@ class ChatStreamAccumulator:
             )
 
         for choice in read(chunk, "choices") or []:
+            # Streaming absorbs choice 0 only (TP-2128 P2 #2.7). The
+            # deltas from other choices would collide on the tool-call
+            # slot key (each choice restarts index=0) and interleave in
+            # the content buffer, producing garbage attributes. Callers
+            # using n>1 streaming today were already reading corrupt
+            # output; restricting to choice 0 makes the behavior
+            # consistent with non-streaming's tool_calls policy.
+            # Real OpenAI ChatCompletionChunk.Choice always sets a
+            # numeric .index. If a caller (or a MagicMock test) leaves
+            # it unset we don't know which choice this chunk carries —
+            # be permissive and treat it as choice 0 so a bare-mock
+            # test isn't silently skipped.
+            choice_idx = read(choice, "index")
+            if isinstance(choice_idx, int) and choice_idx != 0:
+                continue
             delta = read(choice, "delta")
             if delta is not None:
                 role = read(delta, "role")
