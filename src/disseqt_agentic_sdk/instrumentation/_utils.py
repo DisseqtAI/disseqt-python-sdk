@@ -18,6 +18,7 @@ slow LLM calls, short enough to flag genuinely hung requests.
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import os
 import time
 from types import TracebackType
@@ -41,7 +42,12 @@ _logger = get_logger(__name__)
 # completions can take a couple of minutes; anything past 5 usually means
 # a hung connection.
 _DEFAULT_SLOW_THRESHOLD_MS = 5 * 60 * 1000
-_slow_threshold_ms: float = _DEFAULT_SLOW_THRESHOLD_MS
+# ContextVar so two concurrent asyncio tasks (or threads that copied the
+# caller's context) each see their own threshold — a plain module global
+# would race last-write-wins between callers.
+_slow_threshold_ms: contextvars.ContextVar[float] = contextvars.ContextVar(
+    "disseqt_slow_threshold_ms", default=float(_DEFAULT_SLOW_THRESHOLD_MS)
+)
 
 
 def set_slow_call_threshold_ms(threshold_ms: float | None) -> None:
@@ -51,14 +57,19 @@ def set_slow_call_threshold_ms(threshold_ms: float | None) -> None:
     Pass ``None`` to disable the warning entirely (duration is still
     recorded on the span; you just won't see a log line for slow ones).
     Value is in milliseconds.
+
+    Scope: writes into the current ``contextvars`` context. Async tasks
+    started before the write keep the prior value; tasks started after
+    inherit the new one. For a process-wide default, call this at startup
+    before any async work begins.
     """
-    global _slow_threshold_ms
-    _slow_threshold_ms = float("inf") if threshold_ms is None else float(threshold_ms)
+    value = float("inf") if threshold_ms is None else float(threshold_ms)
+    _slow_threshold_ms.set(value)
 
 
 def get_slow_call_threshold_ms() -> float:
     """Return the current slow-call warning threshold in milliseconds."""
-    return _slow_threshold_ms
+    return _slow_threshold_ms.get()
 
 
 # ---------------------------------------------------------------------
@@ -153,13 +164,14 @@ class _SpanScope:
     ) -> None:
         duration_ms = (time.perf_counter() - self._start) * 1000
         safe_set(self.span, AgenticAttributes.REQUEST_DURATION_MS, round(duration_ms, 3))
-        if duration_ms > _slow_threshold_ms:
+        threshold_ms = _slow_threshold_ms.get()
+        if duration_ms > threshold_ms:
             _logger.warning(
                 "slow LLM call: %s took %.0f ms (threshold %.0f ms); "
                 "may indicate a hung connection",
                 self.span.name,
                 duration_ms,
-                _slow_threshold_ms,
+                threshold_ms,
             )
         # Merge user-supplied ambient attributes LAST — after every auto
         # attribute, before span.__exit__. Any key the user set overrides

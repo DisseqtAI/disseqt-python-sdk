@@ -380,6 +380,45 @@ class TestBase:
             utils_module._logger.removeHandler(handler)
             utils_module._logger.setLevel(prior_level)
 
+    def test_threshold_is_contextvar_isolated_across_async_tasks(self):
+        """
+        TP-2128 P2 #2.3: _slow_threshold_ms used to be a plain module
+        global — two concurrent asyncio tasks racing set/get would trample
+        each other. It's now a contextvars.ContextVar so each task carries
+        its own value.
+        """
+        import asyncio
+
+        from disseqt_agentic_sdk.instrumentation import (
+            get_slow_call_threshold_ms,
+            set_slow_call_threshold_ms,
+        )
+
+        # Snapshot the outer value so we can restore.
+        outer = get_slow_call_threshold_ms()
+
+        async def one_task(value: float) -> float:
+            set_slow_call_threshold_ms(value)
+            # Yield control so the sibling task runs interleaved. If the
+            # threshold were a plain global, the sibling's set would race
+            # in here and change what we read.
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            return get_slow_call_threshold_ms()
+
+        async def main() -> tuple[float, float]:
+            return await asyncio.gather(one_task(100.0), one_task(9999.0))
+
+        try:
+            a, b = asyncio.run(main())
+            assert a == 100.0, f"task A saw {a}, expected 100.0 — contextvar isolation broken"
+            assert b == 9999.0, f"task B saw {b}, expected 9999.0 — contextvar isolation broken"
+            # Outer context untouched by inner set()s (fresh async task
+            # inherits at gather time; writes stay in the task's context).
+            assert get_slow_call_threshold_ms() == outer
+        finally:
+            set_slow_call_threshold_ms(outer)
+
     def test_set_threshold_none_disables_warning(self, recording_client):
         # threshold=None → warning suppressed even for slow calls.
         import logging
