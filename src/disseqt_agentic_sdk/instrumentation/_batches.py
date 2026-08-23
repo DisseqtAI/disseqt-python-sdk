@@ -58,6 +58,15 @@ class CanonicalBatch(TypedDict, total=False):
 
 
 # OpenAI status strings → canonical BatchStatus.
+#
+# Note (TP-2128 appendix): OpenAI distinguishes ``cancelling`` (cancel
+# request accepted, still winding down) from ``cancelled`` (fully
+# stopped). We deliberately collapse both onto ``BatchStatus.CANCELLED``
+# — the canonical enum has one terminal-user-intent-was-cancel bucket
+# and doesn't model the intermediate winding-down state. Downstream
+# consumers wanting the finer distinction can read the raw status
+# from ``agentic.batch.raw_status``. A future BatchStatus.CANCELLING
+# would let this file preserve the split without breaking callers.
 _OPENAI_STATUS = {
     "validating": BatchStatus.PENDING,
     "in_progress": BatchStatus.RUNNING,
