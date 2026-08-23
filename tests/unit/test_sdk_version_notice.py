@@ -12,11 +12,31 @@ import pytest
 from requests_mock import ANY
 
 import disseqt_sdk._version as _version
-from disseqt_sdk import Client, DisseqtAPIClient
+from disseqt_sdk import Client, DisseqtAPIClient, HTTPError, SDKVersionBlockedError
 from disseqt_sdk._version import SDK_VERSION
 from disseqt_sdk.validators.input.safety import ToxicityValidator
 
 _OK_BODY = {"data": {}, "status": {"code": "200"}}
+
+# The DSQ error envelope production-monitoring's enforcement tier returns
+# with HTTP 426, plus the headers stamped alongside it.
+_BLOCK_BODY = {
+    "status": "error",
+    "error": {
+        "external": (
+            "disseqt-ai-sdk 0.8.0 is no longer supported (minimum 0.9.0, "
+            "latest 9.9.9). Upgrade with: pip install -U disseqt-ai-sdk."
+        ),
+        "code": "UpgradeRequired",
+        "details": [],
+    },
+    "code": "DSQ-4260",
+}
+_BLOCK_HEADERS = {
+    "X-SDK-Latest-Version": "9.9.9",
+    "X-SDK-Notice": "versions below 0.9.0 stop working after 2026-10-01",
+    "Sunset": "Thu, 01 Oct 2026 00:00:00 GMT",
+}
 
 
 @pytest.fixture(autouse=True)
@@ -35,6 +55,7 @@ class TestIdentityHeaders:
     def test_identity_header_values(self):
         headers = _version.sdk_identity_headers()
         assert headers["X-SDK-Version"] == SDK_VERSION
+        assert headers["X-SDK-Lang"] == "python"
         assert headers["User-Agent"] == f"disseqt-ai-sdk/{SDK_VERSION}"
 
     def test_validate_sends_version_headers(
@@ -218,6 +239,92 @@ class TestNoticeSafety:
         # Env var gone again: restore module-level state for other tests.
         importlib.reload(_version)
         assert _version._NOTICE_DISABLED is False
+
+
+class TestSDKVersionBlockedError:
+    """HTTP 426 from the enforcement tier raises the typed error."""
+
+    def test_426_raises_typed_error_with_parsed_context(
+        self, requests_mock, client, config, input_validation_request
+    ):
+        requests_mock.post(ANY, status_code=426, json=_BLOCK_BODY, headers=_BLOCK_HEADERS)
+        validator = ToxicityValidator(data=input_validation_request, config=config)
+
+        with pytest.raises(SDKVersionBlockedError) as exc_info:
+            client.validate(validator)
+
+        err = exc_info.value
+        assert isinstance(err, HTTPError)  # existing handlers keep catching it
+        assert err.status_code == 426
+        assert err.latest == "9.9.9"
+        assert err.notice == _BLOCK_HEADERS["X-SDK-Notice"]
+        assert err.sunset == _BLOCK_HEADERS["Sunset"]
+        # str(e) is the server's self-explanatory refusal, not "API request failed".
+        assert "no longer supported" in str(err)
+        assert "pip install -U disseqt-ai-sdk" in str(err)
+
+    def test_warn_once_notice_still_fires_on_the_blocked_call(
+        self, requests_mock, client, config, input_validation_request, caplog
+    ):
+        caplog.set_level(logging.WARNING, logger="disseqt_sdk")
+        requests_mock.post(ANY, status_code=426, json=_BLOCK_BODY, headers=_BLOCK_HEADERS)
+
+        with pytest.raises(SDKVersionBlockedError):
+            client.validate(ToxicityValidator(data=input_validation_request, config=config))
+
+        assert len(_notice_records(caplog)) == 1
+
+    def test_other_http_errors_stay_plain(
+        self, requests_mock, client, config, input_validation_request
+    ):
+        requests_mock.post(ANY, status_code=400, text="Bad Request")
+
+        with pytest.raises(HTTPError) as exc_info:
+            client.validate(ToxicityValidator(data=input_validation_request, config=config))
+
+        assert not isinstance(exc_info.value, SDKVersionBlockedError)
+
+    def test_426_with_unreadable_body_falls_back_to_generic_message(
+        self, requests_mock, client, config, input_validation_request
+    ):
+        requests_mock.post(ANY, status_code=426, text="<html>bad gateway page</html>")
+
+        with pytest.raises(SDKVersionBlockedError) as exc_info:
+            client.validate(ToxicityValidator(data=input_validation_request, config=config))
+
+        assert "pip install -U disseqt-ai-sdk" in str(exc_info.value)
+        assert exc_info.value.latest is None
+
+    def test_policy_evaluate_path_raises_typed_error(self, requests_mock, input_validation_request):
+        client = Client(
+            project_id="p",
+            api_key="k",
+            base_url="https://test-api.disseqt.ai",
+            realtime_policy_base_url="https://test-api.disseqt.ai",
+            application_name="test-app",
+        )
+        requests_mock.post(ANY, status_code=426, json=_BLOCK_BODY, headers=_BLOCK_HEADERS)
+
+        with pytest.raises(SDKVersionBlockedError):
+            client.validate(input_validation_request, policies=["policy-1"])
+
+    def test_prompt_packs_request_raises_typed_error(self, requests_mock):
+        api = DisseqtAPIClient(project_id="p", api_key="k", base_url="https://pp.example")
+        requests_mock.get(ANY, status_code=426, json=_BLOCK_BODY, headers=_BLOCK_HEADERS)
+
+        with pytest.raises(SDKVersionBlockedError):
+            api.list_runs("pack-1")
+
+    def test_prompt_packs_csv_download_raises_typed_error(self, requests_mock):
+        api = DisseqtAPIClient(project_id="p", api_key="k", base_url="https://pp.example")
+        requests_mock.get(ANY, status_code=426, json=_BLOCK_BODY, headers=_BLOCK_HEADERS)
+
+        with pytest.raises(SDKVersionBlockedError) as exc_info:
+            api.download_pack_csv("pack-1")
+
+        # This path hands the helper a plain dict of headers — the parse
+        # must stay case-robust.
+        assert exc_info.value.latest == "9.9.9"
 
 
 class TestSingleSourcedVersion:
