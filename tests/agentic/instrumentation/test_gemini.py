@@ -199,6 +199,63 @@ class TestGeminiToolCalls:
         assert calls[0]["id"] == "gemini-tools_call_0"
 
 
+class TestGeminiMultiCandidate:
+    """
+    TP-2128 P2 #2.8: candidate_count>1 used to lose every candidate but
+    [0]. Now every candidate contributes a finish_reason and an output
+    message; tool_calls / convenience attrs still come from candidate 0
+    to keep parity with the OpenAI n>1 policy (item 2.7).
+    """
+
+    def test_all_candidates_contribute_finish_reasons_and_messages(self, recording_client):
+        instrument("google-genai", recording_client)
+        try:
+            client = genai.Client(api_key="fake")
+
+            def _cand(text: str, reason: str):
+                part = MagicMock(text=text)
+                content = MagicMock(parts=[part], role="model")
+                return MagicMock(content=content, finish_reason=reason)
+
+            usage = genai_types.GenerateContentResponseUsageMetadata(
+                prompt_token_count=3, candidates_token_count=6, total_token_count=9
+            )
+            response = MagicMock(
+                response_id="gemini-multi",
+                model_version="gemini-2.0-flash-001",
+                candidates=[
+                    _cand("first answer", "STOP"),
+                    _cand("second answer", "MAX_TOKENS"),
+                    _cand("third answer", "STOP"),
+                ],
+                usage_metadata=usage,
+            )
+
+            with patch(
+                "google.genai.models.Models._generate_content",
+                return_value=response,
+                create=True,
+            ):
+                client.models.generate_content(
+                    model="gemini-2.0-flash-001",
+                    contents="give me three answers",
+                )
+        finally:
+            uninstrument("google-genai")
+
+        span = find_span(recording_client, "gemini.generate_content")
+        attrs = json.loads(span.attributes_json)
+
+        assert attrs[GenAIAttributes.RESPONSE_FINISH_REASONS] == ["STOP", "MAX_TOKENS", "STOP"]
+        # Singular kept for back-compat with existing dashboards.
+        assert attrs[AgenticAttributes.RESPONSE_FINISH_REASON] == "STOP"
+        assert attrs[AgenticAttributes.OUTPUT_MESSAGES] == [
+            {"role": "model", "content": "first answer"},
+            {"role": "model", "content": "second answer"},
+            {"role": "model", "content": "third answer"},
+        ]
+
+
 class TestGeminiBarePartInput:
     """
     Regression: `_normalize_contents` assumed anything non-str, non-list

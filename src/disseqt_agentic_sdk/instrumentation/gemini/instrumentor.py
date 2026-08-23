@@ -191,17 +191,35 @@ def _set_response_attrs(span: DisseqtSpan, response: Any) -> None:
 
     candidates = read(response, "candidates") or []
     if candidates:
+        # Iterate every candidate so callers using candidate_count>1 see
+        # the full picture (TP-2128 P2 #2.8). RESPONSE_FINISH_REASONS is
+        # already a list per the OTEL GenAI spec, so we naturally append
+        # one entry per candidate. The single-value convenience attrs and
+        # tool_calls stay on candidate 0 to match the OpenAI n>1 policy
+        # (item 2.7) — mixing tool_calls across candidates would
+        # misattribute which choice the tool call belongs to.
         first = candidates[0]
-        finish_reason = read(first, "finish_reason")
-        if finish_reason is not None:
-            fr_str = str(finish_reason)
-            safe_set(span, AgenticAttributes.RESPONSE_FINISH_REASON, fr_str)
-            safe_set(span, GenAIAttributes.RESPONSE_FINISH_REASONS, [fr_str])
-        text = _extract_candidate_text(first)
-        if text:
-            msgs = [{"role": "model", "content": text}]
-            set_messages_if_capturing(span, output_messages=msgs)
-            safe_set(span, GenAIAttributes.COMPLETION, msgs)
+
+        finish_reasons: list[str] = []
+        output_msgs: list[dict[str, Any]] = []
+        for cand in candidates:
+            fr = read(cand, "finish_reason")
+            if fr is not None:
+                finish_reasons.append(str(fr))
+            cand_text = _extract_candidate_text(cand)
+            if cand_text:
+                output_msgs.append({"role": "model", "content": cand_text})
+
+        if finish_reasons:
+            # RESPONSE_FINISH_REASON (singular) keeps the choice-0
+            # value for backward compatibility with the log-search
+            # queries built against it.
+            safe_set(span, AgenticAttributes.RESPONSE_FINISH_REASON, finish_reasons[0])
+            safe_set(span, GenAIAttributes.RESPONSE_FINISH_REASONS, finish_reasons)
+
+        if output_msgs:
+            set_messages_if_capturing(span, output_messages=output_msgs)
+            safe_set(span, GenAIAttributes.COMPLETION, output_msgs)
 
         parts = _candidate_parts(first)
         # Pass the response_id so synthesized call ids stay unique across
