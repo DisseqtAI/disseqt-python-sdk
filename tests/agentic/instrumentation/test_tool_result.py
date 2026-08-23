@@ -184,11 +184,23 @@ class TestLaneB:
         assert calls[1]["status"] == "failure"
 
     def test_record_tool_result_outside_agent_span_warns(self, recording_client):
-        # No agent_span active — the helper should log a warning and no-op.
-        # Nothing should crash. We just make sure the call returns cleanly.
-        record_tool_result("call_xxx", result="ok", status="success")
-        # Nothing to assert on the span side; the point is the process
-        # didn't blow up.
+        """
+        No agent_span active → helper should log a WARNING and no-op.
+        TP-2128 P5: the old version of this test only asserted "doesn't
+        raise" — deleting the warning call left the test passing. Now
+        we patch the module logger and assert the warning fired with
+        the expected call_id so a regression is caught.
+        """
+        from disseqt_agentic_sdk.instrumentation import _tool_result as tr_mod
+
+        with patch.object(tr_mod, "_logger") as fake_logger:
+            record_tool_result("call_xxx", result="ok", status="success")
+            fake_logger.warning.assert_called_once()
+            msg = fake_logger.warning.call_args.args[0]
+            assert "outside agent_span" in msg
+            # call_id is passed as a subsequent positional arg to the
+            # logger.warning(fmt, *args) call.
+            assert "call_xxx" in fake_logger.warning.call_args.args
 
     def test_agent_span_with_no_tool_calls_does_not_emit_empty_key(self, recording_client):
         # No LLM call inside, no record_tool_result — the span should have
