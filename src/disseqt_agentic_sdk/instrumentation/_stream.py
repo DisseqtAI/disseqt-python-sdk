@@ -26,8 +26,16 @@ if TYPE_CHECKING:
     from disseqt_agentic_sdk.instrumentation._utils import _SpanScope
 
 
-class SyncStreamWrapper:
-    """Wraps a synchronous iterator; forwards chunks unchanged."""
+class _StreamWrapperBase:
+    """
+    Shared state + finalize logic for the sync and async stream wrappers.
+
+    The two concrete subclasses only differ in iteration protocol
+    (``__iter__``/``__next__`` vs ``__aiter__``/``__anext__``) and in
+    whether close forwarding awaits an ``aclose()`` coroutine. Everything
+    else — constructor, sync ``_finish``, ``self._closed`` idempotency —
+    lives here so a fix in one place is a fix in both. TP-2128 P4 #4.5.
+    """
 
     def __init__(
         self,
@@ -41,6 +49,36 @@ class SyncStreamWrapper:
         self._on_chunk = on_chunk
         self._on_finish = on_finish
         self._closed = False
+
+    def _run_on_finish(self) -> None:
+        with contextlib.suppress(Exception):
+            self._on_finish()
+
+    def _finish(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        """
+        Synchronous finalize path — used by ``SyncStreamWrapper`` and as a
+        fallback on ``AsyncStreamWrapper`` for any direct sync caller.
+        Forwards close() to the underlying stream so early exits don't
+        leak the connection.
+        """
+        if self._closed:
+            return
+        self._closed = True
+        self._run_on_finish()
+        close = getattr(self._stream, "close", None)
+        if callable(close):
+            with contextlib.suppress(Exception):
+                close()
+        self._scope.__exit__(exc_type, exc_val, exc_tb)
+
+
+class SyncStreamWrapper(_StreamWrapperBase):
+    """Wraps a synchronous iterator; forwards chunks unchanged."""
 
     def __iter__(self) -> SyncStreamWrapper:
         return self
@@ -62,27 +100,6 @@ class SyncStreamWrapper:
             self._on_chunk(chunk)
         return chunk
 
-    def _finish(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        with contextlib.suppress(Exception):
-            self._on_finish()
-        # Forward close() to the underlying provider stream. Early exits
-        # (with-statement break, exception in the caller's loop) otherwise
-        # leave the HTTP connection open. Not every stream object exposes
-        # close(); guard both the getattr and the call.
-        close = getattr(self._stream, "close", None)
-        if callable(close):
-            with contextlib.suppress(Exception):
-                close()
-        self._scope.__exit__(exc_type, exc_val, exc_tb)
-
     # Some SDKs support with-statement on their stream objects.
     def __enter__(self) -> SyncStreamWrapper:
         return self
@@ -100,21 +117,8 @@ class SyncStreamWrapper:
         self._finish(None, None, None)
 
 
-class AsyncStreamWrapper:
+class AsyncStreamWrapper(_StreamWrapperBase):
     """Wraps an async iterator; forwards chunks unchanged."""
-
-    def __init__(
-        self,
-        stream: Any,
-        scope: _SpanScope,
-        on_chunk: Callable[[Any], None],
-        on_finish: Callable[[], None],
-    ) -> None:
-        self._stream = stream
-        self._scope = scope
-        self._on_chunk = on_chunk
-        self._on_finish = on_finish
-        self._closed = False
 
     def __aiter__(self) -> AsyncStreamWrapper:
         return self
@@ -126,10 +130,7 @@ class AsyncStreamWrapper:
             await self._afinish(None, None, None)
             raise
         except BaseException as exc:
-            # BaseException (not Exception) so `asyncio.CancelledError`,
-            # `GeneratorExit`, and `KeyboardInterrupt` still finalize the
-            # span. Client disconnect mid-stream is a normal production
-            # event that raises CancelledError, not a bug.
+            # See sibling comment in SyncStreamWrapper.__next__.
             await self._afinish(type(exc), exc, exc.__traceback__)
             raise
         with contextlib.suppress(Exception):
@@ -142,15 +143,16 @@ class AsyncStreamWrapper:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
+        """
+        Async finalize path — prefers ``aclose()`` on async streams and
+        falls back to ``close()`` for the rare stream that only exposes
+        the sync variant. Guarded so a missing / buggy close never
+        propagates into the caller.
+        """
         if self._closed:
             return
         self._closed = True
-        with contextlib.suppress(Exception):
-            self._on_finish()
-        # Prefer aclose() on async streams; fall back to close() for the
-        # (rare) case where the provider stream exposes only sync close.
-        # Guard both the getattr and the call so a missing method or a
-        # buggy close never propagates into the caller.
+        self._run_on_finish()
         aclose = getattr(self._stream, "aclose", None)
         if callable(aclose):
             with contextlib.suppress(Exception):
@@ -160,25 +162,6 @@ class AsyncStreamWrapper:
             if callable(close):
                 with contextlib.suppress(Exception):
                     close()
-        self._scope.__exit__(exc_type, exc_val, exc_tb)
-
-    def _finish(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> None:
-        # Kept for compatibility with any direct sync callers. Prefer
-        # _afinish so the async close() runs.
-        if self._closed:
-            return
-        self._closed = True
-        with contextlib.suppress(Exception):
-            self._on_finish()
-        close = getattr(self._stream, "close", None)
-        if callable(close):
-            with contextlib.suppress(Exception):
-                close()
         self._scope.__exit__(exc_type, exc_val, exc_tb)
 
     async def __aenter__(self) -> AsyncStreamWrapper:
