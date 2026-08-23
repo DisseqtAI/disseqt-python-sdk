@@ -14,19 +14,24 @@ Provider-specific instrumentors just pass the right `provider`
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from disseqt_agentic_sdk.enums import SpanKind
 from disseqt_agentic_sdk.instrumentation._kwargs import (
     KW_MESSAGES,
     KW_MODEL,
     KW_STREAM,
     KW_TOOLS,
 )
+from disseqt_agentic_sdk.instrumentation._stream import AsyncStreamWrapper, SyncStreamWrapper
 from disseqt_agentic_sdk.instrumentation._tool_calls import from_openai as _tc_from_openai
 from disseqt_agentic_sdk.instrumentation._tool_result import (
     _notify_planned_tool_calls,
 )
 from disseqt_agentic_sdk.instrumentation._utils import (
+    open_llm_span,
+    safe_call,
     safe_set,
     serialize_messages,
     set_first_tool_call_attrs,
@@ -372,6 +377,94 @@ class ChatStreamAccumulator:
                 _notify_planned_tool_calls(tool_calls)
                 safe_set(span, GenAIAttributes.TOOL_CALLS, tool_calls)
                 set_first_tool_call_attrs(span, tool_calls)
+
+
+# ---------------------------------------------------------------------
+# Wrapper factory
+# ---------------------------------------------------------------------
+def make_openai_shape_chat_wrappers(
+    instrumentor: Any,
+    *,
+    sync_span_name: str,
+    async_span_name: str | None = None,
+    provider: str,
+    system: str,
+    operation_agentic: str,
+    operation_gen_ai: str,
+) -> tuple[Callable[..., Any], Callable[..., Any]]:
+    """
+    Build the (sync, async) wrapt wrappers for an OpenAI-shape
+    ``chat.completions.create``-style call.
+
+    Groq, LiteLLM, and any future provider that ships an OpenAI-
+    compatible response used to hand-write two ~35-line wrappers that
+    differed only in span_name / provider / system. Rolling that
+    skeleton into one factory means fixes like TP-2128 P1 #1.1
+    (``except Exception`` → ``except BaseException``) or a future
+    span-attribute addition ripple in one place instead of N. See
+    audit item TP-2128 P4 #4.4.
+
+    ``async_span_name`` defaults to ``sync_span_name`` — pass a
+    distinct value only when the SDK exposes different sync/async
+    method names (e.g. LiteLLM's ``completion`` vs ``acompletion``).
+    """
+    async_span_name = async_span_name or sync_span_name
+
+    def _apply_request_attrs(span: DisseqtSpan, kwargs: dict[str, Any]) -> None:
+        safe_call(
+            set_common_chat_request,
+            span,
+            kwargs,
+            provider=provider,
+            system=system,
+            operation_agentic=operation_agentic,
+            operation_gen_ai=operation_gen_ai,
+        )
+
+    def _make_stream_wrapper(cls: Any, result: Any, scope: Any, span: DisseqtSpan) -> Any:
+        state = ChatStreamAccumulator()
+        return cls(
+            stream=result,
+            scope=scope,
+            on_chunk=lambda chunk: state.absorb(chunk),
+            on_finish=lambda: state.finalize(span),
+        )
+
+    def sync_wrapper(
+        wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
+    ) -> Any:
+        scope = open_llm_span(instrumentor.client, sync_span_name, SpanKind.MODEL_EXEC)
+        span = scope.span
+        _apply_request_attrs(span, kwargs)
+        try:
+            result = wrapped(*args, **kwargs)
+        except BaseException as exc:
+            scope.__exit__(type(exc), exc, exc.__traceback__)
+            raise
+        if kwargs.get(KW_STREAM):
+            return _make_stream_wrapper(SyncStreamWrapper, result, scope, span)
+        safe_call(set_chat_response, span, result)
+        scope.__exit__(None, None, None)
+        return result
+
+    async def async_wrapper(
+        wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
+    ) -> Any:
+        scope = open_llm_span(instrumentor.client, async_span_name, SpanKind.MODEL_EXEC)
+        span = scope.span
+        _apply_request_attrs(span, kwargs)
+        try:
+            result = await wrapped(*args, **kwargs)
+        except BaseException as exc:
+            scope.__exit__(type(exc), exc, exc.__traceback__)
+            raise
+        if kwargs.get(KW_STREAM):
+            return _make_stream_wrapper(AsyncStreamWrapper, result, scope, span)
+        safe_call(set_chat_response, span, result)
+        scope.__exit__(None, None, None)
+        return result
+
+    return sync_wrapper, async_wrapper
 
 
 # ---------------------------------------------------------------------

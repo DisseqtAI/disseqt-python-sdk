@@ -16,18 +16,9 @@ than on the `litellm` module attribute so wrapt sees the underlying function.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import Any
-
-from disseqt_agentic_sdk.enums import SpanKind
-from disseqt_agentic_sdk.instrumentation._kwargs import KW_STREAM
 from disseqt_agentic_sdk.instrumentation._oai_compat import (
-    ChatStreamAccumulator,
-    set_chat_response,
-    set_common_chat_request,
+    make_openai_shape_chat_wrappers,
 )
-from disseqt_agentic_sdk.instrumentation._stream import AsyncStreamWrapper, SyncStreamWrapper
-from disseqt_agentic_sdk.instrumentation._utils import open_llm_span, safe_call
 from disseqt_agentic_sdk.instrumentation.base import DisseqtInstrumentor
 from disseqt_agentic_sdk.semantics import (
     AgenticOperation,
@@ -46,73 +37,14 @@ class LiteLLMInstrumentor(DisseqtInstrumentor):
         # top-level module binding captures the original function at import
         # time. We wrap the module attribute itself so `litellm.completion(...)`
         # invokes our wrapper.
-        self._wrap("litellm", "completion", _sync_completion(self))
-        self._wrap("litellm", "acompletion", _async_completion(self))
-
-
-def _sync_completion(instrumentor: LiteLLMInstrumentor) -> Callable[..., Any]:
-    def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
-        scope = open_llm_span(instrumentor.client, "litellm.completion", SpanKind.MODEL_EXEC)
-        span = scope.span
-        safe_call(
-            set_common_chat_request,
-            span,
-            kwargs,
+        sync_wrapper, async_wrapper = make_openai_shape_chat_wrappers(
+            self,
+            sync_span_name="litellm.completion",
+            async_span_name="litellm.acompletion",
             provider=AgenticProvider.LITELLM,
             system=GenAISystem.LITELLM,
             operation_agentic=AgenticOperation.CHAT,
             operation_gen_ai=GenAIOperation.CHAT,
         )
-        try:
-            result = wrapped(*args, **kwargs)
-        except BaseException as exc:
-            scope.__exit__(type(exc), exc, exc.__traceback__)
-            raise
-        if kwargs.get(KW_STREAM):
-            state = ChatStreamAccumulator()
-            return SyncStreamWrapper(
-                stream=result,
-                scope=scope,
-                on_chunk=lambda chunk: state.absorb(chunk),
-                on_finish=lambda: state.finalize(span),
-            )
-        safe_call(set_chat_response, span, result)
-        scope.__exit__(None, None, None)
-        return result
-
-    return wrapper
-
-
-def _async_completion(instrumentor: LiteLLMInstrumentor) -> Callable[..., Any]:
-    async def wrapper(
-        wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
-    ) -> Any:
-        scope = open_llm_span(instrumentor.client, "litellm.acompletion", SpanKind.MODEL_EXEC)
-        span = scope.span
-        safe_call(
-            set_common_chat_request,
-            span,
-            kwargs,
-            provider=AgenticProvider.LITELLM,
-            system=GenAISystem.LITELLM,
-            operation_agentic=AgenticOperation.CHAT,
-            operation_gen_ai=GenAIOperation.CHAT,
-        )
-        try:
-            result = await wrapped(*args, **kwargs)
-        except BaseException as exc:
-            scope.__exit__(type(exc), exc, exc.__traceback__)
-            raise
-        if kwargs.get(KW_STREAM):
-            state = ChatStreamAccumulator()
-            return AsyncStreamWrapper(
-                stream=result,
-                scope=scope,
-                on_chunk=lambda chunk: state.absorb(chunk),
-                on_finish=lambda: state.finalize(span),
-            )
-        safe_call(set_chat_response, span, result)
-        scope.__exit__(None, None, None)
-        return result
-
-    return wrapper
+        self._wrap("litellm", "completion", sync_wrapper)
+        self._wrap("litellm", "acompletion", async_wrapper)

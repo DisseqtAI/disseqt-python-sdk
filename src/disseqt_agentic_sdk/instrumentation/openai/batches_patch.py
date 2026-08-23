@@ -42,12 +42,26 @@ def _emit_provider_tags(span: Any) -> None:
     safe_set(span, GenAIAttributes.SYSTEM, SYSTEM)
 
 
-# ---------------------------------------------------------------------
-# Create — sync + async
-# ---------------------------------------------------------------------
-def batches_create(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
-    def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
-        scope = open_llm_span(instrumentor.client, "openai.batches.create", SpanKind.MODEL_EXEC)
+def _make_batch_wrappers(
+    instrumentor: OpenAIInstrumentor,
+    *,
+    span_name: str,
+    op: str,
+) -> tuple[Callable[..., Any], Callable[..., Any]]:
+    """
+    Build (sync, async) wrappers for a batch endpoint that follows the
+    same shape: open span → emit provider tags → call → map response
+    through ``from_openai`` + ``set_batch_attrs`` → close span.
+
+    Rolls up the identical skeleton that used to be copy-pasted across
+    all six batch functions (TP-2128 P4 #4.4). New endpoints (e.g. a
+    hypothetical ``batches.list``) can be wired with two lines.
+    """
+
+    def sync_wrapper(
+        wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
+    ) -> Any:
+        scope = open_llm_span(instrumentor.client, span_name, SpanKind.MODEL_EXEC)
         span = scope.span
         _emit_provider_tags(span)
         try:
@@ -56,116 +70,83 @@ def batches_create(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise
         try:
-            safe_call(set_batch_attrs, span, from_openai(batch), AgenticOperation.BATCH_CREATE)
+            safe_call(set_batch_attrs, span, from_openai(batch), op)
         finally:
             scope.__exit__(None, None, None)
         return batch
 
-    return wrapper
+    async def async_wrapper(
+        wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
+    ) -> Any:
+        scope = open_llm_span(instrumentor.client, span_name, SpanKind.MODEL_EXEC)
+        span = scope.span
+        _emit_provider_tags(span)
+        try:
+            batch = await wrapped(*args, **kwargs)
+        except BaseException as exc:
+            scope.__exit__(type(exc), exc, exc.__traceback__)
+            raise
+        try:
+            safe_call(set_batch_attrs, span, from_openai(batch), op)
+        finally:
+            scope.__exit__(None, None, None)
+        return batch
+
+    return sync_wrapper, async_wrapper
+
+
+# ---------------------------------------------------------------------
+# Create / Retrieve / Cancel — each pair produced by the factory above
+# ---------------------------------------------------------------------
+def batches_create(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
+    sync_w, _ = _make_batch_wrappers(
+        instrumentor,
+        span_name="openai.batches.create",
+        op=AgenticOperation.BATCH_CREATE,
+    )
+    return sync_w
 
 
 def async_batches_create(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
-    async def wrapper(
-        wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
-    ) -> Any:
-        scope = open_llm_span(instrumentor.client, "openai.batches.create", SpanKind.MODEL_EXEC)
-        span = scope.span
-        _emit_provider_tags(span)
-        try:
-            batch = await wrapped(*args, **kwargs)
-        except BaseException as exc:
-            scope.__exit__(type(exc), exc, exc.__traceback__)
-            raise
-        try:
-            safe_call(set_batch_attrs, span, from_openai(batch), AgenticOperation.BATCH_CREATE)
-        finally:
-            scope.__exit__(None, None, None)
-        return batch
-
-    return wrapper
+    _, async_w = _make_batch_wrappers(
+        instrumentor,
+        span_name="openai.batches.create",
+        op=AgenticOperation.BATCH_CREATE,
+    )
+    return async_w
 
 
-# ---------------------------------------------------------------------
-# Retrieve — sync + async
-# ---------------------------------------------------------------------
 def batches_retrieve(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
-    def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
-        scope = open_llm_span(instrumentor.client, "openai.batches.retrieve", SpanKind.MODEL_EXEC)
-        span = scope.span
-        _emit_provider_tags(span)
-        try:
-            batch = wrapped(*args, **kwargs)
-        except BaseException as exc:
-            scope.__exit__(type(exc), exc, exc.__traceback__)
-            raise
-        try:
-            safe_call(set_batch_attrs, span, from_openai(batch), AgenticOperation.BATCH_RETRIEVE)
-        finally:
-            scope.__exit__(None, None, None)
-        return batch
-
-    return wrapper
+    sync_w, _ = _make_batch_wrappers(
+        instrumentor,
+        span_name="openai.batches.retrieve",
+        op=AgenticOperation.BATCH_RETRIEVE,
+    )
+    return sync_w
 
 
 def async_batches_retrieve(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
-    async def wrapper(
-        wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
-    ) -> Any:
-        scope = open_llm_span(instrumentor.client, "openai.batches.retrieve", SpanKind.MODEL_EXEC)
-        span = scope.span
-        _emit_provider_tags(span)
-        try:
-            batch = await wrapped(*args, **kwargs)
-        except BaseException as exc:
-            scope.__exit__(type(exc), exc, exc.__traceback__)
-            raise
-        try:
-            safe_call(set_batch_attrs, span, from_openai(batch), AgenticOperation.BATCH_RETRIEVE)
-        finally:
-            scope.__exit__(None, None, None)
-        return batch
-
-    return wrapper
+    _, async_w = _make_batch_wrappers(
+        instrumentor,
+        span_name="openai.batches.retrieve",
+        op=AgenticOperation.BATCH_RETRIEVE,
+    )
+    return async_w
 
 
-# ---------------------------------------------------------------------
-# Cancel — sync + async
-# ---------------------------------------------------------------------
 def batches_cancel(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
-    def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
-        scope = open_llm_span(instrumentor.client, "openai.batches.cancel", SpanKind.MODEL_EXEC)
-        span = scope.span
-        _emit_provider_tags(span)
-        try:
-            batch = wrapped(*args, **kwargs)
-        except BaseException as exc:
-            scope.__exit__(type(exc), exc, exc.__traceback__)
-            raise
-        try:
-            safe_call(set_batch_attrs, span, from_openai(batch), AgenticOperation.BATCH_CANCEL)
-        finally:
-            scope.__exit__(None, None, None)
-        return batch
-
-    return wrapper
+    sync_w, _ = _make_batch_wrappers(
+        instrumentor,
+        span_name="openai.batches.cancel",
+        op=AgenticOperation.BATCH_CANCEL,
+    )
+    return sync_w
 
 
 def async_batches_cancel(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
-    async def wrapper(
-        wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
-    ) -> Any:
-        scope = open_llm_span(instrumentor.client, "openai.batches.cancel", SpanKind.MODEL_EXEC)
-        span = scope.span
-        _emit_provider_tags(span)
-        try:
-            batch = await wrapped(*args, **kwargs)
-        except BaseException as exc:
-            scope.__exit__(type(exc), exc, exc.__traceback__)
-            raise
-        try:
-            safe_call(set_batch_attrs, span, from_openai(batch), AgenticOperation.BATCH_CANCEL)
-        finally:
-            scope.__exit__(None, None, None)
-        return batch
-
-    return wrapper
+    _, async_w = _make_batch_wrappers(
+        instrumentor,
+        span_name="openai.batches.cancel",
+        op=AgenticOperation.BATCH_CANCEL,
+    )
+    return async_w
