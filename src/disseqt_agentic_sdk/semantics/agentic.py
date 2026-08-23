@@ -108,6 +108,15 @@ class AgenticAttributes:
     ERROR_MESSAGE = "agentic.error.message"
     ERROR_CODE = "agentic.error.code"
 
+    # Embedding-specific attributes. Emitted on embeddings.create spans
+    # in addition to the shared model/usage/messages attributes.
+    EMBEDDINGS_DIMENSIONS_REQUESTED = "agentic.embeddings.dimensions_requested"
+    EMBEDDINGS_DIMENSIONS_ACTUAL = "agentic.embeddings.dimensions_actual"
+    EMBEDDINGS_ENCODING_FORMAT = "agentic.embeddings.encoding_format"
+    EMBEDDINGS_COUNT = "agentic.embeddings.count"
+    EMBEDDINGS_INPUT_COUNT = "agentic.embeddings.input_count"
+    REQUEST_USER = "agentic.request.user"
+
     # Batch-job attributes. Emitted on every create/retrieve/cancel span
     # tagged with the same batch id so downstream can group by lifecycle.
     BATCH_ID = "agentic.batch.id"

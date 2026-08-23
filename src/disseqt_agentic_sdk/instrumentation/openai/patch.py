@@ -12,10 +12,19 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from disseqt_agentic_sdk.enums import SpanKind
+from disseqt_agentic_sdk.instrumentation._embeddings import (
+    from_openai_request as _emb_from_openai_request,
+)
+from disseqt_agentic_sdk.instrumentation._embeddings import (
+    from_openai_response as _emb_from_openai_response,
+)
+from disseqt_agentic_sdk.instrumentation._embeddings import (
+    set_embedding_request_attrs,
+    set_embedding_response_attrs,
+)
 from disseqt_agentic_sdk.instrumentation._kwargs import KW_INPUT, KW_MODEL, KW_PROMPT, KW_STREAM
 from disseqt_agentic_sdk.instrumentation._oai_compat import (
     ChatStreamAccumulator,
-    read,
     set_chat_response,
     set_common_chat_request,
 )
@@ -241,6 +250,15 @@ def async_embeddings_create(instrumentor: OpenAIInstrumentor) -> Callable[..., A
 
 
 def _set_embeddings_request(span: DisseqtSpan, kwargs: dict[str, Any]) -> None:
+    """
+    Emit request-side attributes for an OpenAI embeddings call.
+
+    Provider tagging, model, and operation type are set here; embedding-
+    specific fields (dimensions_requested, encoding_format, user,
+    input_count) flow through the canonical adapter so the same shape is
+    reused when other providers (Mistral, LiteLLM, Cohere, Gemini) are
+    added later.
+    """
     model = kwargs.get(KW_MODEL, "")
     span.set_model_info(model, PROVIDER)
     span.set_operation(AgenticOperation.EMBEDDINGS)
@@ -259,14 +277,14 @@ def _set_embeddings_request(span: DisseqtSpan, kwargs: dict[str, Any]) -> None:
             [{"role": "user", "content": s} for s in inp],
         )
 
+    set_embedding_request_attrs(span, _emb_from_openai_request(kwargs))
+
 
 def _set_embeddings_response(span: DisseqtSpan, response: Any) -> None:
-    resp_model = read(response, "model")
-    safe_set(span, AgenticAttributes.RESPONSE_MODEL, resp_model)
-    safe_set(span, GenAIAttributes.RESPONSE_MODEL, resp_model)
-    usage = read(response, "usage")
-    if usage is not None:
-        prompt_tokens = read(usage, "prompt_tokens") or 0
-        span.set_token_usage(prompt_tokens, 0)
-        safe_set(span, GenAIAttributes.USAGE_INPUT_TOKENS, prompt_tokens)
-        safe_set(span, GenAIAttributes.USAGE_TOTAL_TOKENS, prompt_tokens)
+    """
+    Emit response-side attributes for an OpenAI embeddings call.
+
+    Model/token bookkeeping + embedding-specific fields (count,
+    dimensions_actual) go through the canonical adapter.
+    """
+    set_embedding_response_attrs(span, _emb_from_openai_response(response))
