@@ -136,7 +136,9 @@ def set_chat_response(span: DisseqtSpan, response: Any) -> None:
         message = read(choice, "message")
         if message is not None:
             role = read(message, "role") or "assistant"
-            content = read(message, "content") or ""
+            # Reasoning-model responses (Mistral magistral-*, others)
+            # ship a list of ContentChunks here; normalize to str.
+            content = _extract_content_text(read(message, "content")) or ""
             output_messages.append({"role": role, "content": content})
             msg_tool_calls = read(message, "tool_calls")
             if msg_tool_calls:
@@ -168,6 +170,53 @@ def set_chat_response(span: DisseqtSpan, response: Any) -> None:
         safe_set(span, GenAIAttributes.TOOL_CALL_ID, first["id"])
         safe_set(span, AgenticAttributes.TOOL_ARGS, first["arguments"])
         safe_set(span, GenAIAttributes.TOOL_ARGS, first["arguments"])
+
+
+# ---------------------------------------------------------------------
+# Content normalization for structured message content
+# ---------------------------------------------------------------------
+def _extract_content_text(content: Any) -> str | None:
+    """
+    Coerce a message-content value into plain text.
+
+    OpenAI's chat completions traditionally return ``str`` for
+    ``choices[i].message.content``. Mistral's reasoning-capable models
+    (magistral-*, etc.) return a **list of ContentChunk objects** for
+    the same field — e.g. ``[TextChunk(text=...), ThinkChunk(thinking=
+    [Thinking(...), ...])]``. Feeding a list into ``"".join(...)`` in
+    the accumulator crashes with TypeError, and because it happens
+    inside ``contextlib.suppress(Exception)`` on the stream finalize
+    path, the whole finalize step silently drops — no model, no
+    response_id, no tokens, no finish_reason land on the span.
+    TP-2128 P1 #1.9.
+
+    We walk the list defensively:
+      * ``TextChunk`` → ``.text``
+      * ``ThinkChunk`` → concat ``.thinking[i].text`` (thinking blocks
+        are themselves objects with a text field)
+      * anything else → ``str(chunk)`` fallback so we never lose visibility
+    """
+    if content is None:
+        return None
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for chunk in content:
+            text = read(chunk, "text")
+            if isinstance(text, str) and text:
+                parts.append(text)
+                continue
+            thinking = read(chunk, "thinking")
+            if isinstance(thinking, list):
+                for t in thinking:
+                    t_text = read(t, "text")
+                    if isinstance(t_text, str) and t_text:
+                        parts.append(t_text)
+                continue
+            parts.append(str(chunk))
+        return "".join(parts) if parts else None
+    return str(content)
 
 
 # ---------------------------------------------------------------------
@@ -223,7 +272,7 @@ class ChatStreamAccumulator:
                 role = read(delta, "role")
                 if role:
                     self.role = role
-                content = read(delta, "content")
+                content = _extract_content_text(read(delta, "content"))
                 if content:
                     self.buffer.append(content)
                 self._absorb_tool_call_deltas(read(delta, "tool_calls"))
