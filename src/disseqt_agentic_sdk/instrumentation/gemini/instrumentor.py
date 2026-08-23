@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 from disseqt_agentic_sdk.enums import SpanKind
@@ -258,6 +259,72 @@ def _extract_candidate_text(candidate: Any) -> str:
     return "".join(out)
 
 
+def _assemble_partial_args(fragments: list[Any]) -> dict[str, Any]:
+    """
+    Reduce a list of Vertex ``PartialArg`` fragments into an args dict.
+
+    Each fragment carries a ``json_path`` (RFC 9535) plus one of
+    ``bool_value`` / ``string_value`` / ``number_value`` / ``null_value``.
+    We flatten only the common shallow path form (``$.field`` or
+    ``field``); nested / indexed paths are stored verbatim under their
+    json_path string so nothing is lost even if we can't perfectly
+    reconstruct the shape.
+    """
+    args: dict[str, Any] = {}
+    for frag in fragments or []:
+        path = read(frag, "json_path")
+        if not isinstance(path, str) or not path:
+            continue
+        # Extract the typed value; only one of the *_value fields is set.
+        if read(frag, "string_value") is not None:
+            value: Any = read(frag, "string_value")
+        elif read(frag, "number_value") is not None:
+            value = read(frag, "number_value")
+        elif read(frag, "bool_value") is not None:
+            value = read(frag, "bool_value")
+        elif read(frag, "null_value") is not None:
+            value = None
+        else:
+            continue
+
+        # Flatten simple $.field paths into args[field]; leave complex
+        # paths (nested / indexed) keyed by the raw json_path so
+        # dashboards still see the data even if the shape isn't perfect.
+        key = path[2:] if path.startswith("$.") else path
+        if "." not in key and "[" not in key:
+            args[key] = value
+        else:
+            args[path] = value
+    return args
+
+
+def _synthesize_part_from_slot(slot: dict[str, Any]) -> Any | None:
+    """
+    Build a synthetic Part-shaped object (SimpleNamespace) from an
+    accumulated tool slot so ``from_gemini`` can consume it uniformly.
+
+    Prefers fully-formed ``args`` when the chunks carried them; falls
+    back to assembling ``partial_args`` fragments (Vertex
+    ``stream_function_call_arguments=True``). Returns None if there's
+    nothing meaningful to emit (no name).
+    """
+    name = slot.get("name")
+    if not name:
+        return None
+    args = slot.get("args")
+    if not args:
+        assembled = _assemble_partial_args(slot.get("partial_args") or [])
+        if assembled:
+            args = assembled
+    return SimpleNamespace(
+        function_call=SimpleNamespace(
+            id=slot.get("id"),
+            name=name,
+            args=args or {},
+        )
+    )
+
+
 # ---------------------------------------------------------------------
 # Wrappers
 # ---------------------------------------------------------------------
@@ -307,16 +374,23 @@ class _StreamAccumulator:
         self.response_id: str | None = None
         self.prompt_tokens: int | None = None
         self.response_tokens: int | None = None
-        # Keyed by position within `candidate.content.parts` so:
-        #   * repeated chunks carrying the same function_call at the same
-        #     position overwrite each other cleanly (last-write-wins for
-        #     the latest snapshot);
-        #   * two legitimately-parallel calls to the same tool with the
-        #     same arguments (e.g. two ``roll_die()``, two zero-arg calls,
-        #     two identical shard queries) at positions 0 and 1 stay
-        #     distinct instead of colliding under a content-hash key.
-        # Fix for TP-2128 P1 #1.6.
-        self._tool_parts_by_position: dict[int, Any] = {}
+        # Per-position accumulator for streamed function calls.
+        #
+        # Position (in ``candidate.content.parts``) keeps two identical
+        # parallel calls distinct — e.g. two ``roll_die()``, two zero-arg
+        # calls at positions 0 and 1 — instead of collapsing them under a
+        # content-hash key (TP-2128 P1 #1.6).
+        #
+        # Each slot carries:
+        #   * id, name — latest non-None seen for this position
+        #   * args — latest non-None fully-formed args dict
+        #   * partial_args — accumulated PartialArg fragments across
+        #     chunks; used when ``stream_function_call_arguments=True``
+        #     splits a single FunctionCall's args across chunks
+        #     (TP-2128 P2 #2.10). Before the fix, only ``args`` was
+        #     inspected — streamed args left the tool call with
+        #     ``arguments: '{}'``.
+        self._tool_slots: dict[int, dict[str, Any]] = {}
 
     def absorb(self, chunk: Any) -> None:
         self.model_version = self.model_version or read(chunk, "model_version")
@@ -346,10 +420,29 @@ class _StreamAccumulator:
                 fc = read(part, "function_call")
                 if fc is None:
                     continue
-                # Overwrite by position: later chunks carry newer snapshots
-                # of the same call, and distinct calls at different
-                # positions each get their own slot.
-                self._tool_parts_by_position[position] = part
+                slot = self._tool_slots.setdefault(
+                    position,
+                    {"id": None, "name": None, "args": None, "partial_args": []},
+                )
+                real_id = read(fc, "id")
+                if isinstance(real_id, str) and real_id:
+                    slot["id"] = real_id
+                name = read(fc, "name")
+                if isinstance(name, str) and name:
+                    slot["name"] = name
+                args = read(fc, "args")
+                if isinstance(args, dict) and args:
+                    slot["args"] = args
+                # ``partial_args`` is a list of PartialArg fragments (Vertex
+                # streaming). Extend rather than replace so fragments from
+                # earlier chunks are preserved when will_continue=True.
+                partial = read(fc, "partial_args")
+                if partial:
+                    try:
+                        slot["partial_args"].extend(partial)
+                    except TypeError:
+                        # Non-iterable — store as single fragment.
+                        slot["partial_args"].append(partial)
 
     def finalize(self, span: DisseqtSpan) -> None:
         text = "".join(self.buffer)
@@ -378,8 +471,11 @@ class _StreamAccumulator:
 
         # Emit in position order — matches the order the model produced.
         ordered_parts = [
-            self._tool_parts_by_position[i] for i in sorted(self._tool_parts_by_position)
+            _synthesize_part_from_slot(self._tool_slots[i]) for i in sorted(self._tool_slots)
         ]
+        # Drop synthetic parts that never carried a name — nothing to
+        # emit and _tc_from_gemini would skip them anyway.
+        ordered_parts = [p for p in ordered_parts if p is not None]
         tool_calls = _tc_from_gemini(ordered_parts, response_id=self.response_id)
         if tool_calls:
             safe_set(span, AgenticAttributes.TOOL_CALLS, tool_calls)

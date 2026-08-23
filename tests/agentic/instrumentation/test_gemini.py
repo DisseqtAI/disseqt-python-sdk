@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -369,6 +370,109 @@ class TestGeminiStreamingDedup:
         # by position within parts, not by content.
         assert len(calls) == 2, f"expected both roll_die calls; got {calls}"
         assert all(c["name"] == "roll_die" for c in calls)
+
+
+class TestGeminiStreamingPartialArgs:
+    """
+    TP-2128 P2 #2.10: Vertex ``stream_function_call_arguments=True`` ships
+    FunctionCall args as ``partial_args`` (list[PartialArg]) instead of a
+    fully-formed ``args`` dict. Before the fix, only ``args`` was read
+    and the tool call finalized as ``arguments: '{}'``. Now the
+    accumulator collects fragments across chunks and assembles them into
+    an args dict on finalize.
+    """
+
+    def test_partial_args_assemble_from_fragments(self, recording_client):
+        instrument("google-genai", recording_client)
+        try:
+            client = genai.Client(api_key="fake")
+
+            def _pa(json_path: str, **value_kwargs):
+                # Only one of *_value is set per fragment on the wire.
+                fields = {
+                    "json_path": json_path,
+                    "string_value": None,
+                    "number_value": None,
+                    "bool_value": None,
+                    "null_value": None,
+                }
+                fields.update(value_kwargs)
+                return SimpleNamespace(**fields)
+
+            def _fc_partial(name: str, fragments, real_id=None):
+                fc = MagicMock()
+                fc.name = name
+                fc.args = None
+                fc.partial_args = fragments
+                fc.id = real_id
+                return fc
+
+            # Chunk 1: name + first fragment (location=P), will_continue.
+            fc_a = _fc_partial(
+                "get_weather",
+                [_pa("$.location", string_value="P")],
+                real_id="fc_abc",
+            )
+            # Chunk 2: second fragment overwrites the location string.
+            fc_b = _fc_partial(
+                "get_weather",
+                [_pa("$.location", string_value="Paris")],
+            )
+            # Chunk 3: a second field with a number.
+            fc_c = _fc_partial(
+                "get_weather",
+                [_pa("$.days", number_value=3)],
+            )
+
+            def _mk_chunk(fc):
+                part = MagicMock(function_call=fc, text=None)
+                content = MagicMock(parts=[part], role="model")
+                candidate = MagicMock(content=content, finish_reason=None)
+                return MagicMock(
+                    response_id="stream-partial",
+                    model_version="gemini-2.0-flash-001",
+                    candidates=[candidate],
+                    usage_metadata=None,
+                )
+
+            end_chunk = MagicMock(
+                response_id="stream-partial",
+                model_version="gemini-2.0-flash-001",
+                candidates=[MagicMock(content=None, finish_reason="STOP")],
+                usage_metadata=genai_types.GenerateContentResponseUsageMetadata(
+                    prompt_token_count=3, candidates_token_count=6, total_token_count=9
+                ),
+            )
+
+            chunks = [_mk_chunk(fc_a), _mk_chunk(fc_b), _mk_chunk(fc_c), end_chunk]
+
+            def _fake_stream(*_a, **_kw):
+                yield from chunks
+
+            with patch(
+                "google.genai.models.Models._generate_content_stream",
+                side_effect=_fake_stream,
+                create=True,
+            ):
+                list(
+                    client.models.generate_content_stream(
+                        model="gemini-2.0-flash-001",
+                        contents="weather please",
+                    )
+                )
+        finally:
+            uninstrument("google-genai")
+
+        span = find_span(recording_client, "gemini.generate_content_stream")
+        attrs = json.loads(span.attributes_json)
+        calls = attrs[AgenticAttributes.TOOL_CALLS]
+        assert len(calls) == 1
+        assert calls[0]["name"] == "get_weather"
+        assert calls[0]["id"] == "fc_abc"
+        # Assembled args: last-write-wins for repeated json_path, plus
+        # the second field carried by the third fragment.
+        args = json.loads(calls[0]["arguments"])
+        assert args == {"location": "Paris", "days": 3}
 
 
 class TestGeminiLaneBCallIdCollision:
