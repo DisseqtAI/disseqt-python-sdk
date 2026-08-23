@@ -36,6 +36,24 @@ dependencies = [
 # Floors match each instrumentor's runtime `min_version` — a looser
 # declaration here lets pip install a version the runtime check refuses,
 # so `instrument_all()` silently no-ops the provider (TP-2128 P1 #1.5).
+#
+# Extras name → registry key mapping (TP-2128 P2 #2.13):
+# Two extras have short human-friendly names that DO NOT match the
+# registry key you pass to `instrument("<key>", client)`. Use the key
+# from the right column with instrument() / instrument_all():
+#
+#   Extra name       Registry key ( pass to `instrument(...)` )
+#   ---------------  ------------------------------------------
+#   [openai]         openai
+#   [anthropic]      anthropic
+#   [groq]           groq
+#   [cohere]         cohere
+#   [litellm]        litellm
+#   [mistral]        mistralai          # <— extra != registry key
+#   [gemini]         google-genai       # <— extra != registry key
+#
+# If instrument("gemini", client) or instrument("mistral", client) is a
+# no-op for you, this is why — the registry key is the one on the right.
 [project.optional-dependencies]
 openai = ["openai>=1.50.0"]
 anthropic = ["anthropic>=0.40.0"]

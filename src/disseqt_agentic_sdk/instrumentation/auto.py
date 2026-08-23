@@ -17,7 +17,10 @@ import threading
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from disseqt_agentic_sdk.instrumentation._registry import INSTRUMENTOR_CLASSES
+from disseqt_agentic_sdk.instrumentation._registry import (
+    INSTRUMENTOR_CLASSES,
+    resolve_provider_name,
+)
 from disseqt_agentic_sdk.instrumentation.base import (
     REASON_ALREADY_INSTRUMENTED,
     REASON_INSTRUMENT_FAILURE,
@@ -105,7 +108,14 @@ def instrument(
     already_instrumented) still return False silently.
 
     on_install fires after successful patching with ``(name, version)``.
+
+    ``name`` accepts both the canonical registry key (``google-genai``,
+    ``mistralai``) and the user-friendly extras alias (``gemini``,
+    ``mistral``) — see ``_registry.INSTRUMENTOR_ALIASES``. The alias is
+    resolved to the canonical key before dispatch so both refer to the
+    same active instrumentor entry.
     """
+    name = resolve_provider_name(name)
     dotted = INSTRUMENTOR_CLASSES.get(name)
     if dotted is None:
         return _report(name, REASON_UNKNOWN_PROVIDER, "not in registry", strict)
@@ -156,8 +166,11 @@ def uninstrument(name: str, *, on_uninstall: OnUninstallHook | None = None) -> b
     Remove patches for a single provider. Returns True if we did anything.
 
     on_uninstall fires after successful unpatching with ``(name,)``.
-    Exceptions from the hook are swallowed.
+    Exceptions from the hook are swallowed. ``name`` accepts both the
+    canonical registry key and the user-friendly alias (``gemini``,
+    ``mistral``).
     """
+    name = resolve_provider_name(name)
     with _LOCK:
         instrumentor = _ACTIVE.pop(name, None)
     if instrumentor is None:
@@ -182,7 +195,12 @@ def uninstrument_all(*, on_uninstall: OnUninstallHook | None = None) -> None:
 
 
 def get_instrumented_client(name: str) -> DisseqtAgenticClient | None:
-    """Return the client currently bound to `name`, or None if not instrumented."""
+    """Return the client currently bound to `name`, or None if not instrumented.
+
+    ``name`` accepts both the canonical registry key and the extras
+    alias.
+    """
+    name = resolve_provider_name(name)
     with _LOCK:
         instrumentor = _ACTIVE.get(name)
     return instrumentor._client if instrumentor is not None else None
