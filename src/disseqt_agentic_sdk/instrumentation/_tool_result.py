@@ -182,22 +182,9 @@ def agent_span(
     If no trace is currently active one is created (and flushed on exit).
     If a trace is active this span nests under it as a child.
     """
-    from disseqt_agentic_sdk.context import get_current_trace
-    from disseqt_agentic_sdk.trace import DisseqtTrace
+    from disseqt_agentic_sdk.instrumentation._utils import _get_or_bootstrap_trace
 
-    trace = get_current_trace()
-    owns_trace = False
-    if trace is None:
-        trace = DisseqtTrace(
-            name=name,
-            project_id=client.project_id,
-            service_name=client.service_name,
-            service_version=client.service_version,
-            environment=client.environment,
-            realtime_policy_id=client.realtime_policy_id,
-            client=client,
-        )
-        owns_trace = True
+    trace, owns_trace = _get_or_bootstrap_trace(client, name)
 
     span = trace.start_span(name, SpanKind.AGENT_EXEC)
     if agent_name:

@@ -185,6 +185,39 @@ class _SpanScope:
             self._trace.end()
 
 
+def _get_or_bootstrap_trace(
+    client: DisseqtAgenticClient,
+    name: str,
+) -> tuple[DisseqtTrace, bool]:
+    """
+    Return the current trace (nesting under it) or bootstrap a new one
+    from ``client``'s configured project / service / environment / policy.
+
+    Returns ``(trace, owns_trace)`` — ``owns_trace`` is True when we
+    created the trace ourselves and the caller is responsible for
+    ending it. Used by both ``open_llm_span`` (MODEL_EXEC spans) and
+    ``agent_span`` (AGENT_EXEC spans) so the six-keyword bootstrap
+    lives in one place (TP-2128 P4 #4.6).
+    """
+    from disseqt_agentic_sdk.trace import DisseqtTrace
+
+    trace = get_current_trace()
+    if trace is not None:
+        return trace, False
+    return (
+        DisseqtTrace(
+            name=name,
+            project_id=client.project_id,
+            service_name=client.service_name,
+            service_version=client.service_version,
+            environment=client.environment,
+            realtime_policy_id=client.realtime_policy_id,
+            client=client,
+        ),
+        True,
+    )
+
+
 def open_llm_span(
     client: DisseqtAgenticClient,
     name: str,
@@ -195,23 +228,7 @@ def open_llm_span(
     the returned scope as a context manager and set attributes on
     `scope.span`.
     """
-    from disseqt_agentic_sdk.trace import DisseqtTrace
-
-    trace = get_current_trace()
-    owns_trace = False
-
-    if trace is None:
-        trace = DisseqtTrace(
-            name=name,
-            project_id=client.project_id,
-            service_name=client.service_name,
-            service_version=client.service_version,
-            environment=client.environment,
-            realtime_policy_id=client.realtime_policy_id,
-            client=client,
-        )
-        owns_trace = True
-
+    trace, owns_trace = _get_or_bootstrap_trace(client, name)
     span = trace.start_span(name, kind)
     return _SpanScope(span=span, trace=trace, owns_trace=owns_trace)
 
