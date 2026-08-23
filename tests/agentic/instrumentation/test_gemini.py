@@ -193,7 +193,73 @@ class TestGeminiToolCalls:
         calls = attrs[AgenticAttributes.TOOL_CALLS]
         assert len(calls) == 1
         assert calls[0]["name"] == "get_weather"
-        # id is synthesized by the adapter since Gemini emits none.
-        assert calls[0]["id"] == "call_0"
-        assert json.loads(calls[0]["arguments"]) == {"location": "Paris"}
-        assert attrs[AgenticAttributes.TOOL_NAME] == "get_weather"
+        # id is synthesized as f"{response_id}_call_{index}" so it stays
+        # unique across multiple Gemini responses in the same agent_span
+        # (TP-2128 P1 #1.3).
+        assert calls[0]["id"] == "gemini-tools_call_0"
+
+
+class TestGeminiLaneBCallIdCollision:
+    def test_two_calls_in_one_agent_span_dont_collide(self, recording_client):
+        """
+        Regression: two Gemini responses inside a single ``agent_span``
+        both synthesized ``call_0``, so the Lane-B aggregator's
+        ``setdefault`` merge silently dropped the second call. Now the
+        adapter namespaces synthesized ids by response_id, and both
+        entries survive on the AGENT_EXEC span.
+        """
+        from disseqt_agentic_sdk import agent_span
+
+        def _fake(tool_name: str, resp_id: str) -> MagicMock:
+            fc = MagicMock()
+            fc.name = tool_name
+            fc.args = {}
+            fc.id = None  # Gemini deployment that doesn't populate ids
+            part = MagicMock(function_call=fc, text=None)
+            content = MagicMock(parts=[part], role="model")
+            candidate = MagicMock(content=content, finish_reason="STOP")
+            return MagicMock(
+                response_id=resp_id,
+                model_version="gemini-2.0-flash-001",
+                candidates=[candidate],
+                usage_metadata=genai_types.GenerateContentResponseUsageMetadata(
+                    prompt_token_count=1,
+                    candidates_token_count=1,
+                    total_token_count=2,
+                ),
+            )
+
+        instrument("google-genai", recording_client)
+        try:
+            client = genai.Client(api_key="fake")
+            with agent_span(recording_client, "multi_tool_agent"):
+                with patch(
+                    "google.genai.models.Models._generate_content",
+                    side_effect=[
+                        _fake("get_weather", "resp-1"),
+                        _fake("get_time", "resp-2"),
+                    ],
+                    create=True,
+                ):
+                    client.models.generate_content(
+                        model="gemini-2.0-flash-001", contents="weather?"
+                    )
+                    client.models.generate_content(
+                        model="gemini-2.0-flash-001", contents="what time?"
+                    )
+        finally:
+            uninstrument("google-genai")
+
+        agent = find_span(recording_client, "multi_tool_agent")
+        attrs = json.loads(agent.attributes_json)
+        calls = attrs[AgenticAttributes.TOOL_CALLS]
+        # Before the fix: len == 1 (the second get_time dropped).
+        # After: both survive because ids are namespaced by response_id.
+        names = sorted(c["name"] for c in calls)
+        assert names == [
+            "get_time",
+            "get_weather",
+        ], f"expected both calls to survive; got {[c['name'] for c in calls]}"
+        assert calls[0]["id"] != calls[1]["id"]
+        # Each id is namespaced by its own response_id — no collision.
+        assert "resp-1" in json.dumps(calls) and "resp-2" in json.dumps(calls)

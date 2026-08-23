@@ -105,11 +105,25 @@ def from_anthropic(content_blocks: Any) -> list[dict[str, str]]:
     return out
 
 
-def from_gemini(parts: Any) -> list[dict[str, str]]:
+def from_gemini(parts: Any, *, response_id: str | None = None) -> list[dict[str, str]]:
     """
     Normalize Gemini ``candidates[0].content.parts[].function_call`` entries.
 
-    Gemini emits no id per call, so we synthesize ``call_<index>``.
+    IDs are chosen in order:
+
+    1. ``function_call.id`` if the real Gemini `FunctionCall` type has
+       it populated (some Gemini deployments do set this — TP-2128 audit
+       item #2.9).
+    2. ``{response_id}_call_{index}`` when the caller passes ``response_id``.
+       This is the fix for TP-2128 P1 #1.3: two Gemini responses within
+       the same ``agent_span`` used to synthesize ``call_0`` for both, so
+       the Lane-B aggregator's ``setdefault`` merge silently dropped the
+       second. Using the response_id as a per-response namespace keeps
+       ids unique across responses without needing extra plumbing.
+    3. Plain ``call_{index}`` when no response_id is available. Still
+       colliding across responses, but the only realistic case that hits
+       this branch is a bare-mock test or a partial response object.
+
     Non-function parts (plain text) are skipped.
     """
     if not parts:
@@ -122,9 +136,19 @@ def from_gemini(parts: Any) -> list[dict[str, str]]:
         name = _read(fc, "name")
         if not name:
             continue
+        real_id = _read(fc, "id")
+        # isinstance(str) guards against MagicMock in tests (bare mocks
+        # return a truthy fresh MagicMock for any unset attribute, which
+        # would otherwise get stringified as "<MagicMock ...>").
+        if isinstance(real_id, str) and real_id:
+            call_id = real_id
+        elif response_id:
+            call_id = f"{response_id}_call_{len(out)}"
+        else:
+            call_id = f"call_{len(out)}"
         out.append(
             {
-                "id": f"call_{len(out)}",
+                "id": call_id,
                 "name": str(name),
                 "arguments": _stringify_args(_read(fc, "args")),
             }

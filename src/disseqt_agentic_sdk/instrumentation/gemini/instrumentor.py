@@ -183,7 +183,9 @@ def _set_response_attrs(span: DisseqtSpan, response: Any) -> None:
             safe_set(span, GenAIAttributes.COMPLETION, msgs)
 
         parts = _candidate_parts(first)
-        tool_calls = _tc_from_gemini(parts)
+        # Pass the response_id so synthesized call ids stay unique across
+        # separate responses in the same agent_span. See TP-2128 P1 #1.3.
+        tool_calls = _tc_from_gemini(parts, response_id=resp_id)
         if tool_calls:
             safe_set(span, AgenticAttributes.TOOL_CALLS, tool_calls)
             _notify_planned_tool_calls(tool_calls)
@@ -336,7 +338,7 @@ class _StreamAccumulator:
                 self.prompt_tokens + self.response_tokens,
             )
 
-        tool_calls = _tc_from_gemini(self._tool_parts)
+        tool_calls = _tc_from_gemini(self._tool_parts, response_id=self.response_id)
         if tool_calls:
             safe_set(span, AgenticAttributes.TOOL_CALLS, tool_calls)
             _notify_planned_tool_calls(tool_calls)
