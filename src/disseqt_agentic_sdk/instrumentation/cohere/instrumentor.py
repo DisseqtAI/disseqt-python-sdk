@@ -214,7 +214,29 @@ def _async_chat(instrumentor: CohereInstrumentor) -> Callable[..., Any]:
 # Streaming
 # ---------------------------------------------------------------------
 class _StreamAccumulator:
-    """Aggregates Cohere v2 stream events."""
+    """
+    Aggregates Cohere v2 stream events.
+
+    Cohere v2 emits these event types (docs at
+    https://docs.cohere.com/docs/streaming-2#events):
+
+      * ``message-start`` — message id.
+      * ``content-delta`` — text fragments in ``delta.message.content.text``.
+      * ``tool-plan-delta`` — optional free-text tool-planning narration,
+        ignored for our purposes (we care about the calls themselves).
+      * ``tool-call-start`` — starts one tool call. Carries ``index``,
+        ``delta.message.tool_calls[0]`` with ``id``, ``type=function``,
+        ``function.name``, and an initial ``function.arguments`` fragment.
+      * ``tool-call-delta`` — additional ``function.arguments`` text
+        fragment for the same ``index``.
+      * ``tool-call-end`` — ``index`` finalization signal (no payload).
+      * ``message-end`` — finish_reason + final usage.
+
+    Before TP-2128 P1 #1.8 only three of these were handled, so
+    Cohere-v2 streaming tool calls landed as zero ``tool_calls`` on the
+    span. Now `tool-call-{start,delta}` accumulate keyed by index and
+    finalize emits the canonical shape.
+    """
 
     def __init__(self) -> None:
         self.buffer: list[str] = []
@@ -222,6 +244,8 @@ class _StreamAccumulator:
         self.finish_reason: str | None = None
         self.input_tokens: int | None = None
         self.output_tokens: int | None = None
+        # tool-call index → mutable slot ({id, name, args_fragments})
+        self._tool_slots: dict[int, dict[str, Any]] = {}
 
     def absorb(self, event: Any) -> None:
         etype = read(event, "type")
@@ -234,6 +258,8 @@ class _StreamAccumulator:
             text = read(content, "text") if content is not None else None
             if text:
                 self.buffer.append(text)
+        elif etype in ("tool-call-start", "tool-call-delta"):
+            self._absorb_tool_call_event(event)
         elif etype == "message-end":
             delta = read(event, "delta")
             if delta is not None:
@@ -247,6 +273,40 @@ class _StreamAccumulator:
                         self.input_tokens = inp
                     if out is not None:
                         self.output_tokens = out
+
+    def _absorb_tool_call_event(self, event: Any) -> None:
+        """
+        Pull ``id``/``name``/``function.arguments`` fragments off a
+        ``tool-call-start`` or ``tool-call-delta`` event and merge into
+        the slot for that index. Fragments are appended; already-set
+        fields don't get overwritten unless the incoming value is
+        non-empty (protects against later fragments carrying None).
+        """
+        idx = read(event, "index")
+        if idx is None:
+            return
+        delta = read(event, "delta")
+        message = read(delta, "message") if delta is not None else None
+        tool_calls = read(message, "tool_calls") if message is not None else None
+        if not tool_calls:
+            return
+        # In practice, each tool-call event carries exactly one entry —
+        # the one for `index`. Iterate defensively.
+        for tc in tool_calls:
+            slot = self._tool_slots.setdefault(
+                idx, {"id": None, "name": None, "args_fragments": []}
+            )
+            tc_id = read(tc, "id")
+            if tc_id:
+                slot["id"] = str(tc_id)
+            fn = read(tc, "function")
+            if fn is not None:
+                fn_name = read(fn, "name")
+                if fn_name:
+                    slot["name"] = str(fn_name)
+                fn_args = read(fn, "arguments")
+                if fn_args:
+                    slot["args_fragments"].append(str(fn_args))
 
     def finalize(self, span: DisseqtSpan) -> None:
         text = "".join(self.buffer)
@@ -269,6 +329,37 @@ class _StreamAccumulator:
                 GenAIAttributes.USAGE_TOTAL_TOKENS,
                 self.input_tokens + self.output_tokens,
             )
+
+        # Materialize accumulated tool calls in position order and route
+        # through the shared OpenAI-shape adapter (Cohere v2 uses the same
+        # {id, function.name, function.arguments} response shape).
+        if self._tool_slots:
+            reconstituted = []
+            for idx in sorted(self._tool_slots):
+                slot = self._tool_slots[idx]
+                if not slot.get("name"):
+                    continue
+                reconstituted.append(
+                    {
+                        "id": slot["id"] or f"call_{idx}",
+                        "function": {
+                            "name": slot["name"],
+                            "arguments": "".join(slot["args_fragments"]),
+                        },
+                    }
+                )
+            tool_calls = _tc_from_openai(reconstituted)
+            if tool_calls:
+                safe_set(span, AgenticAttributes.TOOL_CALLS, tool_calls)
+                _notify_planned_tool_calls(tool_calls)
+                safe_set(span, GenAIAttributes.TOOL_CALLS, tool_calls)
+                first = tool_calls[0]
+                safe_set(span, AgenticAttributes.TOOL_NAME, first["name"])
+                safe_set(span, GenAIAttributes.TOOL_NAME, first["name"])
+                safe_set(span, AgenticAttributes.TOOL_CALL_ID, first["id"])
+                safe_set(span, GenAIAttributes.TOOL_CALL_ID, first["id"])
+                safe_set(span, AgenticAttributes.TOOL_ARGS, first["arguments"])
+                safe_set(span, GenAIAttributes.TOOL_ARGS, first["arguments"])
 
 
 def _sync_stream(instrumentor: CohereInstrumentor) -> Callable[..., Any]:

@@ -131,6 +131,87 @@ class TestCohereAsyncStream:
         assert len(chunks) == 3
 
 
+class TestCohereStreamingToolCalls:
+    def test_stream_captures_tool_call_events(self, recording_client):
+        """
+        Regression: Cohere v2 streaming emits `tool-call-start` +
+        `tool-call-delta` events; before TP-2128 P1 #1.8 only
+        `message-start`/`content-delta`/`message-end` were handled, so
+        a streamed tool-calling turn recorded zero tool_calls even
+        though real ones were emitted.
+        """
+        # MagicMock treats `.name` as its own bookkeeping — use SimpleNamespace
+        # for anything with a `.name` we care about, so it round-trips as a
+        # real attribute the adapter can read.
+        from types import SimpleNamespace
+
+        from cohere.v2.client import V2Client
+
+        def _tc_start_event():
+            fn = SimpleNamespace(name="get_weather", arguments='{"loc')
+            tc = SimpleNamespace(id="tc_1", function=fn)
+            return SimpleNamespace(
+                type="tool-call-start",
+                index=0,
+                delta=SimpleNamespace(message=SimpleNamespace(tool_calls=[tc])),
+            )
+
+        def _tc_delta_event():
+            fn = SimpleNamespace(name=None, arguments='":"Paris"}')
+            tc = SimpleNamespace(id=None, function=fn)
+            return SimpleNamespace(
+                type="tool-call-delta",
+                index=0,
+                delta=SimpleNamespace(message=SimpleNamespace(tool_calls=[tc])),
+            )
+
+        events = [
+            SimpleNamespace(type="message-start", id="cohere-stream-tools"),
+            _tc_start_event(),
+            _tc_delta_event(),
+            SimpleNamespace(type="tool-call-end", index=0),
+            SimpleNamespace(
+                type="message-end",
+                delta=SimpleNamespace(
+                    finish_reason="TOOL_CALL",
+                    usage=SimpleNamespace(tokens=SimpleNamespace(input_tokens=5, output_tokens=7)),
+                ),
+            ),
+        ]
+
+        def fake_chat_stream(self, *args, **kwargs):
+            yield from events
+
+        original = V2Client.chat_stream
+        V2Client.chat_stream = fake_chat_stream
+        try:
+            instrument("cohere", recording_client)
+            try:
+                client = cohere.ClientV2(api_key="fake")
+                stream = client.chat_stream(
+                    model="command-r-plus",
+                    messages=[{"role": "user", "content": "weather?"}],
+                    tools=[{"type": "function", "function": {"name": "get_weather"}}],
+                )
+                list(stream)  # drain
+            finally:
+                uninstrument("cohere")
+        finally:
+            V2Client.chat_stream = original
+
+        span = find_span(recording_client, "cohere.chat_stream")
+        attrs = json.loads(span.attributes_json)
+        # Before the fix: KeyError — TOOL_CALLS attr was never set.
+        # After: the reassembled tool call lands with both fragments joined.
+        assert AgenticAttributes.TOOL_CALLS in attrs
+        calls = attrs[AgenticAttributes.TOOL_CALLS]
+        assert len(calls) == 1
+        assert calls[0]["id"] == "tc_1"
+        assert calls[0]["name"] == "get_weather"
+        # Args fragments '{"loc' + '":"Paris"}' assembled into valid JSON.
+        assert json.loads(calls[0]["arguments"]) == {"loc": "Paris"}
+
+
 class TestCohereToolCalls:
     def test_captures_tool_calls_on_message(self, recording_client):
         # Cohere v2 puts tool calls on `response.message.tool_calls` in the
