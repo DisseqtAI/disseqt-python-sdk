@@ -96,19 +96,43 @@ def from_openai(tool_calls: Any) -> list[dict[str, str]]:
     return out
 
 
+# Anthropic content-block ``type`` values that represent a *tool
+# invocation the model asked to run* — all share the same
+# {id, name, input} shape so they normalize identically.
+#
+# * ``tool_use`` — classic user-defined tool.
+# * ``server_tool_use`` — Anthropic-server-executed tools (web_search,
+#   web_fetch, code_execution, bash_code_execution,
+#   text_editor_code_execution, tool_search_tool_regex,
+#   tool_search_tool_bm25). Verified against the installed anthropic
+#   SDK's ``ContentBlock`` union — TP-2128 Appendix.
+#
+# The corresponding ``*_tool_result`` blocks (web_search_tool_result,
+# web_fetch_tool_result, code_execution_tool_result, etc.) are the
+# RESULTS returned back to the model, not calls the model is asking
+# US to run — we deliberately don't fold them into TOOL_CALLS because
+# validators like tool-failure-rate score planned-vs-executed based
+# on requests, not results.
+_ANTHROPIC_TOOL_CALL_TYPES = frozenset({"tool_use", "server_tool_use"})
+
+
 def from_anthropic(content_blocks: Any) -> list[dict[str, str]]:
     """
-    Normalize Anthropic content blocks with ``type == "tool_use"``.
+    Normalize Anthropic content blocks with a tool-call ``type``.
 
     Anthropic returns tool calls interleaved with text blocks in
-    ``response.content``. Each tool_use block has ``id``, ``name``, and
-    ``input`` (a parsed dict, not a JSON string).
+    ``response.content``. Both classic user-defined ``tool_use`` blocks
+    and server-executed ``server_tool_use`` blocks (web_search,
+    code_execution, ...) share the same ``{id, name, input}`` shape;
+    both are folded into the canonical tool_calls list so validators
+    downstream see the model's full tool activity, not just the
+    user-defined subset.
     """
     if not content_blocks:
         return []
     out: list[dict[str, str]] = []
     for block in content_blocks:
-        if _read(block, "type") != "tool_use":
+        if _read(block, "type") not in _ANTHROPIC_TOOL_CALL_TYPES:
             continue
         name = _read(block, "name")
         if not name:

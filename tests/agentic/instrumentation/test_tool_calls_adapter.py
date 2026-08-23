@@ -148,3 +148,39 @@ class TestFromAnthropicBasic:
         assert got[0]["id"] == "toolu_1"
         assert got[0]["name"] == "get_weather"
         assert json.loads(got[0]["arguments"]) == {"loc": "Paris"}
+
+    def test_server_tool_use_block_captured(self):
+        """
+        TP-2128 Appendix: newer Anthropic responses can carry
+        ``server_tool_use`` blocks (web_search, code_execution, ...)
+        alongside the classic ``tool_use`` shape. Both share
+        {id, name, input}; both belong in the canonical tool_calls
+        list so validators see the model's full tool activity.
+        """
+        blocks = [
+            SimpleNamespace(
+                type="tool_use",
+                id="toolu_user",
+                name="get_weather",
+                input={"loc": "Paris"},
+            ),
+            SimpleNamespace(
+                type="server_tool_use",
+                id="srvtool_1",
+                name="web_search",
+                input={"query": "capital of France"},
+            ),
+            # Result blocks are NOT tool CALLS — must be ignored so
+            # tool-failure-rate doesn't double-count.
+            SimpleNamespace(
+                type="web_search_tool_result",
+                tool_use_id="srvtool_1",
+                content=[],
+            ),
+        ]
+        got = from_anthropic(blocks)
+        assert len(got) == 2, f"expected both tool_use and server_tool_use; got {got}"
+        assert got[0]["name"] == "get_weather"
+        assert got[1]["name"] == "web_search"
+        assert got[1]["id"] == "srvtool_1"
+        assert json.loads(got[1]["arguments"]) == {"query": "capital of France"}
