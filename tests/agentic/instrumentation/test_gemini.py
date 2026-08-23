@@ -199,6 +199,51 @@ class TestGeminiToolCalls:
         assert calls[0]["id"] == "gemini-tools_call_0"
 
 
+class TestGeminiBarePartInput:
+    """
+    Regression: `_normalize_contents` assumed anything non-str, non-list
+    was Content-shaped (has `.parts`). A bare `Part` / `File` object has
+    `.text` directly, not `.parts`. Before TP-2128 P1 #1.7, passing
+    `contents=types.Part(text="hello")` recorded an empty prompt.
+    """
+
+    def test_single_bare_part_extracts_text(self):
+        from disseqt_agentic_sdk.instrumentation.gemini.instrumentor import (
+            _normalize_contents,
+        )
+
+        part = genai_types.Part(text="hello Gemini")
+        normalized = _normalize_contents(part)
+        assert normalized == [{"role": "user", "content": "hello Gemini"}]
+
+    def test_list_of_bare_parts_extracts_each(self):
+        from disseqt_agentic_sdk.instrumentation.gemini.instrumentor import (
+            _normalize_contents,
+        )
+
+        parts = [
+            genai_types.Part(text="first"),
+            genai_types.Part(text="second"),
+        ]
+        normalized = _normalize_contents(parts)
+        assert normalized == [
+            {"role": "user", "content": "first"},
+            {"role": "user", "content": "second"},
+        ]
+
+    def test_content_shape_still_works(self):
+        # Content-shaped input still normalizes via .parts.
+        from disseqt_agentic_sdk.instrumentation.gemini.instrumentor import (
+            _normalize_contents,
+        )
+
+        content = genai_types.Content(
+            role="model",
+            parts=[genai_types.Part(text="reply")],
+        )
+        assert _normalize_contents(content) == [{"role": "model", "content": "reply"}]
+
+
 class TestGeminiStreamingDedup:
     def test_two_identical_parallel_calls_both_survive(self, recording_client):
         """

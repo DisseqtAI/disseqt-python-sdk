@@ -122,26 +122,47 @@ def _set_request_attrs(span: DisseqtSpan, kwargs: dict[str, Any]) -> None:
 
 
 def _normalize_contents(contents: Any) -> list[dict[str, Any]]:
-    """Coerce Gemini contents (str | Content | list[...]) into role/content dicts."""
+    """
+    Coerce Gemini contents into ``[{role, content}, ...]`` dicts.
+
+    google-genai's ``contents`` argument accepts several documented shapes:
+
+      * ``str`` — single user turn.
+      * ``Content`` — has ``.parts`` and optional ``.role``.
+      * bare ``Part`` / ``File`` — has ``.text`` directly, NOT wrapped in
+        ``Content``. This is a first-class, documented input shape.
+      * ``list`` of any of the above (mixed).
+
+    Before TP-2128 P1 #1.7, any non-``str``/non-``list`` value was
+    assumed to be ``Content``-shaped: ``read(entry, "parts")`` returned
+    ``None`` for a bare ``Part``, joining produced ``""``, and the
+    span recorded an empty prompt even though real text was sent.
+    """
     if contents is None:
         return []
     if isinstance(contents, str):
         return [{"role": "user", "content": contents}]
     if isinstance(contents, list):
-        # Delegate to serialize_messages for dict-shaped entries; strings become user turns.
-        out: list[dict[str, Any]] = []
-        for entry in contents:
-            if isinstance(entry, str):
-                out.append({"role": "user", "content": entry})
-            else:
-                parts = read(entry, "parts") or []
-                text = "".join(read(p, "text") or "" for p in parts)
-                out.append({"role": read(entry, "role") or "user", "content": text})
-        return out
-    # Single Content object.
-    parts = read(contents, "parts") or []
-    text = "".join(read(p, "text") or "" for p in parts)
-    return [{"role": read(contents, "role") or "user", "content": text}]
+        return [_normalize_content_entry(e) for e in contents]
+    # Single object — Content, bare Part, File, or something similar.
+    return [_normalize_content_entry(contents)]
+
+
+def _normalize_content_entry(entry: Any) -> dict[str, Any]:
+    """Turn one Gemini content entry into ``{role, content}``."""
+    if isinstance(entry, str):
+        return {"role": "user", "content": entry}
+    # Content-shaped: has .parts (possibly empty), possibly .role.
+    parts = read(entry, "parts")
+    if parts is not None:
+        text = "".join(read(p, "text") or "" for p in parts)
+        return {"role": read(entry, "role") or "user", "content": text}
+    # Bare Part / File: has .text directly.
+    text = read(entry, "text")
+    if isinstance(text, str) and text:
+        return {"role": "user", "content": text}
+    # Nothing usable — record the string form so we don't lose visibility.
+    return {"role": "user", "content": str(entry)}
 
 
 def _set_response_attrs(span: DisseqtSpan, response: Any) -> None:
