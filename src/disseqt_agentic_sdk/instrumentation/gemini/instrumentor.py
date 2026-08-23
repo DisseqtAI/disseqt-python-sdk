@@ -37,6 +37,7 @@ from disseqt_agentic_sdk.instrumentation._utils import (
     open_llm_span,
     safe_call,
     safe_set,
+    set_messages_if_capturing,
 )
 from disseqt_agentic_sdk.instrumentation.base import DisseqtInstrumentor
 from disseqt_agentic_sdk.semantics import (
@@ -104,7 +105,7 @@ def _set_request_attrs(span: DisseqtSpan, kwargs: dict[str, Any]) -> None:
     contents = kwargs.get(KW_CONTENTS)
     normalized = _normalize_contents(contents)
     if normalized:
-        span.set_messages(input_messages=normalized)
+        set_messages_if_capturing(span, input_messages=normalized)
         safe_set(span, GenAIAttributes.PROMPT, normalized)
 
     # google-genai callers pass tools either at top level or inside `config`.
@@ -178,7 +179,7 @@ def _set_response_attrs(span: DisseqtSpan, response: Any) -> None:
         text = _extract_candidate_text(first)
         if text:
             msgs = [{"role": "model", "content": text}]
-            span.set_messages(output_messages=msgs)
+            set_messages_if_capturing(span, output_messages=msgs)
             safe_set(span, GenAIAttributes.COMPLETION, msgs)
 
         parts = _candidate_parts(first)
@@ -314,7 +315,7 @@ class _StreamAccumulator:
         text = "".join(self.buffer)
         if text:
             msgs = [{"role": "model", "content": text}]
-            span.set_messages(output_messages=msgs)
+            set_messages_if_capturing(span, output_messages=msgs)
             safe_set(span, GenAIAttributes.COMPLETION, msgs)
         if self.model_version:
             safe_set(span, AgenticAttributes.RESPONSE_MODEL, self.model_version)

@@ -24,7 +24,9 @@ from disseqt_agentic_sdk.instrumentation._tool_result import (
     record_tool_result,
 )
 from disseqt_agentic_sdk.instrumentation._utils import (
+    get_capture_content,
     get_slow_call_threshold_ms,
+    set_capture_content,
     set_slow_call_threshold_ms,
 )
 from disseqt_agentic_sdk.instrumentation.auto import (
@@ -50,6 +52,8 @@ __all__ = [
     "get_instrumented_client",
     "get_slow_call_threshold_ms",
     "set_slow_call_threshold_ms",
+    "get_capture_content",
+    "set_capture_content",
     "set_span_attributes",
     "clear_span_attributes",
     "span_context",

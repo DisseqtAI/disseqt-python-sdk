@@ -18,6 +18,7 @@ slow LLM calls, short enough to flag genuinely hung requests.
 from __future__ import annotations
 
 import contextlib
+import os
 import time
 from types import TracebackType
 from typing import TYPE_CHECKING, Any
@@ -25,7 +26,7 @@ from typing import TYPE_CHECKING, Any
 from disseqt_agentic_sdk.context import get_current_trace
 from disseqt_agentic_sdk.enums import SpanKind
 from disseqt_agentic_sdk.instrumentation._custom_attrs import _get_ambient_attrs
-from disseqt_agentic_sdk.semantics import AgenticAttributes
+from disseqt_agentic_sdk.semantics import AgenticAttributes, GenAIAttributes
 from disseqt_agentic_sdk.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -58,6 +59,67 @@ def set_slow_call_threshold_ms(threshold_ms: float | None) -> None:
 def get_slow_call_threshold_ms() -> float:
     """Return the current slow-call warning threshold in milliseconds."""
     return _slow_threshold_ms
+
+
+# ---------------------------------------------------------------------
+# Content-capture opt-out (privacy / compliance)
+# ---------------------------------------------------------------------
+# When disabled, the SDK skips writing message contents, completion text,
+# tool-call arguments, tool schemas, and system-instruction attributes
+# onto spans. Non-content telemetry (model, token counts, duration, tool
+# NAMES, tool-call IDs, finish reasons, response IDs) is still captured.
+#
+# Rationale: some deployments can't ship prompt text or tool arguments
+# for compliance (HIPAA, GDPR) or leak-risk reasons (a `send_email` tool
+# with an smtp_password arg). Comparable SDKs gate this behind an
+# explicit env var — OpenTelemetry GenAI's
+# OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT and OpenLLMetry's
+# TRACELOOP_TRACE_CONTENT both work this way.
+_CONTENT_ATTR_KEYS: frozenset[str] = frozenset(
+    {
+        AgenticAttributes.INPUT_MESSAGES,
+        AgenticAttributes.OUTPUT_MESSAGES,
+        AgenticAttributes.SYSTEM_INSTRUCTIONS,
+        AgenticAttributes.TOOL_CALLS,
+        AgenticAttributes.TOOL_ARGS,
+        AgenticAttributes.REQUEST_TOOLS,
+        GenAIAttributes.PROMPT,
+        GenAIAttributes.COMPLETION,
+        GenAIAttributes.TOOL_CALLS,
+        GenAIAttributes.TOOL_ARGS,
+        GenAIAttributes.REQUEST_TOOLS,
+    }
+)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    """Parse a boolean-ish env var. '0'/'false'/'no'/'off' → False."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in ("0", "false", "no", "off", "")
+
+
+_capture_content: bool = _env_bool("DISSEQT_SDK_CAPTURE_CONTENT", default=True)
+
+
+def set_capture_content(enabled: bool) -> None:
+    """
+    Toggle whether the SDK captures message contents / tool-call arguments
+    on auto-instrumented spans.
+
+    Set to ``False`` in privacy-sensitive deployments (HIPAA, GDPR) or
+    when tool calls may include credentials. Non-content telemetry
+    (model, tokens, duration, tool names/ids, finish reasons) is always
+    captured regardless.
+    """
+    global _capture_content
+    _capture_content = bool(enabled)
+
+
+def get_capture_content() -> bool:
+    """Return whether content capture is currently enabled."""
+    return _capture_content
 
 
 class _SpanScope:
@@ -143,13 +205,43 @@ def open_llm_span(
 
 
 def safe_set(span: DisseqtSpan, key: str, value: Any) -> None:
-    """Set an attribute if the value is non-empty / non-None. Never raises."""
+    """
+    Set an attribute if the value is non-empty / non-None. Never raises.
+
+    Also honors the content-capture opt-out: when
+    ``set_capture_content(False)`` (or ``DISSEQT_SDK_CAPTURE_CONTENT=0``),
+    any write to a content-bearing key (prompts, completions, tool-call
+    arguments, tool schema, system instructions) is skipped. Non-content
+    keys (model, tokens, duration, tool names/ids, finish reasons) are
+    unaffected.
+    """
+    if not _capture_content and key in _CONTENT_ATTR_KEYS:
+        return
     if value is None:
         return
     if isinstance(value, str) and not value:
         return
     with contextlib.suppress(Exception):
         span.set_attribute(key, value)
+
+
+def set_messages_if_capturing(
+    span: DisseqtSpan,
+    *,
+    input_messages: Any = None,
+    output_messages: Any = None,
+) -> None:
+    """
+    Wrap ``span.set_messages(...)`` with the content-capture gate.
+
+    Providers should call this instead of ``span.set_messages(...)``
+    directly so a single toggle skips message-body writes across every
+    instrumented SDK.
+    """
+    if not _capture_content:
+        return
+    with contextlib.suppress(Exception):
+        span.set_messages(input_messages=input_messages, output_messages=output_messages)
 
 
 def safe_call(fn: Any, *args: Any, **kwargs: Any) -> None:

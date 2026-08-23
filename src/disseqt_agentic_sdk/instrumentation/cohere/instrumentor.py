@@ -30,6 +30,7 @@ from disseqt_agentic_sdk.instrumentation._utils import (
     safe_call,
     safe_set,
     serialize_messages,
+    set_messages_if_capturing,
 )
 from disseqt_agentic_sdk.instrumentation.base import DisseqtInstrumentor
 from disseqt_agentic_sdk.semantics import (
@@ -96,7 +97,7 @@ def _set_request_attrs(span: DisseqtSpan, kwargs: dict[str, Any]) -> None:
 
     messages = serialize_messages(kwargs.get(KW_MESSAGES))
     if messages:
-        span.set_messages(input_messages=messages)
+        set_messages_if_capturing(span, input_messages=messages)
         safe_set(span, GenAIAttributes.PROMPT, messages)
 
     tools = kwargs.get(KW_TOOLS)
@@ -130,7 +131,7 @@ def _set_response_attrs(span: DisseqtSpan, response: Any) -> None:
     text = _extract_message_text(message)
     if text:
         msgs = [{"role": read(message, "role") or "assistant", "content": text}]
-        span.set_messages(output_messages=msgs)
+        set_messages_if_capturing(span, output_messages=msgs)
         safe_set(span, GenAIAttributes.COMPLETION, msgs)
 
     # Cohere v2 tool calls sit on message.tool_calls in OpenAI shape.
@@ -251,7 +252,7 @@ class _StreamAccumulator:
         text = "".join(self.buffer)
         if text:
             msgs = [{"role": "assistant", "content": text}]
-            span.set_messages(output_messages=msgs)
+            set_messages_if_capturing(span, output_messages=msgs)
             safe_set(span, GenAIAttributes.COMPLETION, msgs)
         if self.response_id:
             safe_set(span, AgenticAttributes.RESPONSE_ID, self.response_id)

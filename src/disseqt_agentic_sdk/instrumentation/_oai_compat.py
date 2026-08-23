@@ -26,7 +26,11 @@ from disseqt_agentic_sdk.instrumentation._tool_calls import from_openai as _tc_f
 from disseqt_agentic_sdk.instrumentation._tool_result import (
     _notify_planned_tool_calls,
 )
-from disseqt_agentic_sdk.instrumentation._utils import safe_set, serialize_messages
+from disseqt_agentic_sdk.instrumentation._utils import (
+    safe_set,
+    serialize_messages,
+    set_messages_if_capturing,
+)
 from disseqt_agentic_sdk.semantics import AgenticAttributes, GenAIAttributes
 
 if TYPE_CHECKING:
@@ -84,7 +88,7 @@ def set_common_chat_request(
 
     messages = serialize_messages(kwargs.get(KW_MESSAGES))
     if messages:
-        span.set_messages(input_messages=messages)
+        set_messages_if_capturing(span, input_messages=messages)
         safe_set(span, GenAIAttributes.PROMPT, messages)
 
     tools = kwargs.get(KW_TOOLS)
@@ -142,7 +146,7 @@ def set_chat_response(span: DisseqtSpan, response: Any) -> None:
             finish_reasons.append(finish_reason)
 
     if output_messages:
-        span.set_messages(output_messages=output_messages)
+        set_messages_if_capturing(span, output_messages=output_messages)
         safe_set(span, GenAIAttributes.COMPLETION, output_messages)
     if finish_reasons:
         safe_set(span, AgenticAttributes.RESPONSE_FINISH_REASON, finish_reasons[0])
@@ -266,7 +270,7 @@ class ChatStreamAccumulator:
         text = "".join(self.buffer)
         if text:
             msgs = [{"role": self.role, "content": text}]
-            span.set_messages(output_messages=msgs)
+            set_messages_if_capturing(span, output_messages=msgs)
             safe_set(span, GenAIAttributes.COMPLETION, msgs)
         if self.model:
             safe_set(span, AgenticAttributes.RESPONSE_MODEL, self.model)

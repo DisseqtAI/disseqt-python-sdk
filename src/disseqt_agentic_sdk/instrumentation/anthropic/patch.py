@@ -30,6 +30,7 @@ from disseqt_agentic_sdk.instrumentation._utils import (
     safe_call,
     safe_set,
     serialize_messages,
+    set_messages_if_capturing,
 )
 from disseqt_agentic_sdk.semantics import (
     AgenticAttributes,
@@ -78,7 +79,7 @@ def _set_request_attrs(span: DisseqtSpan, kwargs: dict[str, Any]) -> None:
 
     messages = serialize_messages(kwargs.get(KW_MESSAGES))
     if messages:
-        span.set_messages(input_messages=messages)
+        set_messages_if_capturing(span, input_messages=messages)
         safe_set(span, GenAIAttributes.PROMPT, messages)
 
     tools = kwargs.get(KW_TOOLS)
@@ -123,7 +124,7 @@ def _set_response_attrs(span: DisseqtSpan, response: Any) -> None:
             text_parts.append(text_val)
     if text_parts:
         msgs = [{"role": "assistant", "content": "".join(text_parts)}]
-        span.set_messages(output_messages=msgs)
+        set_messages_if_capturing(span, output_messages=msgs)
         safe_set(span, GenAIAttributes.COMPLETION, msgs)
 
     tool_calls = _tc_from_anthropic(content_blocks)
@@ -267,7 +268,7 @@ class _StreamAccumulator:
         text = "".join(self.buffer)
         if text:
             msgs = [{"role": "assistant", "content": text}]
-            span.set_messages(output_messages=msgs)
+            set_messages_if_capturing(span, output_messages=msgs)
             safe_set(span, GenAIAttributes.COMPLETION, msgs)
         if self.model:
             safe_set(span, AgenticAttributes.RESPONSE_MODEL, self.model)
