@@ -128,6 +128,120 @@ class TestAnthropicMessages:
         assert attrs[AgenticAttributes.RESPONSE_FINISH_REASON] == "end_turn"
 
 
+class TestAnthropicPromptCacheTokens:
+    """
+    TP-2128 P2 #2.12: anthropic Usage includes cache_creation_input_tokens
+    and cache_read_input_tokens for prompt caching. Both are already
+    included in input_tokens on the wire, but recorded as separate
+    attributes so cost dashboards can price cache-write vs cache-read
+    spend distinctly.
+    """
+
+    def test_non_streaming_records_cache_tokens(self, recording_client):
+        instrument("anthropic", recording_client)
+        try:
+            client = Anthropic(api_key="fake")
+            fake = Message(
+                id="msg-cache",
+                type="message",
+                role="assistant",
+                model="claude-3-5-haiku-latest",
+                content=[TextBlock(type="text", text="Cached.")],
+                stop_reason="end_turn",
+                stop_sequence=None,
+                usage=Usage(
+                    input_tokens=1000,
+                    output_tokens=10,
+                    cache_creation_input_tokens=200,
+                    cache_read_input_tokens=750,
+                ),
+            )
+            with patch.object(client.messages, "_post", return_value=fake, create=True):
+                client.messages.create(
+                    model="claude-3-5-haiku-latest",
+                    max_tokens=64,
+                    messages=[{"role": "user", "content": "warm cache"}],
+                )
+        finally:
+            uninstrument("anthropic")
+
+        span = find_span(recording_client, "anthropic.messages.create")
+        attrs = json.loads(span.attributes_json)
+        assert attrs[AgenticAttributes.USAGE_INPUT_TOKENS] == 1000
+        assert attrs[AgenticAttributes.USAGE_CACHE_CREATION_INPUT_TOKENS] == 200
+        assert attrs[AgenticAttributes.USAGE_CACHE_READ_INPUT_TOKENS] == 750
+
+    def test_no_cache_tokens_when_absent(self, recording_client):
+        """No cache activity → attributes omitted (not zeroed)."""
+        instrument("anthropic", recording_client)
+        try:
+            client = Anthropic(api_key="fake")
+            with patch.object(client.messages, "_post", return_value=_fake_message(), create=True):
+                client.messages.create(
+                    model="claude-3-5-haiku-latest",
+                    max_tokens=64,
+                    messages=[{"role": "user", "content": "no cache"}],
+                )
+        finally:
+            uninstrument("anthropic")
+
+        span = find_span(recording_client, "anthropic.messages.create")
+        attrs = json.loads(span.attributes_json)
+        assert AgenticAttributes.USAGE_CACHE_CREATION_INPUT_TOKENS not in attrs
+        assert AgenticAttributes.USAGE_CACHE_READ_INPUT_TOKENS not in attrs
+
+    def test_streaming_records_cache_tokens(self, recording_client):
+        instrument("anthropic", recording_client)
+        try:
+            client = Anthropic(api_key="fake")
+
+            def _evt(**fields):
+                m = MagicMock()
+                for k, v in fields.items():
+                    setattr(m, k, v)
+                return m
+
+            message_start = _evt(
+                type="message_start",
+                message=_evt(
+                    id="msg-stream-cache",
+                    model="claude-3-5-haiku-latest",
+                    usage=_evt(
+                        input_tokens=1000,
+                        output_tokens=0,
+                        cache_creation_input_tokens=100,
+                        cache_read_input_tokens=850,
+                    ),
+                ),
+            )
+            delta1 = _evt(
+                type="content_block_delta",
+                delta=_evt(type="text_delta", text="ok"),
+            )
+            message_delta = _evt(
+                type="message_delta",
+                delta=_evt(stop_reason="end_turn"),
+                usage=_evt(output_tokens=1),
+            )
+            fake_stream = iter([message_start, delta1, message_delta])
+
+            with patch.object(client.messages, "_post", return_value=fake_stream, create=True):
+                stream = client.messages.create(
+                    model="claude-3-5-haiku-latest",
+                    max_tokens=64,
+                    messages=[{"role": "user", "content": "x"}],
+                    stream=True,
+                )
+                list(stream)
+        finally:
+            uninstrument("anthropic")
+
+        span = find_span(recording_client, "anthropic.messages.create")
+        attrs = json.loads(span.attributes_json)
+        assert attrs[AgenticAttributes.USAGE_CACHE_CREATION_INPUT_TOKENS] == 100
+        assert attrs[AgenticAttributes.USAGE_CACHE_READ_INPUT_TOKENS] == 850
+
+
 class TestAnthropicToolCalls:
     def test_captures_tool_use_block(self, recording_client):
         # Anthropic embeds tool calls as `content` blocks with type="tool_use".

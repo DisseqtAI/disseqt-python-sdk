@@ -113,6 +113,17 @@ def _set_response_attrs(span: DisseqtSpan, response: Any) -> None:
         safe_set(span, GenAIAttributes.USAGE_INPUT_TOKENS, input_tokens)
         safe_set(span, GenAIAttributes.USAGE_OUTPUT_TOKENS, output_tokens)
         safe_set(span, GenAIAttributes.USAGE_TOTAL_TOKENS, input_tokens + output_tokens)
+        # Prompt-cache breakdown (Anthropic prompt caching). Already
+        # included in input_tokens; recorded separately so cost
+        # dashboards can price cache-write vs. cache-read spend. Real
+        # Usage returns Optional[int]; isinstance guards synthetic
+        # test mocks whose attribute access yields a truthy MagicMock.
+        cache_creation = _read(usage, "cache_creation_input_tokens")
+        if isinstance(cache_creation, int) and cache_creation:
+            safe_set(span, AgenticAttributes.USAGE_CACHE_CREATION_INPUT_TOKENS, cache_creation)
+        cache_read = _read(usage, "cache_read_input_tokens")
+        if isinstance(cache_read, int) and cache_read:
+            safe_set(span, AgenticAttributes.USAGE_CACHE_READ_INPUT_TOKENS, cache_read)
 
     # Anthropic returns response.content as a list of blocks
     # ({"type":"text","text":...} or {"type":"tool_use","id":..,"name":..,"input":..}).
@@ -209,6 +220,10 @@ class _StreamAccumulator:
         self.stop_reason: str | None = None
         self.input_tokens: int | None = None
         self.output_tokens: int | None = None
+        # Prompt-cache breakdown (Anthropic prompt caching). Nullable
+        # because pre-cache-era streams don't include these fields.
+        self.cache_creation_input_tokens: int | None = None
+        self.cache_read_input_tokens: int | None = None
         # Tool-use blocks arrive across multiple events: `content_block_start`
         # carries the id + name (with input often empty), then
         # `content_block_delta` events with delta.type == "input_json_delta"
@@ -227,6 +242,12 @@ class _StreamAccumulator:
                 if usage is not None:
                     self.input_tokens = _read(usage, "input_tokens") or self.input_tokens
                     self.output_tokens = _read(usage, "output_tokens") or self.output_tokens
+                    cache_creation = _read(usage, "cache_creation_input_tokens")
+                    if isinstance(cache_creation, int):
+                        self.cache_creation_input_tokens = cache_creation
+                    cache_read = _read(usage, "cache_read_input_tokens")
+                    if isinstance(cache_read, int):
+                        self.cache_read_input_tokens = cache_read
 
         elif event_type == "content_block_start":
             block = _read(chunk, "content_block")
@@ -287,6 +308,18 @@ class _StreamAccumulator:
                 span,
                 GenAIAttributes.USAGE_TOTAL_TOKENS,
                 self.input_tokens + self.output_tokens,
+            )
+        if self.cache_creation_input_tokens:
+            safe_set(
+                span,
+                AgenticAttributes.USAGE_CACHE_CREATION_INPUT_TOKENS,
+                self.cache_creation_input_tokens,
+            )
+        if self.cache_read_input_tokens:
+            safe_set(
+                span,
+                AgenticAttributes.USAGE_CACHE_READ_INPUT_TOKENS,
+                self.cache_read_input_tokens,
             )
 
         if self._tool_use:

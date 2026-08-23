@@ -83,6 +83,14 @@ class AgenticAttributes:
     USAGE_TOTAL_TOKENS = "agentic.usage.total_tokens"
     USAGE_INPUT_CHARACTERS = "agentic.usage.input_characters"
     USAGE_OUTPUT_CHARACTERS = "agentic.usage.output_characters"
+    # Prompt-cache tokens (Anthropic prompt caching, and any future
+    # provider that reports the same breakdown). ``cache_creation`` is
+    # tokens billed to write into a cache slot; ``cache_read`` is tokens
+    # served from cache at a discount. Both are already included in
+    # USAGE_INPUT_TOKENS — these split it so cost dashboards can price
+    # the two categories separately.
+    USAGE_CACHE_CREATION_INPUT_TOKENS = "agentic.usage.cache_creation_input_tokens"
+    USAGE_CACHE_READ_INPUT_TOKENS = "agentic.usage.cache_read_input_tokens"
 
     # Messages
     INPUT_MESSAGES = "agentic.input.messages"
