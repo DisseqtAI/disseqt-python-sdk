@@ -121,6 +121,64 @@ class TestCustomAttrs:
         assert inside["request_id"] == "req-1"
         assert "request_id" not in outer_after
 
+    def test_bare_threadpool_does_not_propagate_ambient_attrs(self, recording_client):
+        """
+        TP-2128 P2 #2.1: worker threads see an empty ambient bag when the
+        caller uses bare ThreadPoolExecutor.submit. This is a Python
+        contextvars fact, not a bug in the SDK — but the docstring used
+        to imply TPE isolation "just worked", so this test pins the real
+        behavior and the mitigation.
+        """
+        import contextvars
+        from concurrent.futures import ThreadPoolExecutor
+
+        instrument("openai", recording_client)
+        try:
+            client = OpenAI(api_key="fake")
+
+            def _worker(tag: str) -> None:
+                # Whatever the caller set is invisible unless we propagate.
+                with span_context(task_tag=tag):
+                    _call(client)
+
+            set_span_attributes(outer="from-main-thread")
+            try:
+                with ThreadPoolExecutor(max_workers=1) as ex:
+                    # Bare submit: outer="from-main-thread" is NOT copied.
+                    ex.submit(_worker, "bare").result()
+                    # copy_context().run: outer IS copied.
+                    ctx = contextvars.copy_context()
+                    ex.submit(ctx.run, _worker, "copied").result()
+            finally:
+                clear_span_attributes()
+        finally:
+            uninstrument("openai")
+
+        spans = [
+            s
+            for s in recording_client.buffer.spans  # type: ignore[attr-defined]
+            if s.name == "openai.chat.completions.create"
+        ]
+        by_tag = {
+            json.loads(s.attributes_json)["task_tag"]: json.loads(s.attributes_json) for s in spans
+        }
+        # Bare submit: no outer key visible in the worker.
+        assert "outer" not in by_tag["bare"], (
+            "bare TPE.submit must NOT propagate main-thread ambient attrs — "
+            "if this ever starts propagating, update the _custom_attrs.py docstring"
+        )
+        # Wrapped submit: outer copied into the worker context.
+        assert by_tag["copied"].get("outer") == "from-main-thread"
+
+    def test_docstring_documents_tpe_caveat(self):
+        """Docstring must warn about bare TPE. Guards against future regressions."""
+        from disseqt_agentic_sdk.instrumentation import _custom_attrs
+
+        doc = _custom_attrs.__doc__ or ""
+        assert "ThreadPoolExecutor" in doc
+        assert "copy_context" in doc
+        assert "span_context" in doc
+
     def test_contextvars_isolate_concurrent_async_tasks(self, recording_client):
         # Two asyncio tasks set different ambient attrs. Neither should
         # see the other's — contextvars propagate per-task copies.

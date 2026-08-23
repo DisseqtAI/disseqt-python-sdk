@@ -32,9 +32,26 @@ collides with an auto key (e.g. ``agentic.request.model``), the user's
 value overwrites — user intent always wins.
 
 Async safety: backed by ``contextvars.ContextVar``. Two concurrent asyncio
-tasks each see their own ambient bag; no bleed-through. Same for
-``concurrent.futures.ThreadPoolExecutor`` when tasks run through
-``contextvars.copy_context()`` (asyncio does this by default).
+tasks each see their own ambient bag; no bleed-through.
+
+Threading — read this before assuming isolation:
+
+* ``asyncio.loop.run_in_executor(...)`` copies the current context into
+  the worker thread automatically, so ambient attributes set on the
+  calling task are visible inside the executor task.
+* **Bare** ``concurrent.futures.ThreadPoolExecutor().submit(fn, ...)``
+  does **not** propagate context. Worker threads see an empty ambient
+  bag, and any ``set_span_attributes(...)`` call inside the worker
+  mutates the worker's context — never the caller's.
+* For manual TPE use, wrap each submit with
+  ``executor.submit(contextvars.copy_context().run, fn, ...)`` if you
+  need the caller's ambient attributes inside the worker.
+
+Recommendation: prefer the request-scoped ``span_context(...)`` helper
+above ``set_span_attributes`` / ``clear_span_attributes``. It restores
+prior state on exit and composes cleanly with async, sync, and executor
+callers without you having to reason about which framework propagates
+context.
 """
 
 from __future__ import annotations
