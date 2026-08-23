@@ -256,6 +256,33 @@ def set_messages_if_capturing(
         span.set_messages(input_messages=input_messages, output_messages=output_messages)
 
 
+def set_first_tool_call_attrs(span: DisseqtSpan, tool_calls: list[dict[str, Any]]) -> None:
+    """
+    Populate the single-value ``TOOL_NAME`` / ``TOOL_CALL_ID`` /
+    ``TOOL_ARGS`` convenience attributes from ``tool_calls[0]`` on
+    both the ``agentic.*`` and ``gen_ai.*`` attribute namespaces.
+
+    The full canonical list already lands on ``TOOL_CALLS``; these
+    single-value columns exist because the backend's enriched-table
+    query surface has dedicated columns for the *first* tool call, so
+    dashboards that don't want to unpack the JSON array can still
+    read a value. Every provider wrapper used to open-code the six
+    ``safe_set`` calls this helper wraps (TP-2128 P4 #4.2).
+    """
+    if not tool_calls:
+        return
+    first = tool_calls[0]
+    name = first.get("name")
+    call_id = first.get("id")
+    args = first.get("arguments")
+    safe_set(span, AgenticAttributes.TOOL_NAME, name)
+    safe_set(span, GenAIAttributes.TOOL_NAME, name)
+    safe_set(span, AgenticAttributes.TOOL_CALL_ID, call_id)
+    safe_set(span, GenAIAttributes.TOOL_CALL_ID, call_id)
+    safe_set(span, AgenticAttributes.TOOL_ARGS, args)
+    safe_set(span, GenAIAttributes.TOOL_ARGS, args)
+
+
 def safe_call(fn: Any, *args: Any, **kwargs: Any) -> None:
     """
     Invoke ``fn(*args, **kwargs)`` and log-and-swallow any exception.

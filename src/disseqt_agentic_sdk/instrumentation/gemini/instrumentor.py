@@ -38,6 +38,7 @@ from disseqt_agentic_sdk.instrumentation._utils import (
     open_llm_span,
     safe_call,
     safe_set,
+    set_first_tool_call_attrs,
     set_messages_if_capturing,
 )
 from disseqt_agentic_sdk.instrumentation.base import DisseqtInstrumentor
@@ -230,13 +231,7 @@ def _set_response_attrs(span: DisseqtSpan, response: Any) -> None:
             safe_set(span, AgenticAttributes.TOOL_CALLS, tool_calls)
             _notify_planned_tool_calls(tool_calls)
             safe_set(span, GenAIAttributes.TOOL_CALLS, tool_calls)
-            tc0 = tool_calls[0]
-            safe_set(span, AgenticAttributes.TOOL_NAME, tc0["name"])
-            safe_set(span, GenAIAttributes.TOOL_NAME, tc0["name"])
-            safe_set(span, AgenticAttributes.TOOL_CALL_ID, tc0["id"])
-            safe_set(span, GenAIAttributes.TOOL_CALL_ID, tc0["id"])
-            safe_set(span, AgenticAttributes.TOOL_ARGS, tc0["arguments"])
-            safe_set(span, GenAIAttributes.TOOL_ARGS, tc0["arguments"])
+            set_first_tool_call_attrs(span, tool_calls)
 
 
 def _candidate_parts(candidate: Any) -> list[Any]:
@@ -481,13 +476,7 @@ class _StreamAccumulator:
             safe_set(span, AgenticAttributes.TOOL_CALLS, tool_calls)
             _notify_planned_tool_calls(tool_calls)
             safe_set(span, GenAIAttributes.TOOL_CALLS, tool_calls)
-            tc0 = tool_calls[0]
-            safe_set(span, AgenticAttributes.TOOL_NAME, tc0["name"])
-            safe_set(span, GenAIAttributes.TOOL_NAME, tc0["name"])
-            safe_set(span, AgenticAttributes.TOOL_CALL_ID, tc0["id"])
-            safe_set(span, GenAIAttributes.TOOL_CALL_ID, tc0["id"])
-            safe_set(span, AgenticAttributes.TOOL_ARGS, tc0["arguments"])
-            safe_set(span, GenAIAttributes.TOOL_ARGS, tc0["arguments"])
+            set_first_tool_call_attrs(span, tool_calls)
 
 
 def _sync_stream(instrumentor: GeminiInstrumentor) -> Callable[..., Any]:

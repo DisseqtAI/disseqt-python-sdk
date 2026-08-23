@@ -30,6 +30,7 @@ from disseqt_agentic_sdk.instrumentation._utils import (
     safe_call,
     safe_set,
     serialize_messages,
+    set_first_tool_call_attrs,
     set_messages_if_capturing,
 )
 from disseqt_agentic_sdk.semantics import (
@@ -143,13 +144,7 @@ def _set_response_attrs(span: DisseqtSpan, response: Any) -> None:
         safe_set(span, AgenticAttributes.TOOL_CALLS, tool_calls)
         _notify_planned_tool_calls(tool_calls)
         safe_set(span, GenAIAttributes.TOOL_CALLS, tool_calls)
-        first = tool_calls[0]
-        safe_set(span, AgenticAttributes.TOOL_NAME, first["name"])
-        safe_set(span, GenAIAttributes.TOOL_NAME, first["name"])
-        safe_set(span, AgenticAttributes.TOOL_CALL_ID, first["id"])
-        safe_set(span, GenAIAttributes.TOOL_CALL_ID, first["id"])
-        safe_set(span, AgenticAttributes.TOOL_ARGS, first["arguments"])
-        safe_set(span, GenAIAttributes.TOOL_ARGS, first["arguments"])
+        set_first_tool_call_attrs(span, tool_calls)
 
 
 def messages_create(instrumentor: AnthropicInstrumentor) -> Callable[..., Any]:
@@ -344,13 +339,7 @@ class _StreamAccumulator:
                 safe_set(span, AgenticAttributes.TOOL_CALLS, tool_calls)
                 _notify_planned_tool_calls(tool_calls)
                 safe_set(span, GenAIAttributes.TOOL_CALLS, tool_calls)
-                first = tool_calls[0]
-                safe_set(span, AgenticAttributes.TOOL_NAME, first["name"])
-                safe_set(span, GenAIAttributes.TOOL_NAME, first["name"])
-                safe_set(span, AgenticAttributes.TOOL_CALL_ID, first["id"])
-                safe_set(span, GenAIAttributes.TOOL_CALL_ID, first["id"])
-                safe_set(span, AgenticAttributes.TOOL_ARGS, first["arguments"])
-                safe_set(span, GenAIAttributes.TOOL_ARGS, first["arguments"])
+                set_first_tool_call_attrs(span, tool_calls)
 
 
 def _read(obj: Any, name: str) -> Any:

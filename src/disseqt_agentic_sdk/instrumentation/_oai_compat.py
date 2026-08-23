@@ -29,6 +29,7 @@ from disseqt_agentic_sdk.instrumentation._tool_result import (
 from disseqt_agentic_sdk.instrumentation._utils import (
     safe_set,
     serialize_messages,
+    set_first_tool_call_attrs,
     set_messages_if_capturing,
 )
 from disseqt_agentic_sdk.semantics import AgenticAttributes, GenAIAttributes
@@ -167,17 +168,7 @@ def set_chat_response(span: DisseqtSpan, response: Any) -> None:
         safe_set(span, AgenticAttributes.TOOL_CALLS, tool_calls)
         _notify_planned_tool_calls(tool_calls)
         safe_set(span, GenAIAttributes.TOOL_CALLS, tool_calls)
-        # Populate the single-tool columns from the first call so the
-        # backend's enriched-table columns (agentic.tool.name /
-        # agentic.tool.call_id / agentic.tool.args) get a value even for
-        # dashboards that don't query the JSON array.
-        first = tool_calls[0]
-        safe_set(span, AgenticAttributes.TOOL_NAME, first["name"])
-        safe_set(span, GenAIAttributes.TOOL_NAME, first["name"])
-        safe_set(span, AgenticAttributes.TOOL_CALL_ID, first["id"])
-        safe_set(span, GenAIAttributes.TOOL_CALL_ID, first["id"])
-        safe_set(span, AgenticAttributes.TOOL_ARGS, first["arguments"])
-        safe_set(span, GenAIAttributes.TOOL_ARGS, first["arguments"])
+        set_first_tool_call_attrs(span, tool_calls)
 
 
 # ---------------------------------------------------------------------
@@ -380,13 +371,7 @@ class ChatStreamAccumulator:
                 safe_set(span, AgenticAttributes.TOOL_CALLS, tool_calls)
                 _notify_planned_tool_calls(tool_calls)
                 safe_set(span, GenAIAttributes.TOOL_CALLS, tool_calls)
-                first = tool_calls[0]
-                safe_set(span, AgenticAttributes.TOOL_NAME, first["name"])
-                safe_set(span, GenAIAttributes.TOOL_NAME, first["name"])
-                safe_set(span, AgenticAttributes.TOOL_CALL_ID, first["id"])
-                safe_set(span, GenAIAttributes.TOOL_CALL_ID, first["id"])
-                safe_set(span, AgenticAttributes.TOOL_ARGS, first["arguments"])
-                safe_set(span, GenAIAttributes.TOOL_ARGS, first["arguments"])
+                set_first_tool_call_attrs(span, tool_calls)
 
 
 # ---------------------------------------------------------------------
