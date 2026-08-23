@@ -171,11 +171,18 @@ def uninstrument(name: str, *, on_uninstall: OnUninstallHook | None = None) -> b
     ``mistral``).
     """
     name = resolve_provider_name(name)
+    # Both the _ACTIVE.pop AND the wrapt-level unwind run inside the
+    # lock so a concurrent instrument(name, client) can't observe the
+    # slot as free while our unwind is still in flight — otherwise the
+    # instrument path would install a fresh wrapper on top of a
+    # not-yet-removed one and both calls would return success (TP-2128
+    # audit item #3.1). Hooks stay outside the lock: they're
+    # user-supplied and mustn't hold the registry mutex.
     with _LOCK:
         instrumentor = _ACTIVE.pop(name, None)
-    if instrumentor is None:
-        return False
-    instrumentor.uninstrument()
+        if instrumentor is None:
+            return False
+        instrumentor.uninstrument()
     if on_uninstall is not None:
         with contextlib.suppress(Exception):
             on_uninstall(name)

@@ -540,6 +540,109 @@ class TestBase:
         # "user code kept working".
         assert json.loads(span.attributes_json) is not None
 
+    def test_uninstrument_holds_lock_across_unwind(self, recording_client):
+        """
+        TP-2128 P3 #3.1: uninstrument() used to release _LOCK immediately
+        after _ACTIVE.pop, then run the wrapt-level unwrap outside the
+        lock. A concurrent instrument(name, client) could see the
+        registry slot as free while the unwrap was still in flight,
+        install a fresh wrapper on top of the not-yet-removed one, and
+        return success — leaving an orphaned untracked wrapper.
+
+        Test wires a stub instrumentor whose uninstrument() blocks on
+        an event. If the lock is held for the whole unwind, the
+        concurrent instrument() call must wait; when we release the
+        event, both calls resolve cleanly with exactly one active
+        instrumentor.
+        """
+        import threading as _t
+        import time as _time
+
+        from disseqt_agentic_sdk.instrumentation import (
+            _registry as reg,
+        )
+
+        key = "test-uninstrument-lock-race"
+
+        block = _t.Event()
+        uninstrument_started = _t.Event()
+
+        class _Stub(DisseqtInstrumentor):
+            package_name = "openai"  # real, importable package for _detect_version
+            min_version = None
+
+            def _instrument(self) -> None:
+                # No real wrapt patches — the base's _patched list stays
+                # empty so the base's _unwind_patches is a no-op. Our
+                # slow-work simulation lives in _uninstrument instead.
+                return
+
+            def _uninstrument(self) -> None:
+                uninstrument_started.set()
+                # Simulate the wrapt-level unwind taking non-trivial
+                # time. Without the lock covering us, an interleaved
+                # instrument() would race in here.
+                block.wait(timeout=5.0)
+
+        # Give the class a simple name so registry loader (via
+        # importlib.import_module + getattr) can find it.
+        stub_attr = "_UninstrumentLockStub"
+        _Stub.__name__ = stub_attr
+        _Stub.__qualname__ = stub_attr
+        setattr(auto_module, stub_attr, _Stub)
+        reg.INSTRUMENTOR_CLASSES[key] = f"disseqt_agentic_sdk.instrumentation.auto.{stub_attr}"
+        try:
+            assert instrument(key, recording_client) is True
+
+            results: dict[str, object] = {}
+
+            def _uninstall():
+                results["uninstall"] = uninstrument(key)
+
+            def _reinstall():
+                # Wait until the uninstall has entered its unwind.
+                uninstrument_started.wait(timeout=2.0)
+                # Now try to re-instrument. Must BLOCK on _LOCK, not
+                # squeeze in and install a duplicate wrapper.
+                t0 = _time.perf_counter()
+                results["reinstall"] = instrument(key, recording_client)
+                results["reinstall_blocked_ms"] = (_time.perf_counter() - t0) * 1000
+
+            u_thread = _t.Thread(target=_uninstall)
+            r_thread = _t.Thread(target=_reinstall)
+            u_thread.start()
+            r_thread.start()
+
+            # Let the reinstaller reach its instrument() call and start
+            # waiting on the lock, then release the uninstall.
+            uninstrument_started.wait(timeout=2.0)
+            _time.sleep(0.05)  # give reinstaller time to reach _LOCK
+            block.set()
+
+            u_thread.join(timeout=5.0)
+            r_thread.join(timeout=5.0)
+
+            # Both completed cleanly.
+            assert results["uninstall"] is True
+            assert results["reinstall"] is True
+            # The reinstaller had to wait on the lock — if it didn't
+            # block at least a bit, the fix isn't holding the lock
+            # over the unwind.
+            assert (
+                results["reinstall_blocked_ms"] >= 40
+            ), f"reinstaller ran too fast ({results['reinstall_blocked_ms']:.1f}ms) — lock isn't covering unwind"
+
+            # Exactly one instrumentor in the registry at the end.
+            assert key in auto_module._ACTIVE
+        finally:
+            block.set()
+            uninstrument(key)
+            reg.INSTRUMENTOR_CLASSES.pop(key, None)
+            try:
+                delattr(auto_module, stub_attr)
+            except AttributeError:
+                pass
+
     def test_concurrent_instrument_calls_are_race_free(self, recording_client):
         # Many threads racing on the same provider must produce exactly one
         # successful instrument() and one registry entry — no duplicate
