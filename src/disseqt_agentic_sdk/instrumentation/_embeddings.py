@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, TypedDict
 
+from disseqt_agentic_sdk.instrumentation._kwargs import KW_INPUT, KW_MODEL
 from disseqt_agentic_sdk.instrumentation._utils import safe_set
 from disseqt_agentic_sdk.semantics import AgenticAttributes, GenAIAttributes
 
@@ -93,8 +94,8 @@ def _count_inputs(inp: Any) -> int:
 def from_openai_request(kwargs: dict[str, Any]) -> CanonicalEmbeddingRequest:
     """Normalize openai-shape kwargs to CanonicalEmbeddingRequest."""
     return {
-        "model": str(kwargs.get("model") or ""),
-        "input_count": _count_inputs(kwargs.get("input")),
+        "model": str(kwargs.get(KW_MODEL) or ""),
+        "input_count": _count_inputs(kwargs.get(KW_INPUT)),
         "dimensions_requested": kwargs.get("dimensions"),
         "encoding_format": kwargs.get("encoding_format"),
         "user": kwargs.get("user"),
