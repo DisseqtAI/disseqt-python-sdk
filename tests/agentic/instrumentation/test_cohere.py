@@ -71,6 +71,63 @@ class TestCohereChat:
         assert attrs[GenAIAttributes.OPERATION_NAME] == "chat"
         assert attrs[GenAIAttributes.RESPONSE_FINISH_REASONS] == ["COMPLETE"]
 
+        # TP-2128 Appendix: dashboards filtering on gen_ai.request.is_stream
+        # used to misclassify Cohere non-streaming spans as streams
+        # (missing attribute defaulted to whatever the dashboard treated
+        # None as). Non-streaming path now emits False explicitly.
+        assert attrs[GenAIAttributes.REQUEST_IS_STREAM] is False
+
+    def test_stream_span_sets_is_stream_true(self, recording_client):
+        """Cohere streaming path must set gen_ai.request.is_stream=True."""
+        from types import SimpleNamespace
+
+        from cohere.v2.client import V2Client
+
+        # SimpleNamespace (not MagicMock) so unset attributes raise
+        # AttributeError instead of returning a truthy MagicMock that
+        # then leaks non-serializable objects into the span attrs.
+        events = [
+            SimpleNamespace(type="message-start", id="cohere-stream-is-stream"),
+            SimpleNamespace(
+                type="content-delta",
+                delta=SimpleNamespace(
+                    message=SimpleNamespace(content=SimpleNamespace(text="ok")),
+                ),
+            ),
+            SimpleNamespace(
+                type="message-end",
+                delta=SimpleNamespace(
+                    finish_reason="COMPLETE",
+                    usage=SimpleNamespace(
+                        tokens=SimpleNamespace(input_tokens=1, output_tokens=1),
+                    ),
+                ),
+            ),
+        ]
+
+        def fake_chat_stream(self, *args, **kwargs):
+            yield from events
+
+        original = V2Client.chat_stream
+        V2Client.chat_stream = fake_chat_stream
+        try:
+            instrument("cohere", recording_client)
+            try:
+                client = cohere.ClientV2(api_key="fake")
+                stream = client.chat_stream(
+                    model="command-r-plus",
+                    messages=[{"role": "user", "content": "x"}],
+                )
+                list(stream)
+            finally:
+                uninstrument("cohere")
+        finally:
+            V2Client.chat_stream = original
+
+        span = find_span(recording_client, "cohere.chat_stream")
+        attrs = json.loads(span.attributes_json)
+        assert attrs[GenAIAttributes.REQUEST_IS_STREAM] is True
+
 
 class TestCohereAsyncStream:
     def test_async_stream_does_not_await_async_generator(self, recording_client):

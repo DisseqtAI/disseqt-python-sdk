@@ -67,13 +67,21 @@ class CohereInstrumentor(DisseqtInstrumentor):
 # ---------------------------------------------------------------------
 # Attribute writers
 # ---------------------------------------------------------------------
-def _set_request_attrs(span: DisseqtSpan, kwargs: dict[str, Any]) -> None:
+def _set_request_attrs(
+    span: DisseqtSpan, kwargs: dict[str, Any], *, is_stream: bool = False
+) -> None:
     model = kwargs.get(KW_MODEL, "")
     span.set_model_info(model, PROVIDER)
     span.set_operation(AgenticOperation.CHAT)
     safe_set(span, GenAIAttributes.SYSTEM, SYSTEM)
     safe_set(span, GenAIAttributes.REQUEST_MODEL, model)
     safe_set(span, GenAIAttributes.OPERATION_NAME, GenAIOperation.CHAT)
+    # Cohere v2 splits streaming by method name (chat vs chat_stream)
+    # rather than a kwarg, so is_stream is passed in by the wrapper
+    # instead of being read from kwargs. Emit it so dashboards filtering
+    # on gen_ai.request.is_stream don't misclassify Cohere spans
+    # (TP-2128 Appendix).
+    safe_set(span, GenAIAttributes.REQUEST_IS_STREAM, is_stream)
 
     for key, agentic_key, gen_ai_key in (
         ("temperature", AgenticAttributes.REQUEST_TEMPERATURE, GenAIAttributes.REQUEST_TEMPERATURE),
@@ -173,7 +181,7 @@ def _sync_chat(instrumentor: CohereInstrumentor) -> Callable[..., Any]:
     def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         scope = open_llm_span(instrumentor.client, "cohere.chat", SpanKind.MODEL_EXEC)
         span = scope.span
-        safe_call(_set_request_attrs, span, kwargs)
+        safe_call(_set_request_attrs, span, kwargs, is_stream=False)
         try:
             result = wrapped(*args, **kwargs)
         except BaseException as exc:
@@ -192,7 +200,7 @@ def _async_chat(instrumentor: CohereInstrumentor) -> Callable[..., Any]:
     ) -> Any:
         scope = open_llm_span(instrumentor.client, "cohere.chat", SpanKind.MODEL_EXEC)
         span = scope.span
-        safe_call(_set_request_attrs, span, kwargs)
+        safe_call(_set_request_attrs, span, kwargs, is_stream=False)
         try:
             result = await wrapped(*args, **kwargs)
         except BaseException as exc:
@@ -355,7 +363,7 @@ def _sync_stream(instrumentor: CohereInstrumentor) -> Callable[..., Any]:
     def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         scope = open_llm_span(instrumentor.client, "cohere.chat_stream", SpanKind.MODEL_EXEC)
         span = scope.span
-        safe_call(_set_request_attrs, span, kwargs)
+        safe_call(_set_request_attrs, span, kwargs, is_stream=True)
         try:
             result = wrapped(*args, **kwargs)
         except BaseException as exc:
@@ -385,7 +393,7 @@ def _async_stream(instrumentor: CohereInstrumentor) -> Callable[..., Any]:
     def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         scope = open_llm_span(instrumentor.client, "cohere.chat_stream", SpanKind.MODEL_EXEC)
         span = scope.span
-        safe_call(_set_request_attrs, span, kwargs)
+        safe_call(_set_request_attrs, span, kwargs, is_stream=True)
         try:
             result = wrapped(*args, **kwargs)  # no await — this is already an async generator
         except BaseException as exc:
