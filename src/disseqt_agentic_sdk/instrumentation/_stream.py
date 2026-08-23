@@ -51,7 +51,11 @@ class SyncStreamWrapper:
         except StopIteration:
             self._finish(None, None, None)
             raise
-        except Exception as exc:
+        except BaseException as exc:
+            # BaseException (not Exception) so `asyncio.CancelledError`,
+            # `GeneratorExit`, and `KeyboardInterrupt` still finalize the
+            # span. Client disconnect mid-stream is a normal production
+            # event that raises CancelledError, not a bug.
             self._finish(type(exc), exc, exc.__traceback__)
             raise
         with contextlib.suppress(Exception):
@@ -109,7 +113,11 @@ class AsyncStreamWrapper:
         except StopAsyncIteration:
             self._finish(None, None, None)
             raise
-        except Exception as exc:
+        except BaseException as exc:
+            # BaseException (not Exception) so `asyncio.CancelledError`,
+            # `GeneratorExit`, and `KeyboardInterrupt` still finalize the
+            # span. Client disconnect mid-stream is a normal production
+            # event that raises CancelledError, not a bug.
             self._finish(type(exc), exc, exc.__traceback__)
             raise
         with contextlib.suppress(Exception):
