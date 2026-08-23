@@ -643,6 +643,60 @@ class TestBase:
             except AttributeError:
                 pass
 
+    def test_concurrent_instrument_all_calls_are_race_free(self, recording_client):
+        """
+        TP-2128 Appendix: instrument() has a race-free test but
+        instrument_all() didn't. It's a thin wrapper that iterates the
+        registry and delegates to instrument() so the risk is low, but
+        low-risk still isn't zero — race 16 threads calling
+        instrument_all() on the same client and assert:
+          * every provider that got instrumented did so exactly once
+            (no duplicate wrapt patches);
+          * _ACTIVE has a single entry per provider name;
+          * the total successful returned-names count across threads
+            matches how many providers actually installed (one winner
+            per provider, everyone else sees already_instrumented).
+        """
+        results: list[list[str]] = []
+        results_lock = threading.Lock()
+        barrier = threading.Barrier(16)
+
+        def worker() -> None:
+            barrier.wait()
+            names = instrument_all(recording_client)
+            with results_lock:
+                results.append(names)
+
+        # Start from a clean slate so this test doesn't inherit state
+        # from earlier tests in the class.
+        uninstrument_all()
+        try:
+            threads = [threading.Thread(target=worker) for _ in range(16)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            # Every provider name should appear in _ACTIVE exactly once
+            # and only once across the whole race. Total winners
+            # (True returns) across threads = number of providers that
+            # actually installed.
+            total_winners = sum(len(r) for r in results)
+            expected_installed = len(auto_module._ACTIVE)
+            assert (
+                total_winners == expected_installed
+            ), f"expected {expected_installed} winners across threads, got {total_winners}"
+
+            # No provider name appears more than once in the union of
+            # winners — proves no two threads both thought they were the
+            # first to install the same provider.
+            all_winners = [name for r in results for name in r]
+            assert len(all_winners) == len(
+                set(all_winners)
+            ), f"duplicate winners for same provider: {all_winners}"
+        finally:
+            uninstrument_all()
+
     def test_concurrent_instrument_calls_are_race_free(self, recording_client):
         # Many threads racing on the same provider must produce exactly one
         # successful instrument() and one registry entry — no duplicate
