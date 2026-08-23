@@ -292,14 +292,21 @@ def _sync_stream(instrumentor: CohereInstrumentor) -> Callable[..., Any]:
 
 
 def _async_stream(instrumentor: CohereInstrumentor) -> Callable[..., Any]:
-    async def wrapper(
-        wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
-    ) -> Any:
+    # NOTE: this wrapper is intentionally a plain `def`, not `async def`.
+    # Cohere's `AsyncV2Client.chat_stream` is an async **generator function**,
+    # not a coroutine — calling it returns an async-generator object
+    # immediately. Awaiting an async generator raises
+    # `TypeError: object async_generator can't be used in 'await' expression`.
+    # wrapt calls the returned wrapper as `wrapper(wrapped, instance, args,
+    # kwargs)` and passes its return value straight through to the caller,
+    # so returning the AsyncStreamWrapper directly (which is itself an
+    # async iterator) preserves `async for chunk in client.chat_stream(...)`.
+    def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         scope = open_llm_span(instrumentor.client, "cohere.chat_stream", SpanKind.MODEL_EXEC)
         span = scope.span
         safe_call(_set_request_attrs, span, kwargs)
         try:
-            result = await wrapped(*args, **kwargs)
+            result = wrapped(*args, **kwargs)  # no await — this is already an async generator
         except Exception as exc:
             scope.__exit__(type(exc), exc, exc.__traceback__)
             raise

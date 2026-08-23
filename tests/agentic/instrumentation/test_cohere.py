@@ -72,6 +72,65 @@ class TestCohereChat:
         assert attrs[GenAIAttributes.RESPONSE_FINISH_REASONS] == ["COMPLETE"]
 
 
+class TestCohereAsyncStream:
+    def test_async_stream_does_not_await_async_generator(self, recording_client):
+        """
+        Regression: Cohere's ``AsyncV2Client.chat_stream`` is an async
+        **generator function**, not a coroutine — calling it returns an
+        async-generator object immediately. If the wrapper does
+        ``await wrapped(...)`` the call raises ``TypeError: object
+        async_generator can't be used in 'await' expression``. This test
+        uses a real async-generator replacement (not ``AsyncMock``, which
+        would happily be awaited and hide the bug).
+        """
+        import asyncio
+
+        from cohere.v2.client import AsyncV2Client
+
+        events = [
+            MagicMock(type="message-start", id="cohere-async-stream"),
+            MagicMock(
+                type="content-delta",
+                delta=MagicMock(message=MagicMock(content=MagicMock(text="Paris."))),
+            ),
+            MagicMock(
+                type="message-end",
+                delta=MagicMock(finish_reason="COMPLETE"),
+            ),
+        ]
+
+        async def fake_chat_stream(self, *args, **kwargs):
+            for evt in events:
+                yield evt
+
+        original = AsyncV2Client.chat_stream
+        AsyncV2Client.chat_stream = fake_chat_stream
+        try:
+            instrument("cohere", recording_client)
+            try:
+                aclient = cohere.AsyncClientV2(api_key="fake")
+
+                async def _consume() -> list:
+                    stream = aclient.chat_stream(
+                        model="command-r-plus",
+                        messages=[{"role": "user", "content": "x"}],
+                    )
+                    out = []
+                    async for chunk in stream:
+                        out.append(chunk)
+                    return out
+
+                chunks = asyncio.run(_consume())
+            finally:
+                uninstrument("cohere")
+        finally:
+            AsyncV2Client.chat_stream = original
+
+        # If the wrapper had awaited the async-gen function, asyncio.run
+        # would have raised TypeError long before we got here.
+        assert len(chunks) == 3
+
+
 class TestCohereToolCalls:
     def test_captures_tool_calls_on_message(self, recording_client):
         # Cohere v2 puts tool calls on `response.message.tool_calls` in the
