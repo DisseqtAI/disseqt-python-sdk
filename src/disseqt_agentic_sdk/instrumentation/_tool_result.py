@@ -28,6 +28,7 @@ their own aggregator with no bleed-through.
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -160,10 +161,12 @@ def agent_span(
 
     span = trace.start_span(name, SpanKind.AGENT_EXEC)
     if agent_name:
-        try:
+        # Observability code never crashes the caller. set_agent_info can
+        # fail on span-shape mismatches — swallow with the same policy
+        # used elsewhere (contextlib.suppress for pure swallows, matching
+        # the safe_set / safe_call convention).
+        with contextlib.suppress(Exception):
             span.set_agent_info(agent_name)
-        except Exception:  # noqa: BLE001
-            pass
 
     agg = _ToolCallAggregator()
     token = _current_agg.set(agg)
