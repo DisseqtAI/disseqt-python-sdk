@@ -32,12 +32,12 @@ def _reset_and_stub(monkeypatch):
 
 
 def _make_client(**overrides):
-    kwargs = dict(
-        api_key="test_key",
-        project_id="test_proj",
-        service_name="test_service",
-        endpoint="http://localhost/v1/traces",
-    )
+    kwargs = {
+        "api_key": "test_key",
+        "project_id": "test_proj",
+        "service_name": "test_service",
+        "endpoint": "http://localhost/v1/traces",
+    }
     kwargs.update(overrides)
     return DisseqtAgenticClient(**kwargs)
 
@@ -45,7 +45,8 @@ def _make_client(**overrides):
 def _application_id_notices(records):
     """Filter caplog records down to just our notice."""
     return [
-        r for r in records
+        r
+        for r in records
         if r.name == "disseqt_agentic_sdk"
         and r.levelno == logging.WARNING
         and "application_id" in r.getMessage()

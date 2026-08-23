@@ -146,7 +146,9 @@ class DisseqtAgenticClient:
         # to Kong would either fail strict verify or short-circuit to
         # project-only scope depending on the plugin's require flag —
         # cleaner to just not send the header at all.
-        self.application_id = application_id.strip() if application_id and application_id.strip() else None
+        self.application_id = (
+            application_id.strip() if application_id and application_id.strip() else None
+        )
 
         # Nudge callers who haven't wired an application_id yet. One-shot
         # per process; silenced via `DISSEQT_SDK_DISABLE_APPLICATION_ID_NOTICE=1`

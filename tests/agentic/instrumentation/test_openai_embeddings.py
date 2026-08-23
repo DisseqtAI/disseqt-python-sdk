@@ -33,8 +33,7 @@ def _fake_embedding_response(vectors: list[list[float]]) -> CreateEmbeddingRespo
         object="list",
         model="text-embedding-3-small",
         data=[
-            Embedding(index=i, embedding=vec, object="embedding")
-            for i, vec in enumerate(vectors)
+            Embedding(index=i, embedding=vec, object="embedding") for i, vec in enumerate(vectors)
         ],
         usage=Usage(prompt_tokens=8, total_tokens=8),
     )

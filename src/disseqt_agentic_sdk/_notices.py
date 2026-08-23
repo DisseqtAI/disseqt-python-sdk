@@ -44,8 +44,7 @@ def notify_missing_application_id() -> None:
         _warned_missing_application_id = True
     try:
         _notice_logger.warning(
-            "Please use application_id while sending spans. "
-            "Check docs for more details: %s",
+            "Please use application_id while sending spans. " "Check docs for more details: %s",
             APPLICATIONS_REGISTRY_DOCS_URL,
         )
     except Exception:  # noqa: BLE001 — notice channel is strictly best-effort

@@ -55,7 +55,9 @@ def _fake() -> ChatCompletion:
 
 def _call(client: OpenAI) -> None:
     with patch.object(client.chat.completions, "_post", return_value=_fake(), create=True):
-        client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": "x"}])
+        client.chat.completions.create(
+            model="gpt-4o-mini", messages=[{"role": "user", "content": "x"}]
+        )
 
 
 class TestCustomAttrs:
