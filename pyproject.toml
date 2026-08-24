@@ -189,13 +189,28 @@ dev = [
     "requests-mock>=1.12.1",
     "ruff>=0.14.2",
     "types-requests>=2.32.4.20250913",
+    # packaging + tomli are used by test_pyproject_min_versions to
+    # parse this file at test-time. Declared explicitly (not just
+    # relied on transitively via pytest/black) so the test can never
+    # ImportError against a leaner future dev-deps set. TP-2128
+    # round-2 Appendix nit.
+    "packaging>=24.0",
+    "tomli>=2.0.0; python_version < '3.11'",
     # Provider SDKs for instrumentation tests (real SDK objects, mocked HTTP).
-    "openai>=1.0.0",
-    "anthropic>=0.20.0",
+    # Floors here MUST match each instrumentor.min_version — the extras
+    # in [project.optional-dependencies] mirror them for end-user
+    # installs. The regression test walks both sections so drift here
+    # can't sneak back in silently. TP-2128 round-2 P2 #2.2.
+    "openai>=1.50.0",
+    "anthropic>=0.40.0",
     "groq>=0.11.0",
-    "mistralai>=1.0.0",
-    "cohere>=5.0.0",
+    "mistralai>=1.5.0",
+    "cohere>=5.11.0",
     "google-generativeai>=0.7.0",
     "litellm>=1.40.0",
+    # google-genai dev floor stays at 2.16.0 (higher than the extras
+    # floor of 1.0.0) because the test suite uses newer type shapes.
+    # The regression test allows the dev floor to be >= the extras
+    # floor for the same package.
     "google-genai>=2.16.0",
 ]

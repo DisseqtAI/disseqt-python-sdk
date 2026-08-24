@@ -61,6 +61,18 @@ def _load_extras() -> dict[str, list[str]]:
     return data["project"]["optional-dependencies"]
 
 
+def _load_dev_deps() -> list[str]:
+    """
+    Return the `[dependency-groups].dev` requirement strings — what
+    CI and contributors resolve for tests. Historically drifted from
+    the user-facing extras (TP-2128 round-2 P2 #2.2); the two must
+    stay in sync so a test environment can't satisfy an old floor
+    while a fresh user install gets the newer one.
+    """
+    data = tomllib.loads((_repo_root() / "pyproject.toml").read_text())
+    return data["dependency-groups"]["dev"]
+
+
 def _floor_for_dist(reqs: list[str], dist: str) -> Version:
     """Return the >= floor declared for `dist` in a list of requirement strings."""
     for r in reqs:
@@ -110,4 +122,44 @@ class TestPyprojectMinVersions:
                 f"[instrumentation] bundle floor {bundle_floor} for "
                 f"{extra_name} is looser than the [{extra_name}] extra's "
                 f"floor {per_provider_floor}."
+            )
+
+    def test_dev_deps_floor_matches_runtime_min_version(self):
+        """
+        TP-2128 round-2 P2 #2.2: the round-1 fix bumped
+        [project.optional-dependencies] only; [dependency-groups].dev
+        (what CI and contributors resolve) stayed at the pre-fix stale
+        floors, so CI tests kept passing against versions the runtime
+        rejects. Assert dev floors also match each instrumentor's
+        min_version so the two sections can't drift apart again.
+        """
+        dev = _load_dev_deps()
+        for provider in _EXTRA_TO_PROVIDER.values():
+            dist = _PROVIDER_TO_DIST[provider]
+            declared = _floor_for_dist(dev, dist)
+            required = _instrumentor_min_version(provider)
+            assert declared >= required, (
+                f"[dependency-groups].dev declares {dist}>={declared}, but "
+                f"{provider} instrumentor requires {dist}>={required}. "
+                f"CI would silently pass while a fresh user install fails."
+            )
+
+    def test_dev_deps_floor_is_at_least_extra_floor(self):
+        """
+        Each provider's dev floor must be >= its user-facing extra
+        floor. Prevents a resolver split where the test suite runs
+        against an older shape than the minimum shape end users can
+        install.
+        """
+        extras = _load_extras()
+        dev = _load_dev_deps()
+        for extra_name, provider in _EXTRA_TO_PROVIDER.items():
+            dist = _PROVIDER_TO_DIST[provider]
+            extra_floor = _floor_for_dist(extras[extra_name], dist)
+            dev_floor = _floor_for_dist(dev, dist)
+            assert dev_floor >= extra_floor, (
+                f"[dependency-groups].dev floor {dist}>={dev_floor} is "
+                f"looser than the [{extra_name}] extra floor "
+                f"{dist}>={extra_floor}. CI would pass against a shape "
+                f"users can't install."
             )
