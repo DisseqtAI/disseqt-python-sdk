@@ -34,6 +34,7 @@ def initialized_client(mock_trace_buffer, mock_http_transport):
         project_id="test_proj",
         service_name="test_service",
         endpoint="http://localhost:8080/v1/traces",
+        application_id="test-app-id",
     )
     yield client
     client.shutdown()

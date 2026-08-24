@@ -50,6 +50,7 @@ def recording_client(monkeypatch):
         project_id="test_proj",
         service_name="test_service",
         endpoint="http://localhost/v1/traces",
+        application_id="test-app-id",
     )
     yield client
     uninstrument_all()

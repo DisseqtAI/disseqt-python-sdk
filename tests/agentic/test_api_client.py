@@ -30,6 +30,7 @@ class TestAPIClientHelpers:
                 api_key="test_key",
                 project_id="test_proj",
                 service_name="test_service",
+                application_id="test-app-id",
             )
             set_client(client)
 
@@ -57,6 +58,7 @@ class TestAPIClientHelpers:
                 api_key="test_key",
                 project_id="test_proj",
                 service_name="test_service",
+                application_id="test-app-id",
             )
             set_client(client)
 
@@ -86,6 +88,7 @@ class TestAPIClientHelpers:
                 api_key="test_key",
                 project_id="test_proj",
                 service_name="test_service",
+                application_id="test-app-id",
             )
             set_client(client)
 
@@ -115,6 +118,7 @@ class TestAPIClientHelpers:
                 api_key="test_key",
                 project_id="test_proj",
                 service_name="test_service",
+                application_id="test-app-id",
             )
             set_client(client)
 

@@ -10,7 +10,8 @@ client = DisseqtAgenticClient(
     api_key="your-api-key",
     project_id="proj_456",
     service_name="my-service",
-    endpoint="http://localhost:8080/v1/traces"
+    endpoint="http://localhost:8080/v1/traces",
+    application_id="your-application-uuid",  # required
 )
 ```
 
@@ -63,19 +64,18 @@ client.shutdown()
 ### Client Initialization
 ```python
 client = DisseqtAgenticClient(
-    api_key: str,              # Required: API key for authentication
-    org_id: str,               # Required: Organization ID
+    api_key: str,               # Required: API key for authentication
     project_id: str,            # Required: Project ID
     service_name: str,          # Required: Service name
     endpoint: str,              # Required: Backend endpoint URL
+    *,                          # everything below is keyword-only
+    application_id: str,        # Required: X-Application-Id header value
     service_version: str = "1.0.0",
     environment: str = "production",
-    user_id: str = "",
     max_batch_size: int = 100,
     flush_interval: float = 1.0,
-    timeout: float = 10.0,
     max_retries: int = 3,
-    verify_ssl: bool = True
+    realtime_policy_id: str | None = None,
 )
 ```
 

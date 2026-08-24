@@ -6,7 +6,9 @@ Usage:
     from disseqt_agentic_sdk import DisseqtAgenticClient
     from disseqt_agentic_sdk.instrumentation import instrument_all
 
-    client = DisseqtAgenticClient(api_key=..., project_id=..., service_name="my-app")
+    client = DisseqtAgenticClient(
+        api_key=..., project_id=..., service_name="my-app", application_id=...
+    )
     instrument_all(client)
 
     # From here on, every openai.chat.completions.create() / anthropic

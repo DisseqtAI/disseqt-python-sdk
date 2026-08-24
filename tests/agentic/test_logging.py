@@ -126,6 +126,7 @@ class TestAgenticClientDoesNotLogProjectId:
                     project_id="PID-SENTINEL-123",
                     service_name="svc",
                     endpoint="http://localhost:8080/v1/traces",
+                    application_id="test-app-id",
                 )
                 client.shutdown()
             text = buf.getvalue()

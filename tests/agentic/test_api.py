@@ -25,6 +25,7 @@ class TestPublicAPI:
             project_id="proj_456",
             service_name="test_service",
             endpoint="http://localhost:8080/v1/traces",
+            application_id="test-app-id",
         )
 
         assert client is not None
@@ -53,12 +54,22 @@ class TestPublicAPI:
     def test_client_empty_project_id(self):
         """Test client fails with empty project_id."""
         with pytest.raises(ValueError, match="project_id is required"):
-            DisseqtAgenticClient(api_key="key", project_id="", service_name="test")
+            DisseqtAgenticClient(
+                api_key="key",
+                project_id="",
+                service_name="test",
+                application_id="test-app-id",
+            )
 
     def test_client_empty_api_key(self):
         """Test client fails with empty api_key."""
         with pytest.raises(ValueError, match="api_key is required"):
-            DisseqtAgenticClient(api_key="", project_id="proj_456", service_name="test")
+            DisseqtAgenticClient(
+                api_key="",
+                project_id="proj_456",
+                service_name="test",
+                application_id="test-app-id",
+            )
 
     def test_client_empty_endpoint(self):
         """Test client fails with empty endpoint."""
@@ -68,6 +79,7 @@ class TestPublicAPI:
                 project_id="proj_456",
                 service_name="test",
                 endpoint="",
+                application_id="test-app-id",
             )
 
     def test_client_empty_environment(self):
@@ -78,6 +90,7 @@ class TestPublicAPI:
                 project_id="proj_456",
                 service_name="test",
                 environment="",
+                application_id="test-app-id",
             )
 
     @patch("disseqt_agentic_sdk.transport.http.HTTPTransport")
@@ -85,7 +98,10 @@ class TestPublicAPI:
     def test_start_trace(self, mock_trace_buffer, mock_http_transport):
         """Test starting a trace."""
         client = DisseqtAgenticClient(
-            api_key="test_key", project_id="proj_456", service_name="test_service"
+            api_key="test_key",
+            project_id="proj_456",
+            service_name="test_service",
+            application_id="test-app-id",
         )
 
         with start_trace(client, "test_trace", intent_id="intent_123") as trace:
@@ -98,7 +114,10 @@ class TestPublicAPI:
     def test_start_trace_with_spans(self, mock_trace_buffer, mock_http_transport):
         """Test starting a trace with spans."""
         client = DisseqtAgenticClient(
-            api_key="test_key", project_id="proj_456", service_name="test_service"
+            api_key="test_key",
+            project_id="proj_456",
+            service_name="test_service",
+            application_id="test-app-id",
         )
 
         with start_trace(client, "test_trace") as trace:
@@ -112,7 +131,10 @@ class TestPublicAPI:
     def test_client_flush(self, mock_trace_buffer, mock_http_transport):
         """Test flushing spans."""
         client = DisseqtAgenticClient(
-            api_key="test_key", project_id="proj_456", service_name="test_service"
+            api_key="test_key",
+            project_id="proj_456",
+            service_name="test_service",
+            application_id="test-app-id",
         )
 
         # Flush should not raise error
@@ -123,7 +145,10 @@ class TestPublicAPI:
     def test_client_shutdown(self, mock_trace_buffer, mock_http_transport):
         """Test SDK shutdown."""
         client = DisseqtAgenticClient(
-            api_key="test_key", project_id="proj_456", service_name="test_service"
+            api_key="test_key",
+            project_id="proj_456",
+            service_name="test_service",
+            application_id="test-app-id",
         )
 
         # Shutdown should not raise error

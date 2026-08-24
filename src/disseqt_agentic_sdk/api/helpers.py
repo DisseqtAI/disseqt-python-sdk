@@ -225,7 +225,7 @@ def trace_function(
         **span_attrs: Additional span attributes
 
     Example:
-        >>> client = DisseqtAgenticClient(...)
+        >>> client = DisseqtAgenticClient(..., application_id="...")
         >>> @trace_function(client, name="my_function")
         ... def my_function():
         ...     return "result"

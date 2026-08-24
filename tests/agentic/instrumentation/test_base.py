@@ -92,6 +92,7 @@ class TestBase:
             project_id="other",
             service_name="other",
             endpoint="http://localhost/v1/traces",
+            application_id="test-app-id",
         )
 
         assert instrument("openai", recording_client) is True

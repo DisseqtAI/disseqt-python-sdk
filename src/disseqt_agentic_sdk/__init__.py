@@ -19,7 +19,8 @@ Quick Start:
         api_key="your-key",
         project_id="proj_456",
         service_name="my-service",
-        endpoint="http://localhost:8080/v1/traces"
+        endpoint="http://localhost:8080/v1/traces",
+        application_id="your-application-uuid",
     )
 
     # Create traces with spans
