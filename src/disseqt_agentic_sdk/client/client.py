@@ -202,9 +202,7 @@ class DisseqtAgenticClient:
         if not application_id or not application_id.strip():
             raise ValueError(
                 "application_id is required and cannot be empty. "
-                "Every trace POST needs the X-Application-Id header for "
-                "Kong's traces-auth check; see "
-                "https://disseqt.atlassian.net/wiki/spaces/dpe/pages/applications-registry "
+                "See https://docs.disseqt.ai/docs/disseqt-sdk/agentic-observability/applications-registry "
                 "for how to obtain one."
             )
 
