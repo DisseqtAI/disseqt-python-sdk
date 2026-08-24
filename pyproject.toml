@@ -38,22 +38,24 @@ dependencies = [
 # so `instrument_all()` silently no-ops the provider (TP-2128 P1 #1.5).
 #
 # Extras name → registry key mapping (TP-2128 P2 #2.13):
-# Two extras have short human-friendly names that DO NOT match the
-# registry key you pass to `instrument("<key>", client)`. Use the key
-# from the right column with instrument() / instrument_all():
+# The two short extras below (``[gemini]``, ``[mistral]``) don't match
+# their pip-package registry keys (``google-genai``, ``mistralai``).
+# Both names work at the ``instrument(...)`` call site — the registry
+# carries aliases so either the extras name or the canonical key
+# resolves to the same instrumentor:
 #
-#   Extra name       Registry key ( pass to `instrument(...)` )
-#   ---------------  ------------------------------------------
-#   [openai]         openai
-#   [anthropic]      anthropic
-#   [groq]           groq
-#   [cohere]         cohere
-#   [litellm]        litellm
-#   [mistral]        mistralai          # <— extra != registry key
-#   [gemini]         google-genai       # <— extra != registry key
+#   Extra name       Canonical registry key    Both accepted by instrument()?
+#   ---------------  ------------------------  ------------------------------
+#   [openai]         openai                    yes
+#   [anthropic]      anthropic                 yes
+#   [groq]           groq                      yes
+#   [cohere]         cohere                    yes
+#   [litellm]        litellm                   yes
+#   [mistral]        mistralai                 yes (alias → mistralai)
+#   [gemini]         google-genai              yes (alias → google-genai)
 #
-# If instrument("gemini", client) or instrument("mistral", client) is a
-# no-op for you, this is why — the registry key is the one on the right.
+# instrument_all() walks the canonical keys only, so each instrumentor
+# is applied exactly once regardless of which alias a caller uses.
 [project.optional-dependencies]
 openai = ["openai>=1.50.0"]
 anthropic = ["anthropic>=0.40.0"]
