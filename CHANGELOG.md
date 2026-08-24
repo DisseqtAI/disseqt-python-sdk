@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **BREAKING** — ``application_id`` is now a **required, keyword-only**
+  argument to ``DisseqtAgenticClient(...)``. Missing raises
+  ``TypeError`` at Python's argument-binding stage; empty /
+  whitespace-only raises ``ValueError`` at construction. Kong's
+  traces-auth plugin drops every trace POST without a matching
+  ``X-Application-Id`` header, so constructing a client that will
+  never deliver spans is now impossible. Migration: add
+  ``application_id="your-application-uuid"`` to every
+  ``DisseqtAgenticClient(...)`` call — obtain the value from the
+  Applications Registry (URL in the ``ValueError`` message).
+
+### Removed
+- ``disseqt_agentic_sdk._notices`` module and the
+  ``DISSEQT_SDK_DISABLE_APPLICATION_ID_NOTICE`` env var — the
+  missing-application_id WARNING notice (introduced in 0.10.0 as an
+  interim nudge) is dead code once the field is required.
+
 ## [0.11.0] - 2026-08-24
 
 _Everything below was originally staged under a hand-bumped 0.10.0 that

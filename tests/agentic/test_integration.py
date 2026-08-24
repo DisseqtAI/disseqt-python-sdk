@@ -20,6 +20,7 @@ class TestIntegration:
             project_id="proj_456",
             service_name="test_service",
             endpoint="http://localhost:8080/v1/traces",
+            application_id="test-app-id",
         )
 
         with start_trace(client, "integration_test", intent_id="intent_123") as trace:
@@ -55,6 +56,7 @@ class TestIntegration:
                 api_key="test_key",
                 project_id="proj_456",
                 service_name="test_service",
+                application_id="test-app-id",
             )
 
             # Directly add a span to buffer to test the transport
@@ -84,7 +86,10 @@ class TestIntegration:
     def test_context_nesting(self, mock_trace_buffer, mock_http_transport):
         """Test nested span context management."""
         client = DisseqtAgenticClient(
-            api_key="test_key", project_id="proj_456", service_name="test_service"
+            api_key="test_key",
+            project_id="proj_456",
+            service_name="test_service",
+            application_id="test-app-id",
         )
 
         with start_trace(client, "nested_test") as trace:

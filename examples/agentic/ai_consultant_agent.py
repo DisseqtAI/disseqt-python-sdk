@@ -40,6 +40,7 @@ try:
         service_version="1.0.0",
         environment=os.getenv("DISSEQT_ENV", "production"),
         endpoint=os.getenv("DISSEQT_ENDPOINT", "http://localhost:8080/v1/traces"),
+        application_id=os.environ["DISSEQT_APPLICATION_ID"],
     )
     DISSEQT_CLIENT = client
     logger.info("✅ Disseqt SDK initialized")

@@ -31,6 +31,7 @@ class TestClientPolicyIdPassthrough:
             service_name="svc",
             endpoint="http://localhost/traces",
             realtime_policy_id="pol-123",
+            application_id="test-app-id",
         )
         mock_transport.assert_called_once()
         _, kwargs = mock_transport.call_args
@@ -44,6 +45,7 @@ class TestClientPolicyIdPassthrough:
             project_id="p",
             service_name="svc",
             endpoint="http://localhost/traces",
+            application_id="test-app-id",
         )
         _, kwargs = mock_transport.call_args
         assert kwargs["realtime_policy_id"] is None

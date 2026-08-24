@@ -118,7 +118,12 @@ class TestTraceWrapperCoverage:
             patch("disseqt_agentic_sdk.client.client.HTTPTransport"),
             patch("disseqt_agentic_sdk.client.client.TraceBuffer"),
         ):
-            self.client = DisseqtAgenticClient(api_key="k", project_id="p", service_name="s")
+            self.client = DisseqtAgenticClient(
+                api_key="k",
+                project_id="p",
+                service_name="s",
+                application_id="test-app-id",
+            )
             set_client(self.client)
             yield
             try:
