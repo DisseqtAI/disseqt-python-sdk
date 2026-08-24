@@ -78,6 +78,25 @@ class HTTPTransport:
         """
         Send spans to the backend API in Custom Format.
 
+        Backwards-compatible wrapper around ``send_spans_with_failures``
+        that collapses per-group outcomes into a single ``all_ok`` bool.
+        Prefer ``send_spans_with_failures`` for callers that need to
+        distinguish which spans failed (e.g. the retry buffer, which
+        must not re-POST spans a partial-failure batch already
+        delivered — TP-2128 round-2 P1 #1.2).
+
+        Args:
+            spans: List of EnrichedSpan objects to send
+
+        Returns:
+            bool: True if every group sent successfully, False otherwise
+        """
+        return not self.send_spans_with_failures(spans)
+
+    def send_spans_with_failures(self, spans: list[EnrichedSpan]) -> list[EnrichedSpan]:
+        """
+        Send spans and return the ones that failed to deliver.
+
         Spans are grouped by their per-trace ``realtime_policy_id`` (with
         the client default as the fallback) and each distinct group is
         sent as its own HTTP POST. This is what makes per-trace policy
@@ -87,14 +106,15 @@ class HTTPTransport:
         produce a single POST so there's no extra HTTP cost in the common
         case.
 
-        Args:
-            spans: List of EnrichedSpan objects to send
-
         Returns:
-            bool: True if every group sent successfully, False otherwise
+            list[EnrichedSpan]: exactly the spans that failed to send.
+            Empty list on full success. The retry buffer uses this so
+            successfully-delivered groups aren't re-POSTed on the next
+            flush after a partial-failure batch (TP-2128 round-2 P1
+            #1.2).
         """
         if not spans:
-            return True
+            return []
 
         # Bucket spans by the policy that should be stamped on their
         # outgoing resource block. Empty string means "no per-trace
@@ -104,11 +124,11 @@ class HTTPTransport:
             pid = getattr(span, "realtime_policy_id", "") or self.realtime_policy_id or ""
             groups.setdefault(pid, []).append(span)
 
-        all_ok = True
+        failed: list[EnrichedSpan] = []
         for pid, group in groups.items():
             if not self._send_group(pid, group):
-                all_ok = False
-        return all_ok
+                failed.extend(group)
+        return failed
 
     def _send_group(self, policy_id: str, spans: list[EnrichedSpan]) -> bool:
         """Send one resource-block's worth of spans (single policy_id)."""

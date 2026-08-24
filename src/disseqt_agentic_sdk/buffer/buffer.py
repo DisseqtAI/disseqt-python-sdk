@@ -111,23 +111,30 @@ class TraceBuffer:
             },
         )
 
-        # Only clear the buffer if the send actually succeeded — the old
-        # code cleared unconditionally and discarded send_spans()' return,
-        # so a 401/403/network failure silently dropped user telemetry.
-        # On failure, keep the spans and let the next flush retry, but
-        # cap retained spans to avoid unbounded growth against a hard
-        # outage.
-        ok = self.transport.send_spans(spans_to_send)
-        if ok:
-            # Newer spans may have been appended while the send was in
-            # flight (we hold the lock, so actually no — but keep the
-            # semantic explicit). Drop the sent prefix; keep the rest.
-            self.buffer = self.buffer[span_count:]
-        else:
+        # Retain only the spans that actually failed to send. Using
+        # send_spans_with_failures (not the bool-returning send_spans)
+        # gives per-group granularity: a multi-policy_id batch where
+        # one group succeeds and another fails now retains only the
+        # failing group's spans, so the succeeded group isn't
+        # re-POSTed on the next flush (round-2 P1 #1.2 — the earlier
+        # round-1 fix retained the whole batch, silently double-
+        # delivering the succeeded group).
+        failed_spans = self.transport.send_spans_with_failures(spans_to_send)
+        # Rebuild the buffer: drop the sent-and-succeeded prefix from
+        # the front, put the failed spans back (they retain their
+        # relative order for stable retry), then append anything that
+        # was added after the flush started (nothing today under the
+        # lock, but the semantic stays correct if that changes).
+        tail = self.buffer[span_count:]
+        self.buffer = failed_spans + tail
+
+        if failed_spans:
             logger.warning(
-                "Buffer flush failed — retaining spans for retry",
+                "Buffer flush partially/fully failed — retaining failed spans for retry",
                 extra={
-                    "span_count": span_count,
+                    "attempted": span_count,
+                    "failed": len(failed_spans),
+                    "succeeded": span_count - len(failed_spans),
                     "buffer_size_after": len(self.buffer),
                     "max_retained_spans": self.max_retained_spans,
                 },

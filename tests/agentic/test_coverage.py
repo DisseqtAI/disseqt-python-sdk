@@ -166,9 +166,17 @@ class TestBufferCoverage:
     @pytest.fixture(autouse=True)
     def setup(self):
         self.transport = Mock(spec=HTTPTransport)
+        # Default the retention-critical method to a stable "no failures"
+        # return so the background flush thread doesn't trip the
+        # `Mock + list` addition inside _flush_locked between tests.
+        self.transport.send_spans_with_failures.return_value = []
         self.buffer = TraceBuffer(self.transport, max_batch_size=3, flush_interval=0.1)
         yield
-        # No cleanup needed - buffer doesn't have stop() method
+        # Stop the flush thread so no daemon flush fires after the
+        # transport mock is torn down.
+        self.buffer._stop_flush_thread = True
+        if self.buffer._flush_thread:
+            self.buffer._flush_thread.join(timeout=0.5)
 
     def test_buffer_add_span(self):
         """Test add_span method."""
@@ -181,7 +189,9 @@ class TestBufferCoverage:
 
     def test_buffer_add_span_flush_on_batch_size(self):
         """Test add_span triggers flush when batch size reached."""
-        self.transport.send_spans.return_value = True
+        # Buffer now calls send_spans_with_failures (P1 #1.2). Empty
+        # list = full success.
+        self.transport.send_spans_with_failures.return_value = []
 
         # Add spans up to batch size
         for i in range(3):
@@ -196,12 +206,12 @@ class TestBufferCoverage:
             self.buffer.add_span(span)
 
         # Should have flushed
-        self.transport.send_spans.assert_called_once()
+        self.transport.send_spans_with_failures.assert_called_once()
         assert len(self.buffer.buffer) == 0
 
     def test_buffer_add_spans_flush_on_batch_size(self):
         """Test add_spans triggers flush when batch size reached."""
-        self.transport.send_spans.return_value = True
+        self.transport.send_spans_with_failures.return_value = []
 
         spans = [
             EnrichedSpan(
@@ -216,7 +226,7 @@ class TestBufferCoverage:
         ]
 
         self.buffer.add_spans(spans)
-        self.transport.send_spans.assert_called_once()
+        self.transport.send_spans_with_failures.assert_called_once()
 
     def test_buffer_should_flush(self):
         """Test should_flush method."""
@@ -277,25 +287,64 @@ class TestBufferFailurePolicy:
         )
 
     def test_failed_send_retains_spans_for_retry(self):
-        self.transport.send_spans.return_value = False
-        self.buffer.buffer.extend([self._mk(0), self._mk(1)])
+        # All spans fail → all retained.
+        spans = [self._mk(0), self._mk(1)]
+        self.transport.send_spans_with_failures.return_value = spans
+        self.buffer.buffer.extend(spans)
         self.buffer.flush()
 
-        # Spans are still there — a retry could recover them.
         assert (
             len(self.buffer.buffer) == 2
         ), f"failed send must retain spans, got {len(self.buffer.buffer)}"
-        self.transport.send_spans.assert_called_once()
+        self.transport.send_spans_with_failures.assert_called_once()
 
     def test_successful_send_clears_only_sent_spans(self):
-        # 2 spans staged, send succeeds → buffer becomes empty.
-        self.transport.send_spans.return_value = True
+        # Empty failed list → buffer emptied.
+        self.transport.send_spans_with_failures.return_value = []
         self.buffer.buffer.extend([self._mk(0), self._mk(1)])
         self.buffer.flush()
         assert self.buffer.buffer == []
 
+    def test_partial_multi_group_failure_retains_only_failed_group(self):
+        """
+        TP-2128 round-2 P1 #1.2: two groups in one batch — one
+        succeeds, one fails — used to retain the whole batch and
+        re-POST the succeeded group on the next flush. Now the buffer
+        retains only the failed spans, so the succeeded group is
+        never re-sent.
+        """
+        succeeded = self._mk(0)  # group A, will succeed
+        failed = self._mk(1)  # group B, will fail
+        self.buffer.buffer.extend([succeeded, failed])
+        # Transport reports only the failed one.
+        self.transport.send_spans_with_failures.return_value = [failed]
+        self.buffer.flush()
+
+        # Only the failed span survives — the succeeded one is dropped
+        # from the buffer so the next flush doesn't re-POST it.
+        assert [s.span_id for s in self.buffer.buffer] == [
+            "s1"
+        ], f"expected only failed s1 retained; got {[s.span_id for s in self.buffer.buffer]}"
+
+        # Simulate a next flush where the retry succeeds — the failed
+        # span must go out again and clear.
+        self.transport.send_spans_with_failures.reset_mock()
+        self.transport.send_spans_with_failures.return_value = []
+        self.buffer.flush()
+        # Second call sent exactly the retained span, not both.
+        call_args, _ = self.transport.send_spans_with_failures.call_args
+        sent_on_retry = call_args[0]
+        assert [s.span_id for s in sent_on_retry] == [
+            "s1"
+        ], "succeeded span must NOT be re-POSTed on retry flush"
+        assert self.buffer.buffer == []
+
     def test_buffer_caps_at_max_retained_on_repeated_failure(self):
-        self.transport.send_spans.return_value = False
+        # Every span in every flush fails.
+        def _echo(spans):
+            return list(spans)
+
+        self.transport.send_spans_with_failures.side_effect = _echo
         # Feed 8 spans across two failing flushes; cap is 5.
         for i in range(4):
             self.buffer.buffer.append(self._mk(i))
