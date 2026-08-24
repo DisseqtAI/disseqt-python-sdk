@@ -47,6 +47,19 @@ AVAILABLE_INSTRUMENTORS: list[str] = list(INSTRUMENTOR_CLASSES.keys())
 # instrument() call on the same provider is a no-op unless uninstrumented
 # first). Guarded by _LOCK so concurrent instrument_all() calls from
 # multiple threads can't race the check-then-set.
+#
+# Scope trade-off (TP-2128 round-2 P2 #2.4): ``_LOCK`` is a single
+# process-wide RLock rather than one lock per provider name. That
+# keeps the check-then-set and the wrapt-level install / unwind
+# fully serialized against each other (see uninstrument() — the
+# round-2 P3 #3.1 fix extended the critical section to cover the
+# unwind), but it also means slow work in one provider's
+# _uninstrument stalls unrelated instrument()/uninstrument() calls
+# on other providers. No shipped provider currently does slow work
+# in _uninstrument (all wrapt.unwrap calls are ~microseconds), so
+# this is latent — worth sharding to a per-name lock the first
+# time a provider needs to do real work in its unwind (network
+# calls, disk flush, background-task join).
 _ACTIVE: dict[str, DisseqtInstrumentor] = {}
 _LOCK = threading.RLock()
 
