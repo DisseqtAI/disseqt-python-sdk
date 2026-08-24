@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -207,6 +209,92 @@ class TestCaptureContent:
             assert get_capture_content() is outer
         finally:
             set_capture_content(outer)
+
+    def test_plain_thread_inherits_startup_toggle(self):
+        """
+        TP-2128 round-3 senior review P0 #0.1: converting
+        ``_capture_content`` to a bare ContextVar (round-2 P0 #0.1) fixed
+        the concurrent-opposing-toggle race above, but a ContextVar's own
+        value is only visible along the specific execution path that set
+        it — a plain ``threading.Thread()`` spawned *after*
+        ``set_capture_content(False)`` gets a brand-new, empty context and
+        does NOT inherit it, silently defaulting back to capture-on. This
+        is exactly the "flip the switch once at startup, then serve
+        requests on a thread pool" pattern the SDK's own docstring
+        recommends, and it's the shape most non-asyncio Python web
+        servers use (threaded Flask, ThreadingHTTPServer, gunicorn
+        --threads). The fix adds a process-wide fallback default that a
+        context which never called set_capture_content() itself reads.
+        """
+        original = get_capture_content()
+        set_capture_content(False)
+        result: dict[str, bool] = {}
+        try:
+
+            def worker() -> None:
+                # This thread never calls set_capture_content() itself —
+                # it must still see the value set on the main thread
+                # before it was spawned.
+                result["seen"] = get_capture_content()
+
+            thread = threading.Thread(target=worker)
+            thread.start()
+            thread.join(timeout=5)
+        finally:
+            set_capture_content(original)
+
+        assert result.get("seen") is False, (
+            "a plain thread spawned after set_capture_content(False) must still see "
+            "capture disabled via the process-wide fallback default"
+        )
+
+    def test_plain_thread_end_to_end_span_is_redacted(self, recording_client):
+        """
+        Same scenario as test_plain_thread_inherits_startup_toggle, but
+        through the real public manual-tracing API: a secret prompt
+        traced via trace_llm_call() on a plain worker thread must not
+        land on the span's attributes, even though the opt-out was only
+        ever called on the main thread before the worker was spawned.
+        (trace_llm_call applies the capture_content gate synchronously
+        while building the span via set_messages_if_capturing — no need
+        to close/flush the span to observe the redaction decision.)
+        """
+        from disseqt_agentic_sdk import start_trace
+        from disseqt_agentic_sdk.api.helpers import trace_llm_call
+
+        original = get_capture_content()
+        set_capture_content(False)
+        errors: list[BaseException] = []
+        result: dict[str, Any] = {}
+
+        def worker() -> None:
+            try:
+                with start_trace(recording_client, "worker_trace") as trace:
+                    span = trace_llm_call(
+                        trace,
+                        name="chat",
+                        model_name="gpt-4",
+                        provider="openai",
+                        input_messages=[{"role": "user", "content": "SSN_123-45-6789"}],
+                    )
+                    result["attributes"] = dict(span.attributes)
+            except BaseException as exc:  # noqa: BLE001 - surface to the main thread
+                errors.append(exc)
+
+        try:
+            thread = threading.Thread(target=worker)
+            thread.start()
+            thread.join(timeout=5)
+        finally:
+            set_capture_content(original)
+
+        assert not errors, f"worker thread raised: {errors}"
+        attrs = result.get("attributes")
+        assert attrs is not None, "worker thread never populated its span attributes"
+        assert "SSN_123-45-6789" not in json.dumps(attrs, default=str), (
+            "a plain worker thread must still honor a capture_content opt-out "
+            "configured on the main thread before it was spawned"
+        )
 
     def test_env_var_disables_at_import_time(self):
         """Setting DISSEQT_SDK_CAPTURE_CONTENT=0 before import → capture off."""

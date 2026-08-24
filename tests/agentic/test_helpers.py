@@ -283,20 +283,40 @@ class TestHelpers:
                 assert agent_span.attributes[AgenticAttributes.AGENT_NAME] == "assistant"
 
             # 4. trace_function decorator — content-shaped span_attr
-            # must not land either.
-            @trace_function(
-                self.client,
-                name="dec_fn",
-                **{AgenticAttributes.INPUT_MESSAGES: "MY_SECRET_FN_MSG"},
+            # must not land either. TP-2128 round-3 senior review P3
+            # #3.1: this block used to just call the decorated function
+            # without asserting anything, so a revert of trace_function's
+            # own safe_set() fix (back to a raw span.set_attribute())
+            # would have gone undetected. Swap in a RecordingBuffer so
+            # the span this decorator closes is actually introspectable.
+            from tests.agentic.instrumentation.conftest import (
+                RecordingBuffer,
+                find_span,
             )
-            def _fn():
-                return 1
 
-            _fn()
-            # The decorator opens its own trace; we can't easily
-            # introspect that span from here without a recording
-            # client, but the safe_set call replacing set_attribute
-            # is exercised by the code path.
+            recording_buffer = RecordingBuffer()
+            original_buffer = self.client.buffer
+            self.client.buffer = recording_buffer
+            try:
+
+                @trace_function(
+                    self.client,
+                    name="dec_fn",
+                    **{AgenticAttributes.INPUT_MESSAGES: "MY_SECRET_FN_MSG"},
+                )
+                def _fn():
+                    return 1
+
+                _fn()
+
+                fn_span = find_span(self.client, "dec_fn")
+                # attributes_json is already a serialized JSON string —
+                # a plain substring check is enough here.
+                assert (
+                    "MY_SECRET_FN_MSG" not in fn_span.attributes_json
+                ), "trace_function must route content-shaped span_attrs through the gate"
+            finally:
+                self.client.buffer = original_buffer
         finally:
             set_capture_content(original)
 

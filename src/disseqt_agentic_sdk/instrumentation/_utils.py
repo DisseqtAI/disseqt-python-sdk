@@ -20,6 +20,7 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import os
+import threading
 import time
 from types import TracebackType
 from typing import TYPE_CHECKING, Any
@@ -123,13 +124,40 @@ def _env_bool(name: str, default: bool) -> bool:
 # traffic. Mirrors the _slow_threshold_ms pattern above; TP-2128
 # round-2 senior review P0 #0.1 (the round-1 fix promoted the
 # threshold to a ContextVar but left this sibling as a bare global).
-# B039 is a false positive here — _env_bool returns a plain ``bool``,
-# which is immutable; the ruff check exists to catch mutable-default
-# aliasing footguns (list/dict/set), which don't apply.
-_capture_content: contextvars.ContextVar[bool] = contextvars.ContextVar(
-    "disseqt_capture_content",
-    default=_env_bool("DISSEQT_SDK_CAPTURE_CONTENT", default=True),  # noqa: B039
-)
+#
+# This ContextVar deliberately has NO static default (unlike
+# _slow_threshold_ms above) — see _capture_content_default below for why.
+_capture_content: contextvars.ContextVar[bool] = contextvars.ContextVar("disseqt_capture_content")
+
+# A ContextVar's own `default=` is a fixed value chosen once at creation
+# time; it can't be updated later to reflect "whatever was most recently
+# configured." That's fine for isolating two *concurrent, opposing*
+# toggles (the round-2 race above) — each caller's own context keeps its
+# own explicitly-set value regardless of what anyone else does. But it
+# breaks the equally common "call set_capture_content(False) once at
+# startup, then serve requests on plain threading.Thread() workers"
+# pattern: a plain thread spawned *after* that call gets a brand-new,
+# empty context and falls through to the ContextVar's static default —
+# which is always the env-var default, never whatever was last
+# configured. Confirmed live: the pre-fix bare-global implementation
+# actually handled this exact pattern correctly (one shared value, so a
+# fresh thread reads whatever was last written); the round-2 ContextVar
+# migration regressed it. TP-2128 round-3 senior review P0 #0.1.
+#
+# So there are now two layers: `_capture_content` isolates concurrent
+# callers that explicitly set their own value; `_capture_content_default`
+# is the process-wide fallback any context that never called
+# set_capture_content() itself will read. Guarded by a lock purely for
+# clarity/future-proofing — a single bool assignment is already atomic
+# under the GIL, but the lock documents the intent and survives this
+# becoming non-trivial later.
+_capture_content_default_lock = threading.Lock()
+_capture_content_default: bool = _env_bool("DISSEQT_SDK_CAPTURE_CONTENT", default=True)
+
+# Sentinel distinguishing "this context never called set_capture_content()"
+# from "this context explicitly set False" — ContextVar.get(default) can't
+# tell those apart any other way once the ContextVar has no static default.
+_UNSET = object()
 
 
 def set_capture_content(enabled: bool) -> None:
@@ -142,22 +170,66 @@ def set_capture_content(enabled: bool) -> None:
     (model, tokens, duration, tool names/ids, finish reasons) is always
     captured regardless.
 
-    Scope: writes into the current ``contextvars`` context. Async tasks
-    started before the write keep the prior value; tasks started after
-    inherit the new one. For a process-wide default, call this at
-    startup before any async work begins. ThreadPoolExecutor: bare
-    ``.submit(fn, ...)`` does NOT propagate — wrap with
-    ``executor.submit(contextvars.copy_context().run, fn, ...)`` or
-    prefer ``asyncio.loop.run_in_executor`` (which copies context
-    automatically). See ``_custom_attrs.py`` docstring for the same
-    threading caveat.
+    Scope: writes into BOTH the current ``contextvars`` context (so two
+    concurrent, opposing callers stay isolated from each other — each
+    keeps reading its own explicitly-set value no matter what another
+    thread/task sets) AND a process-wide fallback default that any
+    thread/task which never calls this itself will read.
+
+    What that fallback does and does NOT cover — read this before relying
+    on it for a compliance-critical deployment:
+
+    * **Covered:** call this ONCE at process startup, before spawning any
+      workers, and never again. A plain ``threading.Thread()`` spawned
+      afterward — even though ``contextvars`` alone would not propagate
+      a value to it — still honors the setting via the fallback above.
+    * **NOT covered:** calling this *per request* on a ``threading.Thread``
+      pool whose worker threads are *reused* across requests (a bare
+      ``ThreadPoolExecutor``, or any threaded WSGI/ASGI server that
+      recycles worker threads — gunicorn ``--threads``, uwsgi threads,
+      etc.). ``ContextVar.set()`` mutates the *ambient* context of
+      whatever physical OS thread happens to run it, permanently for
+      that thread's remaining lifetime. A value set for one request can
+      silently stick to the worker thread and leak forward onto the
+      next, unrelated request handled by that same reused thread —
+      either over-redacting or, worse, failing to redact a request that
+      asked for it. There is no safe way to scope a per-request toggle
+      to *just* that request on a reused thread without wrapping every
+      unit of work through ``contextvars.copy_context().run(...)`` (or
+      an equivalent reset-on-exit pattern) yourself; this function alone
+      does not do that for you.
+
+    Neither a bare ``ThreadPoolExecutor.submit(fn, ...)`` NOR
+    ``asyncio.loop.run_in_executor(...)`` copy the calling context —
+    ``run_in_executor`` does not either, despite it sometimes being
+    described that way. Only ``asyncio.to_thread(...)`` and
+    ``executor.submit(contextvars.copy_context().run, fn, ...)`` do. See
+    ``_custom_attrs.py`` docstring for the same threading caveat as it
+    applies to custom span attributes.
     """
-    _capture_content.set(bool(enabled))
+    enabled = bool(enabled)
+    _capture_content.set(enabled)
+    with _capture_content_default_lock:
+        global _capture_content_default
+        _capture_content_default = enabled
 
 
 def get_capture_content() -> bool:
-    """Return whether content capture is currently enabled."""
-    return _capture_content.get()
+    """
+    Return whether content capture is currently enabled.
+
+    Reads the current context's own explicitly-set value if
+    ``set_capture_content()`` was ever called on this context (or one it
+    was copied/derived from); otherwise falls back to the process-wide
+    default most recently set by any caller, so a fresh thread/task that
+    never called ``set_capture_content()`` itself still honors a toggle
+    configured elsewhere (e.g. at startup).
+    """
+    value = _capture_content.get(_UNSET)
+    if isinstance(value, bool):
+        return value
+    with _capture_content_default_lock:
+        return _capture_content_default
 
 
 class _SpanScope:
@@ -294,7 +366,7 @@ def safe_set(span: DisseqtSpan, key: str, value: Any) -> None:
     keys (model, tokens, duration, tool names/ids, finish reasons) are
     unaffected.
     """
-    if not _capture_content.get() and key in _CONTENT_ATTR_KEYS:
+    if not get_capture_content() and key in _CONTENT_ATTR_KEYS:
         return
     if value is None:
         return
@@ -317,7 +389,7 @@ def set_messages_if_capturing(
     directly so a single toggle skips message-body writes across every
     instrumented SDK.
     """
-    if not _capture_content.get():
+    if not get_capture_content():
         return
     with contextlib.suppress(Exception):
         span.set_messages(input_messages=input_messages, output_messages=output_messages)

@@ -112,27 +112,48 @@ class TestApplicationIdNotice:
 
 class TestApplicationIdValidation:
     """
-    TP-2128 round-2 P2 #2.3: a malformed application_id (control chars,
-    embedded whitespace) is rejected by `requests` locally before the
-    wire, so every send fails with a plain ERROR log — never hits the
-    CRITICAL auth-failure path from #1.3, and combined with retain-on-
-    failure (#1.2) the buffer retries forever silently. Validate at
-    construction so operators find the misconfiguration up front.
+    TP-2128 round-2 P2 #2.3: a malformed application_id (embedded line
+    breaks, non-Latin-1 characters) breaks sending it as an HTTP header,
+    so every send fails, never hits the CRITICAL auth-failure path from
+    #1.3, and combined with retain-on-failure (#1.2) the buffer retries
+    forever silently. Validate at construction so operators find the
+    misconfiguration up front.
+
+    Round-3 senior review P1 #1.1: the original check was a C0-control
+    character blacklist that didn't match what `requests`/`http.client`
+    actually reject — it rejected harmless characters (tab) while
+    letting the real crash-risk class (non-Latin-1 characters, which
+    crash HTTP header encoding) through untouched. Tightened to check
+    the two real failure modes directly: embedded \\r/\\n (requests'
+    InvalidHeader) and non-Latin-1 characters (http.client's
+    UnicodeEncodeError at send time).
     """
 
-    def test_control_char_raises(self):
-        with pytest.raises(ValueError, match="disallowed characters"):
+    def test_newline_raises(self):
+        with pytest.raises(ValueError, match="carriage return or newline"):
             _make_client(application_id="app-id-with-\nnewline")
 
     def test_carriage_return_raises(self):
         # CRLF injection variant — also caught locally by `requests`
         # today, but we prefer fail-fast at construction.
-        with pytest.raises(ValueError, match="disallowed characters"):
+        with pytest.raises(ValueError, match="carriage return or newline"):
             _make_client(application_id="app\r\nX-Injected: 1")
 
-    def test_tab_raises(self):
-        with pytest.raises(ValueError, match="disallowed characters"):
-            _make_client(application_id="app\tid")
+    def test_non_latin1_character_raises(self):
+        # TP-2128 round-3 P1 #1.1: this is the class of value that used
+        # to sail through validation and then crash HTTP header encoding
+        # (http.client.putheader's .encode("latin-1")) at actual send
+        # time, uncaught, deep in the background flush path.
+        with pytest.raises(ValueError, match="Latin-1"):
+            _make_client(application_id="app-\U0001f525-id")
+
+    def test_tab_accepted(self):
+        # TP-2128 round-3 P1 #1.1: a tab is NOT rejected by `requests`
+        # over the wire (verified against the real installed library),
+        # so this must no longer raise — the old blacklist rejected it
+        # incorrectly, failing fast against a value that would have
+        # succeeded.
+        _make_client(application_id="app\tid")
 
     def test_valid_uuid_accepted(self):
         # A normal UUID must construct without raising.
