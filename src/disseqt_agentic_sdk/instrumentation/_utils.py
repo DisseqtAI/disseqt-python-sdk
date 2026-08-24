@@ -94,6 +94,11 @@ _CONTENT_ATTR_KEYS: frozenset[str] = frozenset(
         AgenticAttributes.TOOL_CALLS,
         AgenticAttributes.TOOL_ARGS,
         AgenticAttributes.REQUEST_TOOLS,
+        # TOOL_DEFINITIONS is where tool *schemas* are stored — those
+        # schemas can carry credential-shaped defaults (e.g. a
+        # send_email tool with a smtp_password parameter). Was missing
+        # from the round-1 opt-out; TP-2128 round-2 P1 #1.1.
+        AgenticAttributes.TOOL_DEFINITIONS,
         GenAIAttributes.PROMPT,
         GenAIAttributes.COMPLETION,
         GenAIAttributes.TOOL_CALLS,
