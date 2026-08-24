@@ -108,3 +108,41 @@ class TestApplicationIdNotice:
             assert _application_id_notices(caplog.records) == []
         finally:
             logging.getLogger("disseqt_agentic_sdk").setLevel(logging.NOTSET)
+
+
+class TestApplicationIdValidation:
+    """
+    TP-2128 round-2 P2 #2.3: a malformed application_id (control chars,
+    embedded whitespace) is rejected by `requests` locally before the
+    wire, so every send fails with a plain ERROR log — never hits the
+    CRITICAL auth-failure path from #1.3, and combined with retain-on-
+    failure (#1.2) the buffer retries forever silently. Validate at
+    construction so operators find the misconfiguration up front.
+    """
+
+    def test_control_char_raises(self):
+        with pytest.raises(ValueError, match="disallowed characters"):
+            _make_client(application_id="app-id-with-\nnewline")
+
+    def test_carriage_return_raises(self):
+        # CRLF injection variant — also caught locally by `requests`
+        # today, but we prefer fail-fast at construction.
+        with pytest.raises(ValueError, match="disallowed characters"):
+            _make_client(application_id="app\r\nX-Injected: 1")
+
+    def test_tab_raises(self):
+        with pytest.raises(ValueError, match="disallowed characters"):
+            _make_client(application_id="app\tid")
+
+    def test_valid_uuid_accepted(self):
+        # A normal UUID must construct without raising.
+        _make_client(application_id="7ce57144-9df6-4fa4-8aad-8cbc1ffdb558")
+
+    def test_none_accepted(self):
+        # None (missing) still just triggers the notice, not a raise.
+        _make_client(application_id=None)
+
+    def test_whitespace_only_accepted(self):
+        # Whitespace-only normalises to None (documented behavior),
+        # which triggers the notice but must NOT raise.
+        _make_client(application_id="   ")

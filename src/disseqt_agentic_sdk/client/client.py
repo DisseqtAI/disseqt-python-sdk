@@ -15,6 +15,42 @@ from disseqt_agentic_sdk.utils.logging import get_logger
 logger = get_logger()
 
 
+# Any character that would either be rejected by requests before hitting
+# the wire (control chars, high-bit whitespace) or misparsed as an HTTP
+# header terminator downstream. Kept as a small explicit set — the
+# X-Application-Id contract is a UUID-shaped opaque token, so anything
+# outside plain printable ASCII is almost certainly a bug.
+_APPLICATION_ID_FORBIDDEN = frozenset(chr(c) for c in range(0x20)) | {  # C0 controls incl. \r \n \t
+    chr(0x7F)
+}  # DEL
+
+
+def _validate_application_id(value: str | None) -> None:
+    """
+    Raise ``ValueError`` immediately on a malformed ``application_id``.
+
+    The X-Application-Id header value is opaque to us (Kong's traces-
+    auth plugin verifies it against policy-management) but must not
+    carry characters that would trip local HTTP validation on every
+    send. Control chars in particular are silently rejected by
+    ``requests`` before the wire, producing a plain ERROR log per
+    flush; combined with retain-on-failure (TP-2128 round-2 P1 #1.2)
+    the buffer retries forever against a value that will never
+    succeed. Fail loudly here instead. TP-2128 round-2 P2 #2.3.
+    """
+    if value is None:
+        return
+    bad = [c for c in value if c in _APPLICATION_ID_FORBIDDEN]
+    if bad:
+        raise ValueError(
+            f"application_id contains disallowed characters "
+            f"{sorted({hex(ord(c)) for c in bad})}. Use a plain ASCII "
+            f"token (typically a UUID); control characters would be "
+            f"rejected locally by requests on every send, causing every "
+            f"flush to fail silently against the ingest endpoint."
+        )
+
+
 class DisseqtAgenticClient:
     """
     Main SDK client - manages configuration, transport, and buffering.
@@ -149,6 +185,16 @@ class DisseqtAgenticClient:
         self.application_id = (
             application_id.strip() if application_id and application_id.strip() else None
         )
+        # Fail-fast on malformed application_id (control chars,
+        # embedded whitespace, non-ASCII). `requests` rejects these
+        # locally on every POST attempt — but that's an ERROR log per
+        # flush, not the CRITICAL auth-failure banner from #1.3, and
+        # combined with retain-on-failure (#1.2) means the buffer
+        # retries forever silently against a value that will never
+        # succeed. Raise at construction so operators find the
+        # misconfiguration before the app enters its request loop.
+        # TP-2128 round-2 P2 #2.3.
+        _validate_application_id(self.application_id)
 
         # Nudge callers who haven't wired an application_id yet. One-shot
         # per process; silenced via `DISSEQT_SDK_DISABLE_APPLICATION_ID_NOTICE=1`
