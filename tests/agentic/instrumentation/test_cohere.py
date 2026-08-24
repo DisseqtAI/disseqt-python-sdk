@@ -196,44 +196,74 @@ class TestCohereStreamingToolCalls:
         `message-start`/`content-delta`/`message-end` were handled, so
         a streamed tool-calling turn recorded zero tool_calls even
         though real ones were emitted.
+
+        TP-2128 round-2 P0 #0.3: the round-1 fix looped over
+        ``delta.message.tool_calls`` — but the real cohere SDK types
+        (``ChatToolCallStartEventDeltaMessage`` /
+        ``ChatToolCallDeltaEventDeltaMessage``) define that field as a
+        **single pydantic object**, not a list. Iterating a pydantic
+        model silently yields ``(field_name, value)`` tuples, so the
+        whole capture path no-op'd against real data. This test now
+        constructs the events from the real installed cohere types so
+        the shape mismatch is caught.
         """
-        # MagicMock treats `.name` as its own bookkeeping — use SimpleNamespace
-        # for anything with a `.name` we care about, so it round-trips as a
-        # real attribute the adapter can read.
         from types import SimpleNamespace
 
+        from cohere.types.chat_message_end_event_delta import ChatMessageEndEventDelta
+        from cohere.types.chat_tool_call_delta_event_delta import ChatToolCallDeltaEventDelta
+        from cohere.types.chat_tool_call_delta_event_delta_message import (
+            ChatToolCallDeltaEventDeltaMessage,
+        )
+        from cohere.types.chat_tool_call_delta_event_delta_message_tool_calls import (
+            ChatToolCallDeltaEventDeltaMessageToolCalls,
+        )
+        from cohere.types.chat_tool_call_delta_event_delta_message_tool_calls_function import (
+            ChatToolCallDeltaEventDeltaMessageToolCallsFunction,
+        )
+        from cohere.types.chat_tool_call_start_event_delta import ChatToolCallStartEventDelta
+        from cohere.types.chat_tool_call_start_event_delta_message import (
+            ChatToolCallStartEventDeltaMessage,
+        )
+        from cohere.types.tool_call_v2 import ToolCallV2
+        from cohere.types.tool_call_v2function import ToolCallV2Function
+        from cohere.types.usage import Usage
+        from cohere.types.usage_tokens import UsageTokens
         from cohere.v2.client import V2Client
 
-        def _tc_start_event():
-            fn = SimpleNamespace(name="get_weather", arguments='{"loc')
-            tc = SimpleNamespace(id="tc_1", function=fn)
-            return SimpleNamespace(
-                type="tool-call-start",
-                index=0,
-                delta=SimpleNamespace(message=SimpleNamespace(tool_calls=[tc])),
+        # tool-call-start: real single object, not a list.
+        start_msg = ChatToolCallStartEventDeltaMessage(
+            tool_calls=ToolCallV2(
+                id="tc_1",
+                function=ToolCallV2Function(name="get_weather", arguments='{"loc'),
             )
+        )
+        start_delta = ChatToolCallStartEventDelta(message=start_msg)
 
-        def _tc_delta_event():
-            fn = SimpleNamespace(name=None, arguments='":"Paris"}')
-            tc = SimpleNamespace(id=None, function=fn)
-            return SimpleNamespace(
-                type="tool-call-delta",
-                index=0,
-                delta=SimpleNamespace(message=SimpleNamespace(tool_calls=[tc])),
+        # tool-call-delta: also a single object, only args fragment.
+        delta_msg = ChatToolCallDeltaEventDeltaMessage(
+            tool_calls=ChatToolCallDeltaEventDeltaMessageToolCalls(
+                function=ChatToolCallDeltaEventDeltaMessageToolCallsFunction(
+                    arguments='":"Paris"}'
+                ),
             )
+        )
+        delta_event_delta = ChatToolCallDeltaEventDelta(message=delta_msg)
 
+        end_delta = ChatMessageEndEventDelta(
+            finish_reason="TOOL_CALL",
+            usage=Usage(tokens=UsageTokens(input_tokens=5, output_tokens=7)),
+        )
+
+        # Envelope events kept as SimpleNamespace with the required
+        # (type, index, delta) shape the accumulator reads. The
+        # meaningful shape assertion is on the nested `delta.message.
+        # tool_calls` values above — those come from the real types.
         events = [
             SimpleNamespace(type="message-start", id="cohere-stream-tools"),
-            _tc_start_event(),
-            _tc_delta_event(),
+            SimpleNamespace(type="tool-call-start", index=0, delta=start_delta),
+            SimpleNamespace(type="tool-call-delta", index=0, delta=delta_event_delta),
             SimpleNamespace(type="tool-call-end", index=0),
-            SimpleNamespace(
-                type="message-end",
-                delta=SimpleNamespace(
-                    finish_reason="TOOL_CALL",
-                    usage=SimpleNamespace(tokens=SimpleNamespace(input_tokens=5, output_tokens=7)),
-                ),
-            ),
+            SimpleNamespace(type="message-end", delta=end_delta),
         ]
 
         def fake_chat_stream(self, *args, **kwargs):
@@ -258,8 +288,9 @@ class TestCohereStreamingToolCalls:
 
         span = find_span(recording_client, "cohere.chat_stream")
         attrs = json.loads(span.attributes_json)
-        # Before the fix: KeyError — TOOL_CALLS attr was never set.
-        # After: the reassembled tool call lands with both fragments joined.
+        # Before the round-2 fix: this key was missing because iterating
+        # the pydantic tool_calls object silently yielded (field, value)
+        # tuples and the accumulator dropped everything.
         assert AgenticAttributes.TOOL_CALLS in attrs
         calls = attrs[AgenticAttributes.TOOL_CALLS]
         assert len(calls) == 1

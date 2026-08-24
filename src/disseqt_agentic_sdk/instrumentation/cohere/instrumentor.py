@@ -281,35 +281,39 @@ class _StreamAccumulator:
         """
         Pull ``id``/``name``/``function.arguments`` fragments off a
         ``tool-call-start`` or ``tool-call-delta`` event and merge into
-        the slot for that index. Fragments are appended; already-set
-        fields don't get overwritten unless the incoming value is
-        non-empty (protects against later fragments carrying None).
+        the slot for that index.
+
+        The real Cohere v2 SDK's ``ChatToolCallStartEventDeltaMessage``
+        and ``ChatToolCallDeltaEventDeltaMessage`` types define
+        ``tool_calls`` as a **single object** (``Optional[ToolCallV2]``
+        / ``Optional[ChatToolCallDeltaEventDeltaMessageToolCalls]``),
+        NOT a list. The round-1 fix looped over it — pydantic models
+        are iterable and silently yield ``(field_name, value)`` tuples,
+        so every ``.function.name`` read came back None, ``if not
+        slot.get("name")`` dropped the call, and the shipped
+        regression test only passed because it hand-built the event as
+        ``tool_calls=[tc]``. TP-2128 round-2 P0 #0.3.
         """
         idx = read(event, "index")
         if idx is None:
             return
         delta = read(event, "delta")
         message = read(delta, "message") if delta is not None else None
-        tool_calls = read(message, "tool_calls") if message is not None else None
-        if not tool_calls:
+        tc = read(message, "tool_calls") if message is not None else None
+        if tc is None:
             return
-        # In practice, each tool-call event carries exactly one entry —
-        # the one for `index`. Iterate defensively.
-        for tc in tool_calls:
-            slot = self._tool_slots.setdefault(
-                idx, {"id": None, "name": None, "args_fragments": []}
-            )
-            tc_id = read(tc, "id")
-            if tc_id:
-                slot["id"] = str(tc_id)
-            fn = read(tc, "function")
-            if fn is not None:
-                fn_name = read(fn, "name")
-                if fn_name:
-                    slot["name"] = str(fn_name)
-                fn_args = read(fn, "arguments")
-                if fn_args:
-                    slot["args_fragments"].append(str(fn_args))
+        slot = self._tool_slots.setdefault(idx, {"id": None, "name": None, "args_fragments": []})
+        tc_id = read(tc, "id")
+        if tc_id:
+            slot["id"] = str(tc_id)
+        fn = read(tc, "function")
+        if fn is not None:
+            fn_name = read(fn, "name")
+            if fn_name:
+                slot["name"] = str(fn_name)
+            fn_args = read(fn, "arguments")
+            if fn_args:
+                slot["args_fragments"].append(str(fn_args))
 
     def finalize(self, span: DisseqtSpan) -> None:
         text = "".join(self.buffer)
