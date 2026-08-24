@@ -173,6 +173,41 @@ class TestCaptureContent:
         # the span payload.
         assert "hunter2" not in json.dumps(attrs)
 
+    def test_concurrent_tasks_do_not_race_on_toggle(self):
+        """
+        TP-2128 round-2 P0 #0.1: `_capture_content` used to be a bare
+        module-level bool. Two async tasks calling set_capture_content
+        with opposite values would race — a secret-redacting task
+        could have its ``safe_set`` land in the gap between another
+        task's ``set_capture_content(False)`` and its own write,
+        leaking the secret. Now it's a ContextVar so each task carries
+        its own value.
+        """
+        import asyncio
+
+        outer = get_capture_content()
+
+        async def one_task(value: bool) -> bool:
+            set_capture_content(value)
+            # Yield twice to force interleaving. If capture were a
+            # bare global, the sibling task's set would race in here
+            # and change what we read back.
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            return get_capture_content()
+
+        async def main() -> tuple[bool, bool]:
+            return await asyncio.gather(one_task(False), one_task(True))
+
+        try:
+            a, b = asyncio.run(main())
+            assert a is False, f"task A saw {a}, expected False — contextvar isolation broken"
+            assert b is True, f"task B saw {b}, expected True — contextvar isolation broken"
+            # Outer context untouched by inner set()s.
+            assert get_capture_content() is outer
+        finally:
+            set_capture_content(outer)
+
     def test_env_var_disables_at_import_time(self):
         """Setting DISSEQT_SDK_CAPTURE_CONTENT=0 before import → capture off."""
         import importlib

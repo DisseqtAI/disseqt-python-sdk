@@ -111,7 +111,20 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() not in ("0", "false", "no", "off", "")
 
 
-_capture_content: bool = _env_bool("DISSEQT_SDK_CAPTURE_CONTENT", default=True)
+# ContextVar (not a bare module global) so concurrent callers of
+# set_capture_content(...) don't race a shared bool — a bare global
+# has zero isolation between threads/tasks, and this feature exists
+# specifically to prevent secrets leaking under normal concurrent
+# traffic. Mirrors the _slow_threshold_ms pattern above; TP-2128
+# round-2 senior review P0 #0.1 (the round-1 fix promoted the
+# threshold to a ContextVar but left this sibling as a bare global).
+# B039 is a false positive here — _env_bool returns a plain ``bool``,
+# which is immutable; the ruff check exists to catch mutable-default
+# aliasing footguns (list/dict/set), which don't apply.
+_capture_content: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "disseqt_capture_content",
+    default=_env_bool("DISSEQT_SDK_CAPTURE_CONTENT", default=True),  # noqa: B039
+)
 
 
 def set_capture_content(enabled: bool) -> None:
@@ -123,14 +136,23 @@ def set_capture_content(enabled: bool) -> None:
     when tool calls may include credentials. Non-content telemetry
     (model, tokens, duration, tool names/ids, finish reasons) is always
     captured regardless.
+
+    Scope: writes into the current ``contextvars`` context. Async tasks
+    started before the write keep the prior value; tasks started after
+    inherit the new one. For a process-wide default, call this at
+    startup before any async work begins. ThreadPoolExecutor: bare
+    ``.submit(fn, ...)`` does NOT propagate — wrap with
+    ``executor.submit(contextvars.copy_context().run, fn, ...)`` or
+    prefer ``asyncio.loop.run_in_executor`` (which copies context
+    automatically). See ``_custom_attrs.py`` docstring for the same
+    threading caveat.
     """
-    global _capture_content
-    _capture_content = bool(enabled)
+    _capture_content.set(bool(enabled))
 
 
 def get_capture_content() -> bool:
     """Return whether content capture is currently enabled."""
-    return _capture_content
+    return _capture_content.get()
 
 
 class _SpanScope:
@@ -267,7 +289,7 @@ def safe_set(span: DisseqtSpan, key: str, value: Any) -> None:
     keys (model, tokens, duration, tool names/ids, finish reasons) are
     unaffected.
     """
-    if not _capture_content and key in _CONTENT_ATTR_KEYS:
+    if not _capture_content.get() and key in _CONTENT_ATTR_KEYS:
         return
     if value is None:
         return
@@ -290,7 +312,7 @@ def set_messages_if_capturing(
     directly so a single toggle skips message-body writes across every
     instrumented SDK.
     """
-    if not _capture_content:
+    if not _capture_content.get():
         return
     with contextlib.suppress(Exception):
         span.set_messages(input_messages=input_messages, output_messages=output_messages)
