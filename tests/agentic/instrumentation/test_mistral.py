@@ -69,3 +69,63 @@ class TestMistralChat:
 
         assert attrs[GenAIAttributes.SYSTEM] == "mistral_ai"
         assert attrs[GenAIAttributes.OPERATION_NAME] == "chat"
+
+        # TP-2128 round-2 P2 #2.1: Mistral streams via a separate
+        # method (Chat.stream) so set_common_chat_request can't read
+        # stream= from kwargs. Non-streaming path must still emit
+        # gen_ai.request.is_stream=False so dashboards filtering on
+        # this attribute don't misclassify Mistral spans.
+        assert attrs[GenAIAttributes.REQUEST_IS_STREAM] is False
+
+    def test_stream_span_sets_is_stream_true(self, recording_client):
+        """
+        TP-2128 round-2 P2 #2.1: Mistral Chat.stream must set
+        gen_ai.request.is_stream=True — mirrors the Cohere fix from
+        Appendix A.3.
+
+        Direct-invoke the wrapper factory (rather than round-tripping
+        through client.chat.stream) so the test doesn't have to fake
+        the mistralai EventStream / httpx layers. Verifies the specific
+        contract we care about: the span attribute gets stamped.
+        """
+        from types import SimpleNamespace
+
+        from disseqt_agentic_sdk.instrumentation.mistral.instrumentor import (
+            MistralInstrumentor,
+            _sync_stream,
+        )
+
+        completion_event = SimpleNamespace(
+            data=SimpleNamespace(
+                id="cmpl-mistral-stream",
+                model="mistral-large-latest",
+                choices=[
+                    SimpleNamespace(
+                        index=0,
+                        delta=SimpleNamespace(role="assistant", content="ok", tool_calls=None),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            )
+        )
+
+        instrumentor = MistralInstrumentor()
+        instrumentor._client = recording_client
+        wrapper_fn = _sync_stream(instrumentor)
+
+        stream = wrapper_fn(
+            wrapped=lambda *a, **kw: iter([completion_event]),
+            instance=None,
+            args=(),
+            kwargs={
+                "model": "mistral-large-latest",
+                "messages": [{"role": "user", "content": "x"}],
+            },
+        )
+        # Drain so on_finish → finalize → span end fires.
+        list(stream)
+
+        span = find_span(recording_client, "mistral.chat.stream")
+        attrs = json.loads(span.attributes_json)
+        assert attrs[GenAIAttributes.REQUEST_IS_STREAM] is True

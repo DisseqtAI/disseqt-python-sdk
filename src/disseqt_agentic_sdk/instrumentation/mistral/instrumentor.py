@@ -20,14 +20,25 @@ from disseqt_agentic_sdk.instrumentation._oai_compat import (
     set_common_chat_request,
 )
 from disseqt_agentic_sdk.instrumentation._stream import AsyncStreamWrapper, SyncStreamWrapper
-from disseqt_agentic_sdk.instrumentation._utils import open_llm_span, safe_call
+from disseqt_agentic_sdk.instrumentation._utils import open_llm_span, safe_call, safe_set
 from disseqt_agentic_sdk.instrumentation.base import DisseqtInstrumentor
 from disseqt_agentic_sdk.semantics import (
     AgenticOperation,
     AgenticProvider,
+    GenAIAttributes,
     GenAIOperation,
     GenAISystem,
 )
+
+
+# Mistral splits streaming by method name (Chat.stream / Chat.stream_async)
+# rather than a ``stream=`` kwarg, so set_common_chat_request can't infer
+# the request-is-stream flag from kwargs the way it does for OpenAI /
+# Groq / LiteLLM. Each wrapper writes the attribute explicitly after
+# the common-request-attrs call. Same shape as the Cohere fix
+# (TP-2128 Appendix A.3); TP-2128 round-2 P2 #2.1.
+def _stamp_is_stream(span: Any, is_stream: bool) -> None:
+    safe_set(span, GenAIAttributes.REQUEST_IS_STREAM, is_stream)
 
 
 class MistralInstrumentor(DisseqtInstrumentor):
@@ -57,6 +68,7 @@ def _sync_chat(instrumentor: MistralInstrumentor) -> Callable[..., Any]:
             operation_agentic=AgenticOperation.CHAT,
             operation_gen_ai=GenAIOperation.CHAT,
         )
+        _stamp_is_stream(span, False)
         try:
             result = wrapped(*args, **kwargs)
         except BaseException as exc:
@@ -84,6 +96,7 @@ def _async_chat(instrumentor: MistralInstrumentor) -> Callable[..., Any]:
             operation_agentic=AgenticOperation.CHAT,
             operation_gen_ai=GenAIOperation.CHAT,
         )
+        _stamp_is_stream(span, False)
         try:
             result = await wrapped(*args, **kwargs)
         except BaseException as exc:
@@ -109,6 +122,7 @@ def _sync_stream(instrumentor: MistralInstrumentor) -> Callable[..., Any]:
             operation_agentic=AgenticOperation.CHAT,
             operation_gen_ai=GenAIOperation.CHAT,
         )
+        _stamp_is_stream(span, True)
         try:
             result = wrapped(*args, **kwargs)
         except BaseException as exc:
@@ -140,6 +154,7 @@ def _async_stream(instrumentor: MistralInstrumentor) -> Callable[..., Any]:
             operation_agentic=AgenticOperation.CHAT,
             operation_gen_ai=GenAIOperation.CHAT,
         )
+        _stamp_is_stream(span, True)
         try:
             result = await wrapped(*args, **kwargs)
         except BaseException as exc:
