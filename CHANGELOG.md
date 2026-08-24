@@ -9,7 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.11.0] - 2026-08-24
 
-## [0.10.0] - 2026-08-23
+_Everything below was originally staged under a hand-bumped 0.10.0 that
+was never tagged or published — there is no 0.10.0 on PyPI. Its changes
+ship in this release._
 
 ### Added
 - **Auto-instrumentation for popular LLM SDKs** — one
