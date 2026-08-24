@@ -3,6 +3,8 @@ HTTP transport for sending traces/spans to the backend API.
 """
 
 import json
+import os
+import sys
 from typing import Any
 
 import requests
@@ -13,6 +15,42 @@ from disseqt_agentic_sdk.models.span import EnrichedSpan
 from disseqt_agentic_sdk.utils.logging import get_logger
 
 logger = get_logger()
+
+# Auth-failure escalation channel — bypasses the disseqt_logging silent-
+# by-default gate so an unconfigured process still gets an operator-
+# visible message on 401/403. Set DISSEQT_SDK_SILENCE_AUTH_STDERR=1 to
+# opt out (dashboards / structured-logging setups that route the
+# CRITICAL log line themselves). TP-2128 round-2 P1 #1.3.
+_SILENCE_AUTH_STDERR = os.environ.get("DISSEQT_SDK_SILENCE_AUTH_STDERR", "").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+
+
+def _write_auth_failure_to_stderr(status_code: int, endpoint: str) -> None:
+    """
+    Direct stderr write for 401/403 responses. Bypasses the logging
+    stack entirely so the message survives a fresh unconfigured
+    process (``disseqt_logging`` silences every level until
+    ``configure()`` / ``DISSEQT_LOG_LEVEL`` is set). The
+    logger.critical call still runs alongside this for anyone with
+    structured logging configured.
+    """
+    if _SILENCE_AUTH_STDERR:
+        return
+    try:
+        sys.stderr.write(
+            f"[disseqt-agentic-sdk] CRITICAL: ingest auth rejected "
+            f"({status_code}) at {endpoint} — spans will keep failing "
+            f"until credentials are fixed. Check DISSEQT_API_KEY / "
+            f"X-Application-Id and the traces-auth policy binding. "
+            f"Silence this message with DISSEQT_SDK_SILENCE_AUTH_STDERR=1.\n"
+        )
+        sys.stderr.flush()
+    except Exception:  # noqa: BLE001 — never let a stderr write crash the caller
+        pass
 
 
 class HTTPTransport:
@@ -236,6 +274,13 @@ class HTTPTransport:
                         "status_code": status_code,
                     },
                 )
+                # disseqt_logging is silent-by-default until the app
+                # calls configure() — most fresh deployments never do,
+                # so the CRITICAL line above would emit nowhere. Auth
+                # failures are exactly the kind of thing operators
+                # need to see with default settings, so write a copy
+                # straight to stderr as well. TP-2128 round-2 P1 #1.3.
+                _write_auth_failure_to_stderr(status_code, self.endpoint)
             else:
                 logger.error(
                     "Failed to send spans to backend",

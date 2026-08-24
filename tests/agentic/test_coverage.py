@@ -401,6 +401,75 @@ class TestTransportAuthFailures:
         assert any("auth rejected" in r.getMessage() for r in critical)
         assert any(getattr(r, "status_code", None) == 401 for r in critical)
 
+    def test_401_writes_stderr_without_logging_configured(self, capsys):
+        """
+        TP-2128 round-2 P1 #1.3: the disseqt_logging silent-by-default
+        gate suppresses the CRITICAL log line in fresh / unconfigured
+        processes, so operators saw NOTHING when their credentials
+        broke. Auth failures now write directly to stderr as well,
+        bypassing the logging stack.
+
+        Test does NOT bump any logger level — matches the shape of a
+        real fresh install.
+        """
+        import requests as _requests
+
+        transport = HTTPTransport("http://prod.example/v1/traces", api_key="k")
+        span = EnrichedSpan(
+            trace_id="t1", span_id="s1", name="test", org_id="o", project_id="p", service_name="s"
+        )
+        with patch("disseqt_agentic_sdk.transport.http.requests.Session.post") as mock_post:
+            fake = Mock()
+            fake.status_code = 403
+            fake.raise_for_status.side_effect = _requests.exceptions.HTTPError(
+                "403 Forbidden", response=fake
+            )
+            mock_post.return_value = fake
+            ok = transport.send_spans([span])
+
+        assert ok is False
+        captured = capsys.readouterr()
+        assert (
+            "CRITICAL: ingest auth rejected (403)" in captured.err
+        ), f"stderr must carry the auth-failure banner; got: {captured.err!r}"
+        assert "prod.example" in captured.err
+        assert "DISSEQT_API_KEY" in captured.err
+
+    def test_401_stderr_opt_out(self, capsys, monkeypatch):
+        """DISSEQT_SDK_SILENCE_AUTH_STDERR=1 disables the fallback."""
+        import importlib
+
+        import requests as _requests
+
+        from disseqt_agentic_sdk.transport import http as http_mod
+
+        monkeypatch.setenv("DISSEQT_SDK_SILENCE_AUTH_STDERR", "1")
+        importlib.reload(http_mod)
+        try:
+            transport = http_mod.HTTPTransport("http://localhost:8080/v1/traces", api_key="k")
+            span = EnrichedSpan(
+                trace_id="t1",
+                span_id="s1",
+                name="test",
+                org_id="o",
+                project_id="p",
+                service_name="s",
+            )
+            with patch("disseqt_agentic_sdk.transport.http.requests.Session.post") as mock_post:
+                fake = Mock()
+                fake.status_code = 401
+                fake.raise_for_status.side_effect = _requests.exceptions.HTTPError(
+                    "401 Unauthorized", response=fake
+                )
+                mock_post.return_value = fake
+                transport.send_spans([span])
+            captured = capsys.readouterr()
+            assert (
+                "CRITICAL" not in captured.err
+            ), f"opt-out env var must silence stderr fallback; got: {captured.err!r}"
+        finally:
+            importlib.reload(http_mod)
+
 
 class TestTransportCoverage:
     """Tests to cover missing transport.py lines."""
