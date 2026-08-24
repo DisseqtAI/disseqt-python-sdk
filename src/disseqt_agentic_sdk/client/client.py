@@ -15,14 +15,26 @@ from disseqt_agentic_sdk.utils.logging import get_logger
 logger = get_logger()
 
 
-# Any character that would either be rejected by requests before hitting
-# the wire (control chars, high-bit whitespace) or misparsed as an HTTP
-# header terminator downstream. Kept as a small explicit set — the
-# X-Application-Id contract is a UUID-shaped opaque token, so anything
-# outside plain printable ASCII is almost certainly a bug.
-_APPLICATION_ID_FORBIDDEN = frozenset(chr(c) for c in range(0x20)) | {  # C0 controls incl. \r \n \t
-    chr(0x7F)
-}  # DEL
+# The two things that actually break sending an application_id as an
+# HTTP header, checked directly against the real failure modes rather
+# than an assumed character blacklist:
+#
+#   1. Embedded \r / \n — `requests` raises InvalidHeader for these
+#      (header-injection risk); everything else in the C0-control /
+#      DEL range (tab, NUL, bell, ...) is, in practice, sent over the
+#      wire by `requests` without complaint, so it isn't checked here.
+#   2. Anything outside the Latin-1 range — `http.client.putheader`
+#      encodes header values as Latin-1 and raises an uncaught
+#      UnicodeEncodeError for anything outside it (an emoji, most
+#      non-Latin scripts, a copy-pasted smart quote). That exception
+#      isn't a `requests.exceptions.RequestException`, so nothing
+#      downstream catches it — it can kill the background flush thread
+#      outright. Checked directly via an encode attempt rather than an
+#      enumerated character set, so it can't drift out of sync with
+#      what actually breaks. TP-2128 round-3 senior review P1 #1.1
+#      (the original C0-control blacklist rejected harmless characters
+#      like tab while letting the actual crash-risk class through).
+_APPLICATION_ID_DISALLOWED_LINE_BREAKS = frozenset("\r\n")
 
 
 def _validate_application_id(value: str | None) -> None:
@@ -31,24 +43,30 @@ def _validate_application_id(value: str | None) -> None:
 
     The X-Application-Id header value is opaque to us (Kong's traces-
     auth plugin verifies it against policy-management) but must not
-    carry characters that would trip local HTTP validation on every
-    send. Control chars in particular are silently rejected by
-    ``requests`` before the wire, producing a plain ERROR log per
-    flush; combined with retain-on-failure (TP-2128 round-2 P1 #1.2)
-    the buffer retries forever against a value that will never
-    succeed. Fail loudly here instead. TP-2128 round-2 P2 #2.3.
+    carry characters that would break sending it as an HTTP header on
+    every send. Combined with retain-on-failure (TP-2128 round-2 P1
+    #1.2) an un-caught failure here would otherwise retry forever
+    against a value that will never succeed. Fail loudly here instead.
+    TP-2128 round-2 P2 #2.3, tightened by round-3 P1 #1.1 to match what
+    ``requests``/``http.client`` actually reject rather than an assumed
+    control-character list.
     """
     if value is None:
         return
-    bad = [c for c in value if c in _APPLICATION_ID_FORBIDDEN]
-    if bad:
+    if _APPLICATION_ID_DISALLOWED_LINE_BREAKS & set(value):
         raise ValueError(
-            f"application_id contains disallowed characters "
-            f"{sorted({hex(ord(c)) for c in bad})}. Use a plain ASCII "
-            f"token (typically a UUID); control characters would be "
-            f"rejected locally by requests on every send, causing every "
-            f"flush to fail silently against the ingest endpoint."
+            "application_id contains a carriage return or newline character, "
+            "which requests rejects as a header-injection risk on every send. "
+            "Use a plain token (typically a UUID)."
         )
+    try:
+        value.encode("latin-1")
+    except UnicodeEncodeError as exc:
+        raise ValueError(
+            f"application_id contains a character outside the Latin-1 range "
+            f"({exc}), which would crash HTTP header encoding on every send. "
+            f"Use a plain ASCII token (typically a UUID)."
+        ) from exc
 
 
 class DisseqtAgenticClient:
