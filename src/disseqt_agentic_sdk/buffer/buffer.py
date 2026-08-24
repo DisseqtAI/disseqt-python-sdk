@@ -27,6 +27,7 @@ class TraceBuffer:
         transport: HTTPTransport,
         max_batch_size: int = 100,
         flush_interval: float = 1.0,
+        max_retained_spans: int | None = None,
     ):
         """
         Initialize buffer.
@@ -35,10 +36,17 @@ class TraceBuffer:
             transport: HTTPTransport instance for sending
             max_batch_size: Maximum number of spans per batch (triggers immediate flush)
             flush_interval: Flush interval in seconds (time-based flushing)
+            max_retained_spans: Hard cap on retained spans across failed
+                sends. Prevents unbounded growth when the backend is down
+                or auth is misconfigured. Oldest spans are dropped first
+                with a WARNING log. Defaults to ``max_batch_size * 10``.
         """
         self.transport = transport
         self.max_batch_size = max_batch_size
         self.flush_interval = flush_interval
+        self.max_retained_spans = (
+            max_retained_spans if max_retained_spans is not None else max_batch_size * 10
+        )
 
         self.buffer: list[EnrichedSpan] = []
         self.last_flush_time = time.time()
@@ -93,7 +101,6 @@ class TraceBuffer:
 
         spans_to_send = self.buffer.copy()
         span_count = len(spans_to_send)
-        self.buffer.clear()
         self.last_flush_time = time.time()
 
         logger.debug(
@@ -104,8 +111,49 @@ class TraceBuffer:
             },
         )
 
-        # Send spans (release lock before network call)
-        self.transport.send_spans(spans_to_send)
+        # Retain only the spans that actually failed to send. Using
+        # send_spans_with_failures (not the bool-returning send_spans)
+        # gives per-group granularity: a multi-policy_id batch where
+        # one group succeeds and another fails now retains only the
+        # failing group's spans, so the succeeded group isn't
+        # re-POSTed on the next flush (round-2 P1 #1.2 — the earlier
+        # round-1 fix retained the whole batch, silently double-
+        # delivering the succeeded group).
+        failed_spans = self.transport.send_spans_with_failures(spans_to_send)
+        # Rebuild the buffer: drop the sent-and-succeeded prefix from
+        # the front, put the failed spans back (they retain their
+        # relative order for stable retry), then append anything that
+        # was added after the flush started (nothing today under the
+        # lock, but the semantic stays correct if that changes).
+        tail = self.buffer[span_count:]
+        self.buffer = failed_spans + tail
+
+        if failed_spans:
+            logger.warning(
+                "Buffer flush partially/fully failed — retaining failed spans for retry",
+                extra={
+                    "attempted": span_count,
+                    "failed": len(failed_spans),
+                    "succeeded": span_count - len(failed_spans),
+                    "buffer_size_after": len(self.buffer),
+                    "max_retained_spans": self.max_retained_spans,
+                },
+            )
+            # Guard against runaway growth if the backend stays down or
+            # auth is permanently misconfigured. Drop the oldest first;
+            # the newer spans are more useful for live debugging.
+            if len(self.buffer) > self.max_retained_spans:
+                overflow = len(self.buffer) - self.max_retained_spans
+                dropped = self.buffer[:overflow]
+                self.buffer = self.buffer[overflow:]
+                logger.error(
+                    "Buffer exceeded max_retained_spans — dropping oldest",
+                    extra={
+                        "dropped_count": len(dropped),
+                        "retained_count": len(self.buffer),
+                        "max_retained_spans": self.max_retained_spans,
+                    },
+                )
 
     def should_flush(self) -> bool:
         """

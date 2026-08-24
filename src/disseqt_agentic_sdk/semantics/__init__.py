@@ -11,7 +11,9 @@ from .agentic import (
     AgenticOperation,
     AgenticOutputType,
     AgenticProvider,
+    BatchStatus,
 )
+from .gen_ai import GenAIAttributes, GenAIOperation, GenAISystem
 
 __all__ = [
     "AgenticOperation",
@@ -20,4 +22,8 @@ __all__ = [
     "AgenticFinishReason",
     "AgenticProvider",
     "AgenticCacheOperation",
+    "BatchStatus",
+    "GenAIAttributes",
+    "GenAISystem",
+    "GenAIOperation",
 ]

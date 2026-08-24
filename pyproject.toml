@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "disseqt-ai-sdk"
-version = "0.9.0"
+version = "0.10.0"
 description = "Python SDK for disseqt.ai"
 readme = "README.md"
 license = {text = "Proprietary"}
@@ -26,6 +26,53 @@ requires-python = ">=3.10.14"
 dependencies = [
     "requests>=2.33.0",
     "typing-extensions>=4.8.0",
+    "wrapt>=1.16.0",
+]
+
+# Optional extras — install only the LLM SDKs you actually call.
+#   pip install "disseqt-ai-sdk[openai]"          # one provider
+#   pip install "disseqt-ai-sdk[openai,anthropic]"# a few
+#   pip install "disseqt-ai-sdk[instrumentation]" # everything we auto-instrument
+# Floors match each instrumentor's runtime `min_version` — a looser
+# declaration here lets pip install a version the runtime check refuses,
+# so `instrument_all()` silently no-ops the provider (TP-2128 P1 #1.5).
+#
+# Extras name → registry key mapping (TP-2128 P2 #2.13):
+# The two short extras below (``[gemini]``, ``[mistral]``) don't match
+# their pip-package registry keys (``google-genai``, ``mistralai``).
+# Both names work at the ``instrument(...)`` call site — the registry
+# carries aliases so either the extras name or the canonical key
+# resolves to the same instrumentor:
+#
+#   Extra name       Canonical registry key    Both accepted by instrument()?
+#   ---------------  ------------------------  ------------------------------
+#   [openai]         openai                    yes
+#   [anthropic]      anthropic                 yes
+#   [groq]           groq                      yes
+#   [cohere]         cohere                    yes
+#   [litellm]        litellm                   yes
+#   [mistral]        mistralai                 yes (alias → mistralai)
+#   [gemini]         google-genai              yes (alias → google-genai)
+#
+# instrument_all() walks the canonical keys only, so each instrumentor
+# is applied exactly once regardless of which alias a caller uses.
+[project.optional-dependencies]
+openai = ["openai>=1.50.0"]
+anthropic = ["anthropic>=0.40.0"]
+groq = ["groq>=0.11.0"]
+mistral = ["mistralai>=1.5.0"]
+cohere = ["cohere>=5.11.0"]
+gemini = ["google-genai>=1.0.0"]
+litellm = ["litellm>=1.40.0"]
+# Convenience: pull every provider our instrumentation supports today.
+instrumentation = [
+    "openai>=1.50.0",
+    "anthropic>=0.40.0",
+    "groq>=0.11.0",
+    "mistralai>=1.5.0",
+    "cohere>=5.11.0",
+    "google-genai>=1.0.0",
+    "litellm>=1.40.0",
 ]
 
 [project.urls]
@@ -144,4 +191,28 @@ dev = [
     "requests-mock>=1.12.1",
     "ruff>=0.14.2",
     "types-requests>=2.32.4.20250913",
+    # packaging + tomli are used by test_pyproject_min_versions to
+    # parse this file at test-time. Declared explicitly (not just
+    # relied on transitively via pytest/black) so the test can never
+    # ImportError against a leaner future dev-deps set. TP-2128
+    # round-2 Appendix nit.
+    "packaging>=24.0",
+    "tomli>=2.0.0; python_version < '3.11'",
+    # Provider SDKs for instrumentation tests (real SDK objects, mocked HTTP).
+    # Floors here MUST match each instrumentor.min_version — the extras
+    # in [project.optional-dependencies] mirror them for end-user
+    # installs. The regression test walks both sections so drift here
+    # can't sneak back in silently. TP-2128 round-2 P2 #2.2.
+    "openai>=1.50.0",
+    "anthropic>=0.40.0",
+    "groq>=0.11.0",
+    "mistralai>=1.5.0",
+    "cohere>=5.11.0",
+    "google-generativeai>=0.7.0",
+    "litellm>=1.40.0",
+    # google-genai dev floor stays at 2.16.0 (higher than the extras
+    # floor of 1.0.0) because the test suite uses newer type shapes.
+    # The regression test allows the dev floor to be >= the extras
+    # floor for the same package.
+    "google-genai>=2.16.0",
 ]

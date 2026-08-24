@@ -1,0 +1,541 @@
+"""Tests for the Google Gemini (google-genai) instrumentor."""
+
+from __future__ import annotations
+
+import json
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+pytest.importorskip("google.genai")
+
+from google import genai  # noqa: E402
+from google.genai import types as genai_types  # noqa: E402
+
+from disseqt_agentic_sdk.instrumentation import instrument, uninstrument  # noqa: E402
+from disseqt_agentic_sdk.semantics import AgenticAttributes, GenAIAttributes  # noqa: E402
+from tests.agentic.instrumentation.conftest import find_span  # noqa: E402
+
+
+def _fake_response():
+    # NOTE: usage_metadata uses the real google-genai Pydantic type so a
+    # future field-name typo (e.g. reading `response_token_count`, which
+    # doesn't exist on this type) fails loudly instead of silently
+    # returning a fresh MagicMock. See TP-2128 P0 #0.3 for the bug this
+    # test now guards.
+    part = MagicMock(text="Paris.")
+    content = MagicMock(parts=[part], role="model")
+    candidate = MagicMock(content=content, finish_reason="STOP")
+    usage = genai_types.GenerateContentResponseUsageMetadata(
+        prompt_token_count=7,
+        candidates_token_count=2,
+        total_token_count=9,
+    )
+    response = MagicMock(
+        response_id="gemini-fake",
+        model_version="gemini-2.0-flash-001",
+        candidates=[candidate],
+        usage_metadata=usage,
+    )
+    return response
+
+
+class TestGeminiGenerate:
+    def test_records_span_with_dual_attrs(self, recording_client):
+        instrument("google-genai", recording_client)
+        try:
+            # The google.genai.Client tries to auth from env; provide a fake key.
+            client = genai.Client(api_key="fake")
+            fake = _fake_response()
+            # Patch the underlying call — Models.generate_content ultimately hits an API method.
+            with patch(
+                "google.genai.models.Models._generate_content",
+                return_value=fake,
+                create=True,
+            ):
+                result = client.models.generate_content(
+                    model="gemini-2.0-flash-001",
+                    contents="capital of France?",
+                )
+        finally:
+            uninstrument("google-genai")
+
+        assert result.candidates[0].content.parts[0].text == "Paris."
+
+        span = find_span(recording_client, "gemini.generate_content")
+        attrs = json.loads(span.attributes_json)
+
+        assert attrs[AgenticAttributes.REQUEST_MODEL] == "gemini-2.0-flash-001"
+        assert attrs[AgenticAttributes.PROVIDER_NAME] == "google"
+        assert attrs[AgenticAttributes.USAGE_INPUT_TOKENS] == 7
+        assert attrs[AgenticAttributes.USAGE_OUTPUT_TOKENS] == 2
+        assert attrs[AgenticAttributes.RESPONSE_ID] == "gemini-fake"
+        assert attrs[AgenticAttributes.RESPONSE_MODEL] == "gemini-2.0-flash-001"
+        assert attrs[AgenticAttributes.RESPONSE_FINISH_REASON] == "STOP"
+        assert attrs[AgenticAttributes.OUTPUT_MESSAGES] == [{"role": "model", "content": "Paris."}]
+
+        assert attrs[GenAIAttributes.SYSTEM] == "gemini"
+        assert attrs[GenAIAttributes.OPERATION_NAME] == "generate_content"
+
+    def test_reads_candidates_token_count_field(self, recording_client):
+        """
+        Regression guard for TP-2128 P0 #0.3.
+
+        The instrumentor previously read ``response_token_count`` — a
+        field that does not exist on
+        ``GenerateContentResponseUsageMetadata`` (it only exists on the
+        Live-API `GenerateContentResponse` type). This test uses a
+        real-typed usage-metadata instance so a future rename to a
+        non-existent field fails loudly at Pydantic construction time
+        rather than silently returning 0 tokens.
+        """
+        instrument("google-genai", recording_client)
+        try:
+            client = genai.Client(api_key="fake")
+            usage = genai_types.GenerateContentResponseUsageMetadata(
+                prompt_token_count=42,
+                candidates_token_count=17,
+                total_token_count=59,
+            )
+            part = MagicMock(text="hello")
+            content = MagicMock(parts=[part], role="model")
+            candidate = MagicMock(content=content, finish_reason="STOP")
+            fake = MagicMock(
+                response_id="gemini-tokens",
+                model_version="gemini-2.0-flash-001",
+                candidates=[candidate],
+                usage_metadata=usage,
+            )
+            with patch(
+                "google.genai.models.Models._generate_content",
+                return_value=fake,
+                create=True,
+            ):
+                client.models.generate_content(
+                    model="gemini-2.0-flash-001",
+                    contents="x",
+                )
+        finally:
+            uninstrument("google-genai")
+
+        span = find_span(recording_client, "gemini.generate_content")
+        attrs = json.loads(span.attributes_json)
+        assert attrs[AgenticAttributes.USAGE_INPUT_TOKENS] == 42
+        assert attrs[AgenticAttributes.USAGE_OUTPUT_TOKENS] == 17
+        assert attrs[GenAIAttributes.USAGE_INPUT_TOKENS] == 42
+        assert attrs[GenAIAttributes.USAGE_OUTPUT_TOKENS] == 17
+        assert attrs[GenAIAttributes.USAGE_TOTAL_TOKENS] == 59
+
+
+class TestGeminiToolCalls:
+    def test_captures_function_call_parts(self, recording_client):
+        # Gemini surfaces tool calls as `candidates[0].content.parts[].function_call`
+        # with a parsed `args` dict; the adapter synthesizes an id.
+        instrument("google-genai", recording_client)
+        try:
+            client = genai.Client(api_key="fake")
+
+            fc = MagicMock()
+            fc.name = "get_weather"
+            fc.args = {"location": "Paris"}
+            # Function-call parts don't carry text; force to None so
+            # MagicMock's auto-attribute doesn't accidentally look like text.
+            part = MagicMock(function_call=fc, text=None)
+            # A plain-text part alongside a function-call part is realistic.
+            text_part = MagicMock(text="Let me check.", function_call=None)
+            content = MagicMock(parts=[text_part, part], role="model")
+            candidate = MagicMock(content=content, finish_reason="STOP")
+            usage = genai_types.GenerateContentResponseUsageMetadata(
+                prompt_token_count=8,
+                candidates_token_count=4,
+                total_token_count=12,
+            )
+            fake = MagicMock(
+                response_id="gemini-tools",
+                model_version="gemini-2.0-flash-001",
+                candidates=[candidate],
+                usage_metadata=usage,
+            )
+
+            config = genai_types.GenerateContentConfig(
+                tools=[
+                    genai_types.Tool(
+                        function_declarations=[
+                            genai_types.FunctionDeclaration(
+                                name="get_weather",
+                                description="Get current weather",
+                            )
+                        ]
+                    )
+                ],
+            )
+            with patch(
+                "google.genai.models.Models._generate_content",
+                return_value=fake,
+                create=True,
+            ):
+                client.models.generate_content(
+                    model="gemini-2.0-flash-001",
+                    contents="weather in Paris?",
+                    config=config,
+                )
+        finally:
+            uninstrument("google-genai")
+
+        span = find_span(recording_client, "gemini.generate_content")
+        attrs = json.loads(span.attributes_json)
+
+        req_tools = json.loads(attrs[AgenticAttributes.REQUEST_TOOLS])
+        # google-genai's Tool model stringifies with its own repr; just
+        # confirm the tool name is somewhere in the serialized payload.
+        assert "get_weather" in json.dumps(req_tools)
+
+        calls = attrs[AgenticAttributes.TOOL_CALLS]
+        assert len(calls) == 1
+        assert calls[0]["name"] == "get_weather"
+        # id is synthesized as f"{response_id}_call_{index}" so it stays
+        # unique across multiple Gemini responses in the same agent_span
+        # (TP-2128 P1 #1.3).
+        assert calls[0]["id"] == "gemini-tools_call_0"
+
+
+class TestGeminiMultiCandidate:
+    """
+    TP-2128 P2 #2.8: candidate_count>1 used to lose every candidate but
+    [0]. Now every candidate contributes a finish_reason and an output
+    message; tool_calls / convenience attrs still come from candidate 0
+    to keep parity with the OpenAI n>1 policy (item 2.7).
+    """
+
+    def test_all_candidates_contribute_finish_reasons_and_messages(self, recording_client):
+        instrument("google-genai", recording_client)
+        try:
+            client = genai.Client(api_key="fake")
+
+            def _cand(text: str, reason: str):
+                part = MagicMock(text=text)
+                content = MagicMock(parts=[part], role="model")
+                return MagicMock(content=content, finish_reason=reason)
+
+            usage = genai_types.GenerateContentResponseUsageMetadata(
+                prompt_token_count=3, candidates_token_count=6, total_token_count=9
+            )
+            response = MagicMock(
+                response_id="gemini-multi",
+                model_version="gemini-2.0-flash-001",
+                candidates=[
+                    _cand("first answer", "STOP"),
+                    _cand("second answer", "MAX_TOKENS"),
+                    _cand("third answer", "STOP"),
+                ],
+                usage_metadata=usage,
+            )
+
+            with patch(
+                "google.genai.models.Models._generate_content",
+                return_value=response,
+                create=True,
+            ):
+                client.models.generate_content(
+                    model="gemini-2.0-flash-001",
+                    contents="give me three answers",
+                )
+        finally:
+            uninstrument("google-genai")
+
+        span = find_span(recording_client, "gemini.generate_content")
+        attrs = json.loads(span.attributes_json)
+
+        assert attrs[GenAIAttributes.RESPONSE_FINISH_REASONS] == ["STOP", "MAX_TOKENS", "STOP"]
+        # Singular kept for back-compat with existing dashboards.
+        assert attrs[AgenticAttributes.RESPONSE_FINISH_REASON] == "STOP"
+        assert attrs[AgenticAttributes.OUTPUT_MESSAGES] == [
+            {"role": "model", "content": "first answer"},
+            {"role": "model", "content": "second answer"},
+            {"role": "model", "content": "third answer"},
+        ]
+
+
+class TestGeminiBarePartInput:
+    """
+    Regression: `_normalize_contents` assumed anything non-str, non-list
+    was Content-shaped (has `.parts`). A bare `Part` / `File` object has
+    `.text` directly, not `.parts`. Before TP-2128 P1 #1.7, passing
+    `contents=types.Part(text="hello")` recorded an empty prompt.
+    """
+
+    def test_single_bare_part_extracts_text(self):
+        from disseqt_agentic_sdk.instrumentation.gemini.instrumentor import (
+            _normalize_contents,
+        )
+
+        part = genai_types.Part(text="hello Gemini")
+        normalized = _normalize_contents(part)
+        assert normalized == [{"role": "user", "content": "hello Gemini"}]
+
+    def test_list_of_bare_parts_extracts_each(self):
+        from disseqt_agentic_sdk.instrumentation.gemini.instrumentor import (
+            _normalize_contents,
+        )
+
+        parts = [
+            genai_types.Part(text="first"),
+            genai_types.Part(text="second"),
+        ]
+        normalized = _normalize_contents(parts)
+        assert normalized == [
+            {"role": "user", "content": "first"},
+            {"role": "user", "content": "second"},
+        ]
+
+    def test_content_shape_still_works(self):
+        # Content-shaped input still normalizes via .parts.
+        from disseqt_agentic_sdk.instrumentation.gemini.instrumentor import (
+            _normalize_contents,
+        )
+
+        content = genai_types.Content(
+            role="model",
+            parts=[genai_types.Part(text="reply")],
+        )
+        assert _normalize_contents(content) == [{"role": "model", "content": "reply"}]
+
+
+class TestGeminiStreamingDedup:
+    def test_two_identical_parallel_calls_both_survive(self, recording_client):
+        """
+        Regression: streaming accumulator used to dedup tool calls by
+        ``(name, args-as-JSON)``. Two legitimate parallel calls to the
+        same tool with the same args (e.g. two ``roll_die()``, two
+        zero-arg calls, two identical shard queries) collapsed onto a
+        single key and the second was silently dropped. Now dedup is by
+        position within ``candidate.content.parts``, so identical calls
+        at different positions each get their own slot.
+        TP-2128 P1 #1.6.
+        """
+        instrument("google-genai", recording_client)
+        try:
+            client = genai.Client(api_key="fake")
+
+            # Build one chunk containing two identical parallel function
+            # calls at parts positions 0 and 1.
+            def _fc(name: str, args: dict) -> MagicMock:
+                fc = MagicMock()
+                fc.name = name
+                fc.args = args
+                fc.id = None
+                return fc
+
+            part0 = MagicMock(function_call=_fc("roll_die", {}), text=None)
+            part1 = MagicMock(function_call=_fc("roll_die", {}), text=None)
+            content = MagicMock(parts=[part0, part1], role="model")
+            candidate = MagicMock(content=content, finish_reason="STOP")
+            chunk = MagicMock(
+                response_id="stream-resp",
+                model_version="gemini-2.0-flash-001",
+                candidates=[candidate],
+                usage_metadata=genai_types.GenerateContentResponseUsageMetadata(
+                    prompt_token_count=1,
+                    candidates_token_count=1,
+                    total_token_count=2,
+                ),
+            )
+
+            # Same chunk arrives twice — simulates Gemini emitting the
+            # accumulated snapshot on successive stream frames.
+            def _fake_stream(*_a, **_kw):
+                yield chunk
+                yield chunk
+
+            with patch(
+                "google.genai.models.Models._generate_content_stream",
+                side_effect=_fake_stream,
+                create=True,
+            ):
+                stream = client.models.generate_content_stream(
+                    model="gemini-2.0-flash-001",
+                    contents="roll two dice",
+                )
+                # Drain the wrapped stream.
+                list(stream)
+        finally:
+            uninstrument("google-genai")
+
+        span = find_span(recording_client, "gemini.generate_content_stream")
+        attrs = json.loads(span.attributes_json)
+        calls = attrs[AgenticAttributes.TOOL_CALLS]
+        # Before the fix: len == 1 (content-hash dedup collapsed the two
+        # identical roll_die() calls). After: len == 2 because dedup is
+        # by position within parts, not by content.
+        assert len(calls) == 2, f"expected both roll_die calls; got {calls}"
+        assert all(c["name"] == "roll_die" for c in calls)
+
+
+class TestGeminiStreamingPartialArgs:
+    """
+    TP-2128 P2 #2.10: Vertex ``stream_function_call_arguments=True`` ships
+    FunctionCall args as ``partial_args`` (list[PartialArg]) instead of a
+    fully-formed ``args`` dict. Before the fix, only ``args`` was read
+    and the tool call finalized as ``arguments: '{}'``. Now the
+    accumulator collects fragments across chunks and assembles them into
+    an args dict on finalize.
+    """
+
+    def test_partial_args_assemble_from_fragments(self, recording_client):
+        instrument("google-genai", recording_client)
+        try:
+            client = genai.Client(api_key="fake")
+
+            def _pa(json_path: str, **value_kwargs):
+                # Only one of *_value is set per fragment on the wire.
+                fields = {
+                    "json_path": json_path,
+                    "string_value": None,
+                    "number_value": None,
+                    "bool_value": None,
+                    "null_value": None,
+                }
+                fields.update(value_kwargs)
+                return SimpleNamespace(**fields)
+
+            def _fc_partial(name: str, fragments, real_id=None):
+                fc = MagicMock()
+                fc.name = name
+                fc.args = None
+                fc.partial_args = fragments
+                fc.id = real_id
+                return fc
+
+            # Chunk 1: name + first fragment (location=P), will_continue.
+            fc_a = _fc_partial(
+                "get_weather",
+                [_pa("$.location", string_value="P")],
+                real_id="fc_abc",
+            )
+            # Chunk 2: second fragment overwrites the location string.
+            fc_b = _fc_partial(
+                "get_weather",
+                [_pa("$.location", string_value="Paris")],
+            )
+            # Chunk 3: a second field with a number.
+            fc_c = _fc_partial(
+                "get_weather",
+                [_pa("$.days", number_value=3)],
+            )
+
+            def _mk_chunk(fc):
+                part = MagicMock(function_call=fc, text=None)
+                content = MagicMock(parts=[part], role="model")
+                candidate = MagicMock(content=content, finish_reason=None)
+                return MagicMock(
+                    response_id="stream-partial",
+                    model_version="gemini-2.0-flash-001",
+                    candidates=[candidate],
+                    usage_metadata=None,
+                )
+
+            end_chunk = MagicMock(
+                response_id="stream-partial",
+                model_version="gemini-2.0-flash-001",
+                candidates=[MagicMock(content=None, finish_reason="STOP")],
+                usage_metadata=genai_types.GenerateContentResponseUsageMetadata(
+                    prompt_token_count=3, candidates_token_count=6, total_token_count=9
+                ),
+            )
+
+            chunks = [_mk_chunk(fc_a), _mk_chunk(fc_b), _mk_chunk(fc_c), end_chunk]
+
+            def _fake_stream(*_a, **_kw):
+                yield from chunks
+
+            with patch(
+                "google.genai.models.Models._generate_content_stream",
+                side_effect=_fake_stream,
+                create=True,
+            ):
+                list(
+                    client.models.generate_content_stream(
+                        model="gemini-2.0-flash-001",
+                        contents="weather please",
+                    )
+                )
+        finally:
+            uninstrument("google-genai")
+
+        span = find_span(recording_client, "gemini.generate_content_stream")
+        attrs = json.loads(span.attributes_json)
+        calls = attrs[AgenticAttributes.TOOL_CALLS]
+        assert len(calls) == 1
+        assert calls[0]["name"] == "get_weather"
+        assert calls[0]["id"] == "fc_abc"
+        # Assembled args: last-write-wins for repeated json_path, plus
+        # the second field carried by the third fragment.
+        args = json.loads(calls[0]["arguments"])
+        assert args == {"location": "Paris", "days": 3}
+
+
+class TestGeminiLaneBCallIdCollision:
+    def test_two_calls_in_one_agent_span_dont_collide(self, recording_client):
+        """
+        Regression: two Gemini responses inside a single ``agent_span``
+        both synthesized ``call_0``, so the Lane-B aggregator's
+        ``setdefault`` merge silently dropped the second call. Now the
+        adapter namespaces synthesized ids by response_id, and both
+        entries survive on the AGENT_EXEC span.
+        """
+        from disseqt_agentic_sdk import agent_span
+
+        def _fake(tool_name: str, resp_id: str) -> MagicMock:
+            fc = MagicMock()
+            fc.name = tool_name
+            fc.args = {}
+            fc.id = None  # Gemini deployment that doesn't populate ids
+            part = MagicMock(function_call=fc, text=None)
+            content = MagicMock(parts=[part], role="model")
+            candidate = MagicMock(content=content, finish_reason="STOP")
+            return MagicMock(
+                response_id=resp_id,
+                model_version="gemini-2.0-flash-001",
+                candidates=[candidate],
+                usage_metadata=genai_types.GenerateContentResponseUsageMetadata(
+                    prompt_token_count=1,
+                    candidates_token_count=1,
+                    total_token_count=2,
+                ),
+            )
+
+        instrument("google-genai", recording_client)
+        try:
+            client = genai.Client(api_key="fake")
+            with agent_span(recording_client, "multi_tool_agent"):
+                with patch(
+                    "google.genai.models.Models._generate_content",
+                    side_effect=[
+                        _fake("get_weather", "resp-1"),
+                        _fake("get_time", "resp-2"),
+                    ],
+                    create=True,
+                ):
+                    client.models.generate_content(
+                        model="gemini-2.0-flash-001", contents="weather?"
+                    )
+                    client.models.generate_content(
+                        model="gemini-2.0-flash-001", contents="what time?"
+                    )
+        finally:
+            uninstrument("google-genai")
+
+        agent = find_span(recording_client, "multi_tool_agent")
+        attrs = json.loads(agent.attributes_json)
+        calls = attrs[AgenticAttributes.TOOL_CALLS]
+        # Before the fix: len == 1 (the second get_time dropped).
+        # After: both survive because ids are namespaced by response_id.
+        names = sorted(c["name"] for c in calls)
+        assert names == [
+            "get_time",
+            "get_weather",
+        ], f"expected both calls to survive; got {[c['name'] for c in calls]}"
+        assert calls[0]["id"] != calls[1]["id"]
+        # Each id is namespaced by its own response_id — no collision.
+        assert "resp-1" in json.dumps(calls) and "resp-2" in json.dumps(calls)

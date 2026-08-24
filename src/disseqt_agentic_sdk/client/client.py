@@ -15,6 +15,60 @@ from disseqt_agentic_sdk.utils.logging import get_logger
 logger = get_logger()
 
 
+# The two things that actually break sending an application_id as an
+# HTTP header, checked directly against the real failure modes rather
+# than an assumed character blacklist:
+#
+#   1. Embedded \r / \n — `requests` raises InvalidHeader for these
+#      (header-injection risk); everything else in the C0-control /
+#      DEL range (tab, NUL, bell, ...) is, in practice, sent over the
+#      wire by `requests` without complaint, so it isn't checked here.
+#   2. Anything outside the Latin-1 range — `http.client.putheader`
+#      encodes header values as Latin-1 and raises an uncaught
+#      UnicodeEncodeError for anything outside it (an emoji, most
+#      non-Latin scripts, a copy-pasted smart quote). That exception
+#      isn't a `requests.exceptions.RequestException`, so nothing
+#      downstream catches it — it can kill the background flush thread
+#      outright. Checked directly via an encode attempt rather than an
+#      enumerated character set, so it can't drift out of sync with
+#      what actually breaks. TP-2128 round-3 senior review P1 #1.1
+#      (the original C0-control blacklist rejected harmless characters
+#      like tab while letting the actual crash-risk class through).
+_APPLICATION_ID_DISALLOWED_LINE_BREAKS = frozenset("\r\n")
+
+
+def _validate_application_id(value: str | None) -> None:
+    """
+    Raise ``ValueError`` immediately on a malformed ``application_id``.
+
+    The X-Application-Id header value is opaque to us (Kong's traces-
+    auth plugin verifies it against policy-management) but must not
+    carry characters that would break sending it as an HTTP header on
+    every send. Combined with retain-on-failure (TP-2128 round-2 P1
+    #1.2) an un-caught failure here would otherwise retry forever
+    against a value that will never succeed. Fail loudly here instead.
+    TP-2128 round-2 P2 #2.3, tightened by round-3 P1 #1.1 to match what
+    ``requests``/``http.client`` actually reject rather than an assumed
+    control-character list.
+    """
+    if value is None:
+        return
+    if _APPLICATION_ID_DISALLOWED_LINE_BREAKS & set(value):
+        raise ValueError(
+            "application_id contains a carriage return or newline character, "
+            "which requests rejects as a header-injection risk on every send. "
+            "Use a plain token (typically a UUID)."
+        )
+    try:
+        value.encode("latin-1")
+    except UnicodeEncodeError as exc:
+        raise ValueError(
+            f"application_id contains a character outside the Latin-1 range "
+            f"({exc}), which would crash HTTP header encoding on every send. "
+            f"Use a plain ASCII token (typically a UUID)."
+        ) from exc
+
+
 class DisseqtAgenticClient:
     """
     Main SDK client - manages configuration, transport, and buffering.
@@ -64,6 +118,7 @@ class DisseqtAgenticClient:
         flush_interval: float = 1.0,
         max_retries: int = 3,
         realtime_policy_id: str | None = None,
+        application_id: str | None = None,
     ):
         """
         Initialize SDK client.
@@ -78,6 +133,14 @@ class DisseqtAgenticClient:
             max_batch_size: Maximum spans per batch
             flush_interval: Flush interval in seconds
             max_retries: Maximum retry attempts
+            application_id: Optional application UUID. When set, sent as
+                the ``X-Application-Id`` request header on every trace POST.
+                Kong's traces-auth plugin verifies the header against
+                policy-management (checks project + org match); mismatch
+                or unknown app is rejected before any span reaches
+                llm-monitoring. When unset, spans go through project-only
+                scope (existing behaviour) — safe default for callers that
+                haven't been assigned an application id yet.
             realtime_policy_id: Optional realtime-policy UUID. When set,
                 every span emitted by this client carries it as the
                 ``policy.id`` resource attribute, which is the contract
@@ -132,6 +195,32 @@ class DisseqtAgenticClient:
         self.service_version = service_version
         self.environment = environment
         self.realtime_policy_id = realtime_policy_id
+        # Normalise empty / whitespace-only to None so the transport can
+        # gate on a single "is set?" check. Sending X-Application-Id: ""
+        # to Kong would either fail strict verify or short-circuit to
+        # project-only scope depending on the plugin's require flag —
+        # cleaner to just not send the header at all.
+        self.application_id = (
+            application_id.strip() if application_id and application_id.strip() else None
+        )
+        # Fail-fast on malformed application_id (control chars,
+        # embedded whitespace, non-ASCII). `requests` rejects these
+        # locally on every POST attempt — but that's an ERROR log per
+        # flush, not the CRITICAL auth-failure banner from #1.3, and
+        # combined with retain-on-failure (#1.2) means the buffer
+        # retries forever silently against a value that will never
+        # succeed. Raise at construction so operators find the
+        # misconfiguration before the app enters its request loop.
+        # TP-2128 round-2 P2 #2.3.
+        _validate_application_id(self.application_id)
+
+        # Nudge callers who haven't wired an application_id yet. One-shot
+        # per process; silenced via `DISSEQT_SDK_DISABLE_APPLICATION_ID_NOTICE=1`
+        # or `logging.getLogger("disseqt_agentic_sdk").setLevel(logging.ERROR)`.
+        if self.application_id is None:
+            from disseqt_agentic_sdk._notices import notify_missing_application_id
+
+            notify_missing_application_id()
 
         # Initialize transport
         self.transport = HTTPTransport(
@@ -139,6 +228,7 @@ class DisseqtAgenticClient:
             api_key=api_key,
             max_retries=max_retries,
             realtime_policy_id=realtime_policy_id,
+            application_id=self.application_id,
         )
 
         # Initialize buffer

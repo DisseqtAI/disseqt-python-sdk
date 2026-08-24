@@ -7,6 +7,123 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-08-23
+
+### Added
+- **Auto-instrumentation for popular LLM SDKs** — one
+  `instrument_all(client)` call at startup patches every installed
+  provider SDK we support so every LLM call emits a `MODEL_EXEC` span
+  automatically, with no wrapping in user code. Supported providers
+  (minimum versions in parens): OpenAI (>=1.50), Anthropic (>=0.40),
+  Groq (>=0.11), Mistral / `mistralai` (>=1.5), Cohere v2 (>=5.11),
+  Google Gemini via `google-genai` (>=1.0), and LiteLLM (>=1.40). Sync,
+  async, and streaming covered for each. Spans dual-emit `agentic.*`
+  and OpenTelemetry `gen_ai.*` attributes so traces are consumable by
+  OTel-native tooling without translation. Selective use via
+  `instrument("openai", client)`; disable via `uninstrument("openai")`
+  / `uninstrument_all()`. Install per-provider or all-at-once extras:
+  `pip install "disseqt-ai-sdk[openai,anthropic]"` or
+  `pip install "disseqt-ai-sdk[instrumentation]"`.
+- **Auto-capture of LLM tool calls (Lane A)** — every MODEL_EXEC span
+  now carries `agentic.tool_calls` + `gen_ai.tool_calls` normalized to
+  a canonical `[{id, name, arguments (JSON str)}]` shape across all
+  four provider tool-call formats (OpenAI, Anthropic, Gemini,
+  Cohere v2). Streaming coverage included. Request-side `tools=[...]`
+  schema captured as `agentic.request.tools`.
+- **`agent_span` + `record_tool_result` (Lane B)** — context manager
+  that opens an AGENT_EXEC span and aggregates planned tool calls
+  (from nested MODEL_EXEC spans) with the user-supplied execution
+  outcomes (`success` / `failure` / `error` / `timeout`) into a fused
+  `agentic.tool_calls` list on the AGENT_EXEC span — which is what
+  the tool-failure-rate, tool-call-accuracy, plan-optimality, and
+  plan-coherence validators read. Async-safe via contextvars.
+- **OpenAI Batch API instrumentation** — `client.batches.create()` /
+  `.retrieve()` / `.cancel()` (sync + async) each emit a MODEL_EXEC
+  span tagged with a shared `agentic.batch.id` so downstream can
+  reconstruct the create → poll → complete lifecycle by GROUP BY.
+  Adds a canonical batch shape + adapter layer ready for Anthropic /
+  Mistral batch follow-ups.
+- **Embeddings-specific attributes** — `agentic.embeddings.*` on every
+  OpenAI embeddings call: `input_count`, `dimensions_requested`,
+  `dimensions_actual` (measured from response), `encoding_format`,
+  `count`, plus `agentic.request.user`. Canonical adapter layer in
+  place for adding Mistral / Cohere / Gemini / LiteLLM embeddings.
+- **User-supplied custom attributes on auto-spans** — new
+  `set_span_attributes(**kwargs)`, `clear_span_attributes()`, and
+  `span_context(**kwargs)` helpers. Attributes set in the current
+  context are merged onto every auto-created span at scope-exit time,
+  **overriding auto values on key collision** (user intent always
+  wins). Backed by `contextvars.ContextVar` — async-safe, no
+  bleed-through between concurrent tasks.
+- **Lifecycle hooks on instrumentors** — optional `on_install` /
+  `on_uninstall` callbacks on `instrument()` / `instrument_all()` /
+  `uninstrument()` / `uninstrument_all()`. Callbacks fire outside the
+  registry lock; exceptions from user hooks are swallowed so bad
+  observability plumbing can't corrupt instrumentation state.
+- **Structured instrumentation errors** — new `InstrumentationError`
+  with a stable `.reason` string (`unknown_provider`, `load_failure`,
+  `package_missing`, `unsupported_version`, `already_instrumented`,
+  `client_mismatch`, `instrument_failure`). Opt in via `strict=True`
+  on `instrument()` / `instrument_all()`; non-strict path keeps the
+  existing bool return but logs the specific reason.
+- **Duration tracking + slow-call warnings** — every auto span emits
+  `agentic.request.duration_ms`, and a WARNING logs when the wrapped
+  call exceeds a configurable threshold (default 5 min). Configure
+  via `set_slow_call_threshold_ms(ms)`; pass `None` to disable.
+- **`get_instrumented_client(name)`** — new public helper returns the
+  client currently bound to a provider, or `None` if not instrumented.
+- **`application_id` recommendation notice** — `DisseqtAgenticClient(...)`
+  now logs a one-shot `WARNING` through the stdlib `disseqt_agentic_sdk`
+  logger when constructed without `application_id`, pointing to the AI
+  Applications Registry docs. Purely informational; ingest behaviour is
+  unchanged. Suppress with `DISSEQT_SDK_DISABLE_APPLICATION_ID_NOTICE=1`
+  or `logging.getLogger("disseqt_agentic_sdk").setLevel(logging.ERROR)`.
+
+### Fixed
+- **Thread-safe `_ACTIVE` registry** — concurrent `instrument_all()`
+  calls from multiple threads could race the check-then-set and
+  double-patch. Now guarded by an `RLock`.
+- **Uninstrument no longer leaks client references** — long-running
+  processes that repeatedly instrument/uninstrument accumulated a
+  live client per cycle via wrapper closures. `_client` is now
+  cleared on scope exit.
+- **Robust unwrap + rollback on partial-instrument failure** — if
+  `_instrument()` raised after patching some methods, those patches
+  were left installed with no tracking entry. Now unwound. Also
+  `_restore_wrapped` uses identity checks so we no longer tear down
+  another library's wrapper when they've stacked on top of ours.
+- **Client-mismatch detection** — calling `instrument("openai", B)`
+  after `instrument("openai", A)` used to silently return `False`
+  with a debug log; now warns loudly and refuses the rebind unless
+  `uninstrument()` is called first.
+- **Defensive attribute-writer wrapping** — bugs in our attribute
+  writers (e.g. from malformed provider responses) can no longer
+  crash the user's LLM call. All `set_common_chat_request` /
+  `set_chat_response` / `_set_request_attrs` / `_set_response_attrs`
+  / `set_batch_attrs` / `_set_embeddings_*` invocations go through
+  `safe_call` — log-and-continue on error.
+
+### Refactor
+- Extracted request-kwarg string keys (`"stream"`, `"model"`,
+  `"messages"`, `"prompt"`, `"input"`, `"system"`, `"contents"`,
+  `"config"`, `"tools"`) into named constants in `_kwargs.py`.
+- Type-annotated every wrapt wrapper across the 7 provider modules
+  and the context-manager exits; removed all
+  `# type: ignore[no-untyped-def]` from the instrumentation tree.
+- Standardized best-effort error handling: `contextlib.suppress` for
+  pure swallow, `except Exception as e:` only where the exception
+  message is needed to build a structured error.
+- Filled in skimpy docstrings on `_oai_compat.read`, the
+  `ChatStreamAccumulator` methods, `base._detect_version`, and
+  `base._version_lt`.
+
+### Dependencies
+- Added `wrapt>=1.16.0` as a runtime dependency (used by the
+  auto-instrumentation monkey-patcher).
+- Added optional-dependencies extras for each supported provider:
+  `openai`, `anthropic`, `groq`, `mistral`, `cohere`, `gemini`,
+  `litellm`, and `instrumentation` (installs all seven).
+
 ## [0.9.0] - 2026-08-22
 
 ### Added

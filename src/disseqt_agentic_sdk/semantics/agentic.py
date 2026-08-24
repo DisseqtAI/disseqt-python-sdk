@@ -17,6 +17,23 @@ class AgenticOperation:
     TEXT_COMPLETION = "text_completion"
     EMBEDDINGS = "embeddings"
     GENERATE_CONTENT = "generate_content"
+    # Async batch-inference lifecycle. Each SDK call gets its own span
+    # tagged with `agentic.batch.id` so consumers can group create/retrieve/
+    # cancel spans for the same job across time.
+    BATCH_CREATE = "batch.create"
+    BATCH_RETRIEVE = "batch.retrieve"
+    BATCH_CANCEL = "batch.cancel"
+
+
+class BatchStatus:
+    """Canonical batch-job status values, normalized across providers."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
 
 
 # Attribute name constants
@@ -35,6 +52,13 @@ class AgenticAttributes:
     TOOL_NAME = "agentic.tool.name"
     TOOL_CALL_ID = "agentic.tool.call_id"
     TOOL_DEFINITIONS = "agentic.tool.definitions"
+    TOOL_ARGS = "agentic.tool.args"
+    TOOL_RESULT = "agentic.tool.result"
+    # Full list of tool calls emitted by the model on a MODEL_EXEC span, or
+    # accumulated across an AGENT_EXEC span. Read by the tool-call-accuracy,
+    # plan-optimality, plan-coherence, and tool-failure-rate validators.
+    TOOL_CALLS = "agentic.tool_calls"
+    REQUEST_TOOLS = "agentic.request.tools"
 
     # Model/Provider attributes
     REQUEST_MODEL = "agentic.request.model"
@@ -59,6 +83,14 @@ class AgenticAttributes:
     USAGE_TOTAL_TOKENS = "agentic.usage.total_tokens"
     USAGE_INPUT_CHARACTERS = "agentic.usage.input_characters"
     USAGE_OUTPUT_CHARACTERS = "agentic.usage.output_characters"
+    # Prompt-cache tokens (Anthropic prompt caching, and any future
+    # provider that reports the same breakdown). ``cache_creation`` is
+    # tokens billed to write into a cache slot; ``cache_read`` is tokens
+    # served from cache at a discount. Both are already included in
+    # USAGE_INPUT_TOKENS — these split it so cost dashboards can price
+    # the two categories separately.
+    USAGE_CACHE_CREATION_INPUT_TOKENS = "agentic.usage.cache_creation_input_tokens"
+    USAGE_CACHE_READ_INPUT_TOKENS = "agentic.usage.cache_read_input_tokens"
 
     # Messages
     INPUT_MESSAGES = "agentic.input.messages"
@@ -72,6 +104,8 @@ class AgenticAttributes:
     RESPONSE_ID = "agentic.response.id"
     RESPONSE_MODEL = "agentic.response.model"
     RESPONSE_FINISH_REASON = "agentic.response.finish_reason"
+    # Wall-clock duration of the wrapped SDK call, in milliseconds.
+    REQUEST_DURATION_MS = "agentic.request.duration_ms"
 
     # Cache
     CACHE_HIT = "agentic.cache.hit"
@@ -81,6 +115,29 @@ class AgenticAttributes:
     ERROR_TYPE = "agentic.error.type"
     ERROR_MESSAGE = "agentic.error.message"
     ERROR_CODE = "agentic.error.code"
+
+    # Embedding-specific attributes. Emitted on embeddings.create spans
+    # in addition to the shared model/usage/messages attributes.
+    EMBEDDINGS_DIMENSIONS_REQUESTED = "agentic.embeddings.dimensions_requested"
+    EMBEDDINGS_DIMENSIONS_ACTUAL = "agentic.embeddings.dimensions_actual"
+    EMBEDDINGS_ENCODING_FORMAT = "agentic.embeddings.encoding_format"
+    EMBEDDINGS_COUNT = "agentic.embeddings.count"
+    EMBEDDINGS_INPUT_COUNT = "agentic.embeddings.input_count"
+    REQUEST_USER = "agentic.request.user"
+
+    # Batch-job attributes. Emitted on every create/retrieve/cancel span
+    # tagged with the same batch id so downstream can group by lifecycle.
+    BATCH_ID = "agentic.batch.id"
+    BATCH_STATUS = "agentic.batch.status"
+    BATCH_ENDPOINT = "agentic.batch.endpoint"
+    BATCH_REQUEST_COUNT = "agentic.batch.request_count"
+    BATCH_COMPLETED_COUNT = "agentic.batch.completed_count"
+    BATCH_FAILED_COUNT = "agentic.batch.failed_count"
+    BATCH_INPUT_FILE_ID = "agentic.batch.input_file_id"
+    BATCH_OUTPUT_FILE_ID = "agentic.batch.output_file_id"
+    BATCH_ERROR_FILE_ID = "agentic.batch.error_file_id"
+    BATCH_CREATED_AT = "agentic.batch.created_at"
+    BATCH_COMPLETED_AT = "agentic.batch.completed_at"
 
 
 # Output types
@@ -118,15 +175,26 @@ class AgenticCacheOperation:
 
 # Provider names
 class AgenticProvider:
-    """Agentic provider names"""
+    """Agentic provider names.
+
+    Every value here should generally match its ``GenAISystem`` sibling
+    so consumers reading either ``agentic.provider.name`` or
+    ``gen_ai.system`` see identical strings. The one exception is
+    ``AZURE_AI``: ``GenAISystem.AZURE_AI`` follows the OpenTelemetry
+    spec value ``az.ai.inference`` while this side uses ``azure.ai``
+    (dotted namespace, matches ``aws.bedrock``). A future Azure
+    instrumentor must set both attributes explicitly rather than
+    reusing one value for both — TP-2128 Appendix.
+    """
 
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
     GOOGLE = "google"
     AWS_BEDROCK = "aws.bedrock"
-    AZURE_AI = "azure.ai"
+    AZURE_AI = "azure.ai"  # NOTE: paired with GenAISystem.AZURE_AI = "az.ai.inference"
     COHERE = "cohere"
     MISTRAL_AI = "mistral_ai"
     GROQ = "groq"
     PERPLEXITY = "perplexity"
     X_AI = "x_ai"
+    LITELLM = "litellm"

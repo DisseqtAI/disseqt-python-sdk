@@ -11,6 +11,10 @@ from typing import Any
 
 from disseqt_agentic_sdk.client import DisseqtAgenticClient
 from disseqt_agentic_sdk.enums import SpanKind
+from disseqt_agentic_sdk.instrumentation._utils import (
+    safe_set,
+    set_messages_if_capturing,
+)
 from disseqt_agentic_sdk.semantics import AgenticAttributes, AgenticOperation
 
 
@@ -66,10 +70,14 @@ def trace_llm_call(
     span.set_model_info(model_name, provider)
     span.set_operation(AgenticOperation.CHAT)
 
+    # Route message-body writes through the content-capture gate so
+    # set_capture_content(False) actually redacts on the manual API
+    # too — the auto-instrumentation path always did, this public
+    # helper used to bypass it (TP-2128 round-2 P0 #0.2).
     if input_messages:
-        span.set_messages(input_messages=input_messages)
+        set_messages_if_capturing(span, input_messages=input_messages)
     if output_messages:
-        span.set_messages(output_messages=output_messages)
+        set_messages_if_capturing(span, output_messages=output_messages)
     if input_tokens is not None and output_tokens is not None:
         span.set_token_usage(input_tokens, output_tokens)
     if temperature is not None:
@@ -77,9 +85,11 @@ def trace_llm_call(
     if max_tokens is not None:
         span.set_attribute("agentic.request.max_tokens", max_tokens)
 
-    # Add any additional attributes
+    # Route caller-supplied kwargs through safe_set so any content-
+    # attribute keys the caller passes (e.g. AgenticAttributes.PROMPT
+    # via `**{AgenticAttributes.PROMPT: ...}`) also honor the gate.
     for key, value in kwargs.items():
-        span.set_attribute(key, value)
+        safe_set(span, key, value)
 
     return span
 
@@ -127,9 +137,10 @@ def trace_agent_action(
     if operation:
         span.set_operation(operation)
 
-    # Add any additional attributes
+    # safe_set honors the content-capture gate for content-shaped keys
+    # and skips None / empty values (TP-2128 round-2 P0 #0.2).
     for key, value in kwargs.items():
-        span.set_attribute(key, value)
+        safe_set(span, key, value)
 
     return span
 
@@ -173,12 +184,18 @@ def trace_tool_call(
 
     span.set_tool_info(tool_name, call_id)
     if tool_definitions:
-        span.set_attribute(AgenticAttributes.TOOL_DEFINITIONS, tool_definitions)
+        # Gate tool_definitions specifically — schemas can carry
+        # credential-shaped defaults (e.g. send_email tool with a
+        # smtp_password parameter). TOOL_DEFINITIONS is in
+        # _CONTENT_ATTR_KEYS (round-2 P1 #1.1) so safe_set honors
+        # the capture toggle.
+        safe_set(span, AgenticAttributes.TOOL_DEFINITIONS, tool_definitions)
     span.set_operation(AgenticOperation.EXECUTE_TOOL)
 
-    # Add any additional attributes
+    # safe_set honors the content-capture gate + None/empty skip
+    # (TP-2128 round-2 P0 #0.2).
     for key, value in kwargs.items():
-        span.set_attribute(key, value)
+        safe_set(span, key, value)
 
     return span
 
@@ -251,9 +268,11 @@ def trace_function(
                 with trace.start_span(
                     span_name, span_kind, realtime_policy_id=realtime_policy_id
                 ) as span:
-                    # Set any provided attributes
+                    # safe_set honors the content-capture gate for
+                    # any content-shaped keys passed via **span_attrs
+                    # (TP-2128 round-2 P0 #0.2).
                     for key, value in span_attrs.items():
-                        span.set_attribute(key, value)
+                        safe_set(span, key, value)
 
                     # Execute function
                     try:

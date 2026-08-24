@@ -3,6 +3,8 @@ HTTP transport for sending traces/spans to the backend API.
 """
 
 import json
+import os
+import sys
 from typing import Any
 
 import requests
@@ -13,6 +15,42 @@ from disseqt_agentic_sdk.models.span import EnrichedSpan
 from disseqt_agentic_sdk.utils.logging import get_logger
 
 logger = get_logger()
+
+# Auth-failure escalation channel — bypasses the disseqt_logging silent-
+# by-default gate so an unconfigured process still gets an operator-
+# visible message on 401/403. Set DISSEQT_SDK_SILENCE_AUTH_STDERR=1 to
+# opt out (dashboards / structured-logging setups that route the
+# CRITICAL log line themselves). TP-2128 round-2 P1 #1.3.
+_SILENCE_AUTH_STDERR = os.environ.get("DISSEQT_SDK_SILENCE_AUTH_STDERR", "").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+
+
+def _write_auth_failure_to_stderr(status_code: int, endpoint: str) -> None:
+    """
+    Direct stderr write for 401/403 responses. Bypasses the logging
+    stack entirely so the message survives a fresh unconfigured
+    process (``disseqt_logging`` silences every level until
+    ``configure()`` / ``DISSEQT_LOG_LEVEL`` is set). The
+    logger.critical call still runs alongside this for anyone with
+    structured logging configured.
+    """
+    if _SILENCE_AUTH_STDERR:
+        return
+    try:
+        sys.stderr.write(
+            f"[disseqt-agentic-sdk] CRITICAL: ingest auth rejected "
+            f"({status_code}) at {endpoint} — spans will keep failing "
+            f"until credentials are fixed. Check DISSEQT_API_KEY / "
+            f"X-Application-Id and the traces-auth policy binding. "
+            f"Silence this message with DISSEQT_SDK_SILENCE_AUTH_STDERR=1.\n"
+        )
+        sys.stderr.flush()
+    except Exception:  # noqa: BLE001 — never let a stderr write crash the caller
+        pass
 
 
 class HTTPTransport:
@@ -34,6 +72,7 @@ class HTTPTransport:
         max_retries: int = 3,
         verify_ssl: bool = True,
         realtime_policy_id: str | None = None,
+        application_id: str | None = None,
     ):
         """
         Initialize HTTP transport.
@@ -49,12 +88,18 @@ class HTTPTransport:
                 field. llm-monitoring's span consumer reads this to route
                 the span through policy-driven evaluation. Omitted from
                 the payload when None.
+            application_id: Optional application UUID. When set, sent as
+                the ``X-Application-Id`` request header on every POST.
+                Kong's traces-auth plugin verifies the header against
+                policy-management before forwarding. When None, the
+                header is not sent (project-only scope, backwards-compat).
         """
         self.endpoint = endpoint.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
         self.verify_ssl = verify_ssl
         self.realtime_policy_id = realtime_policy_id
+        self.application_id = application_id
 
         # Setup session with retry strategy
         self.session = requests.Session()
@@ -71,6 +116,25 @@ class HTTPTransport:
         """
         Send spans to the backend API in Custom Format.
 
+        Backwards-compatible wrapper around ``send_spans_with_failures``
+        that collapses per-group outcomes into a single ``all_ok`` bool.
+        Prefer ``send_spans_with_failures`` for callers that need to
+        distinguish which spans failed (e.g. the retry buffer, which
+        must not re-POST spans a partial-failure batch already
+        delivered — TP-2128 round-2 P1 #1.2).
+
+        Args:
+            spans: List of EnrichedSpan objects to send
+
+        Returns:
+            bool: True if every group sent successfully, False otherwise
+        """
+        return not self.send_spans_with_failures(spans)
+
+    def send_spans_with_failures(self, spans: list[EnrichedSpan]) -> list[EnrichedSpan]:
+        """
+        Send spans and return the ones that failed to deliver.
+
         Spans are grouped by their per-trace ``realtime_policy_id`` (with
         the client default as the fallback) and each distinct group is
         sent as its own HTTP POST. This is what makes per-trace policy
@@ -80,14 +144,15 @@ class HTTPTransport:
         produce a single POST so there's no extra HTTP cost in the common
         case.
 
-        Args:
-            spans: List of EnrichedSpan objects to send
-
         Returns:
-            bool: True if every group sent successfully, False otherwise
+            list[EnrichedSpan]: exactly the spans that failed to send.
+            Empty list on full success. The retry buffer uses this so
+            successfully-delivered groups aren't re-POSTed on the next
+            flush after a partial-failure batch (TP-2128 round-2 P1
+            #1.2).
         """
         if not spans:
-            return True
+            return []
 
         # Bucket spans by the policy that should be stamped on their
         # outgoing resource block. Empty string means "no per-trace
@@ -97,11 +162,11 @@ class HTTPTransport:
             pid = getattr(span, "realtime_policy_id", "") or self.realtime_policy_id or ""
             groups.setdefault(pid, []).append(span)
 
-        all_ok = True
+        failed: list[EnrichedSpan] = []
         for pid, group in groups.items():
             if not self._send_group(pid, group):
-                all_ok = False
-        return all_ok
+                failed.extend(group)
+        return failed
 
     def _send_group(self, policy_id: str, spans: list[EnrichedSpan]) -> bool:
         """Send one resource-block's worth of spans (single policy_id)."""
@@ -163,6 +228,12 @@ class HTTPTransport:
             "traces": traces,
         }
         headers = {"Content-Type": "application/json"}
+        # X-Application-Id: verified by Kong's traces-auth plugin against
+        # policy-management before the request reaches llm-monitoring.
+        # Only set when the client was constructed with a non-empty
+        # application_id — never send an empty value.
+        if self.application_id:
+            headers["X-Application-Id"] = self.application_id
         try:
             response = self.session.post(
                 self.endpoint,
@@ -183,16 +254,45 @@ class HTTPTransport:
             )
             return True
         except requests.exceptions.RequestException as e:
-            logger.error(
-                "Failed to send spans to backend",
-                extra={
-                    "endpoint": self.endpoint,
-                    "span_count": len(spans),
-                    "error": str(e),
-                    "error_type": type(e).__name__,
-                },
-                exc_info=True,
-            )
+            # Auth failures (401/403) are operator-actionable — a bad
+            # API key or missing X-Application-Id will drop every span
+            # forever until it's fixed. Surface them at CRITICAL with a
+            # deploy-visible message, distinct from a transient 5xx or
+            # network blip.
+            status_code = getattr(getattr(e, "response", None), "status_code", None)
+            if status_code in (401, 403):
+                logger.critical(
+                    "Ingest auth rejected (%s) — spans will keep failing "
+                    "until credentials are fixed. Check DISSEQT_API_KEY / "
+                    "X-Application-Id and the traces-auth policy binding.",
+                    status_code,
+                    extra={
+                        "endpoint": self.endpoint,
+                        "span_count": len(spans),
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                        "status_code": status_code,
+                    },
+                )
+                # disseqt_logging is silent-by-default until the app
+                # calls configure() — most fresh deployments never do,
+                # so the CRITICAL line above would emit nowhere. Auth
+                # failures are exactly the kind of thing operators
+                # need to see with default settings, so write a copy
+                # straight to stderr as well. TP-2128 round-2 P1 #1.3.
+                _write_auth_failure_to_stderr(status_code, self.endpoint)
+            else:
+                logger.error(
+                    "Failed to send spans to backend",
+                    extra={
+                        "endpoint": self.endpoint,
+                        "span_count": len(spans),
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                        "status_code": status_code,
+                    },
+                    exc_info=True,
+                )
             return False
 
     def send_trace(self, trace_spans: list[EnrichedSpan]) -> bool:
