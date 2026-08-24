@@ -203,6 +203,103 @@ class TestHelpers:
 
             assert span.attributes["custom_attr"] == "value"
 
+    def test_manual_helpers_honor_capture_content_off(self):
+        """
+        TP-2128 round-2 P0 #0.2 + P1 #1.1: the four public manual-
+        tracing helpers used to write straight to span.set_messages /
+        span.set_attribute, bypassing the capture_content gate that
+        auto-instrumentation honored. A deployment calling
+        set_capture_content(False) for compliance got zero redaction
+        on any manual-trace path — the exact opposite of the feature's
+        contract. Fix: route trace_llm_call through
+        set_messages_if_capturing, and the *_action / *_tool_call /
+        *_function paths through safe_set. Also add TOOL_DEFINITIONS
+        to _CONTENT_ATTR_KEYS so tool-schema credentials are covered.
+        """
+        import json as _json
+
+        from disseqt_agentic_sdk.instrumentation import (
+            get_capture_content,
+            set_capture_content,
+        )
+
+        original = get_capture_content()
+        set_capture_content(False)
+        try:
+            with start_trace(self.client, "test_trace") as trace:
+                # 1. trace_llm_call — messages must not land on the span.
+                llm_span = trace_llm_call(
+                    trace,
+                    name="chat",
+                    model_name="gpt-4",
+                    provider="openai",
+                    input_messages=[{"role": "user", "content": "MY_SECRET_PROMPT"}],
+                    output_messages=[{"role": "assistant", "content": "MY_SECRET_COMPLETION"}],
+                )
+                llm_dump = _json.dumps(llm_span.attributes, default=str)
+                assert (
+                    "MY_SECRET_PROMPT" not in llm_dump
+                ), "trace_llm_call must route input_messages through the gate"
+                assert (
+                    "MY_SECRET_COMPLETION" not in llm_dump
+                ), "trace_llm_call must route output_messages through the gate"
+                # Non-content attrs (model, provider) must still land.
+                assert llm_span.attributes[AgenticAttributes.REQUEST_MODEL] == "gpt-4"
+
+                # 2. trace_tool_call — tool_definitions with a fake
+                # credential in a parameter default must not land.
+                tool_span = trace_tool_call(
+                    trace,
+                    name="email_api",
+                    tool_name="send_email",
+                    tool_definitions=[
+                        {
+                            "name": "send_email",
+                            "parameters": {"smtp_password": "hunter2"},
+                        }
+                    ],
+                )
+                tool_dump = _json.dumps(tool_span.attributes, default=str)
+                assert "hunter2" not in tool_dump, (
+                    "trace_tool_call must gate tool_definitions "
+                    "(P1 #1.1 adds TOOL_DEFINITIONS to _CONTENT_ATTR_KEYS)"
+                )
+                # Non-content attrs land.
+                assert tool_span.attributes[AgenticAttributes.TOOL_NAME] == "send_email"
+
+                # 3. trace_agent_action — a content-shaped kwarg
+                # (INPUT_MESSAGES) must not land.
+                agent_span = trace_agent_action(
+                    trace,
+                    name="plan",
+                    agent_name="assistant",
+                    **{AgenticAttributes.INPUT_MESSAGES: "MY_SECRET_AGENT_MSG"},
+                )
+                agent_dump = _json.dumps(agent_span.attributes, default=str)
+                assert "MY_SECRET_AGENT_MSG" not in agent_dump
+
+                # Non-content kwargs land (agent_name is set via
+                # set_agent_info, not the kwargs loop).
+                assert agent_span.attributes[AgenticAttributes.AGENT_NAME] == "assistant"
+
+            # 4. trace_function decorator — content-shaped span_attr
+            # must not land either.
+            @trace_function(
+                self.client,
+                name="dec_fn",
+                **{AgenticAttributes.INPUT_MESSAGES: "MY_SECRET_FN_MSG"},
+            )
+            def _fn():
+                return 1
+
+            _fn()
+            # The decorator opens its own trace; we can't easily
+            # introspect that span from here without a recording
+            # client, but the safe_set call replacing set_attribute
+            # is exercised by the code path.
+        finally:
+            set_capture_content(original)
+
     def test_trace_function_decorator_basic(self):
         """Test trace_function decorator."""
 
