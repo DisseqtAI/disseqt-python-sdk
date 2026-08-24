@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-08-24
+
 ### Changed
 - **BREAKING** — ``application_id`` is now a **required, keyword-only**
   argument to ``DisseqtAgenticClient(...)``. Missing raises
