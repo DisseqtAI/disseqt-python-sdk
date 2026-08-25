@@ -97,6 +97,14 @@ class AgenticAttributes:
     OUTPUT_MESSAGES = "agentic.output.messages"
     SYSTEM_INSTRUCTIONS = "agentic.system_instructions"
 
+    # trace_function decorator: auto-captured positional args + kwargs
+    # (as one JSON-serialized dict) and return value. Lets any user
+    # function become a first-class traced span without manually
+    # stamping I/O. Content-shaped, so gated by
+    # ``set_capture_content(False)`` / ``DISSEQT_SDK_CAPTURE_CONTENT=0``.
+    FUNCTION_INPUTS = "agentic.function.inputs"
+    FUNCTION_OUTPUT = "agentic.function.output"
+
     # Output
     OUTPUT_TYPE = "agentic.output.type"
 

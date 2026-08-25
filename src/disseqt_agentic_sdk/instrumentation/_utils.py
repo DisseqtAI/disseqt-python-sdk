@@ -100,6 +100,11 @@ _CONTENT_ATTR_KEYS: frozenset[str] = frozenset(
         # send_email tool with a smtp_password parameter). Was missing
         # from the round-1 opt-out; TP-2128 round-2 P1 #1.1.
         AgenticAttributes.TOOL_DEFINITIONS,
+        # trace_function decorator's auto-captured I/O. Function args
+        # can carry anything — credentials in kwargs, PII in query
+        # params, etc. — so the opt-out has to gate them too.
+        AgenticAttributes.FUNCTION_INPUTS,
+        AgenticAttributes.FUNCTION_OUTPUT,
         GenAIAttributes.PROMPT,
         GenAIAttributes.COMPLETION,
         GenAIAttributes.TOOL_CALLS,

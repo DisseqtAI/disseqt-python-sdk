@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- ``@trace_function(...)`` now auto-captures the decorated function's
+  inputs (positional + keyword args, keyed by parameter name) and
+  return value onto the span as ``agentic.function.inputs`` /
+  ``agentic.function.output``. Turns any user function — custom LLM
+  call, retrieval step, business-logic step — into a first-class
+  traced span without manually stamping I/O. Both async and sync
+  functions supported (wrapper auto-selected). Both attributes honor
+  the content-capture opt-out (``set_capture_content(False)`` /
+  ``DISSEQT_SDK_CAPTURE_CONTENT=0``); values exceeding 20 000 chars
+  are JSON-truncated to keep single spans from bloating wire
+  payloads. Opt out per-decorator with ``capture_io=False`` for
+  functions whose args are large blobs or non-serializable handles.
+
 ## [0.11.1] - 2026-08-24
 
 ### Changed

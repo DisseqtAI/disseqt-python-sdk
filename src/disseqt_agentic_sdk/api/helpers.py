@@ -5,6 +5,9 @@ These functions simplify common operations like tracing LLM calls,
 agent actions, and tool calls.
 """
 
+import asyncio
+import inspect
+import json
 from collections.abc import Callable
 from functools import wraps
 from typing import Any
@@ -16,6 +19,63 @@ from disseqt_agentic_sdk.instrumentation._utils import (
     set_messages_if_capturing,
 )
 from disseqt_agentic_sdk.semantics import AgenticAttributes, AgenticOperation
+
+# Maximum characters per auto-captured I/O value. Truncates the JSON
+# string on the span if the caller's args or return value are absurdly
+# large (a 50MB payload, a numpy array's full repr, etc.). Chosen large
+# enough to not lose typical chat / RAG payloads (usually 5–20 KB),
+# small enough to keep a single span from bloating the wire request.
+_TRACE_FUNCTION_MAX_IO_CHARS = 20_000
+
+
+def _serialize_for_span(value: Any) -> str:
+    """
+    Best-effort JSON-serialize a value for storage on a span attribute.
+
+    * ``json.dumps(..., default=str)`` covers pydantic models
+      (via ``model_dump`` if the model overrides ``__str__``), datetime,
+      Decimal, UUID, and everything with a sane ``__str__``.
+    * Anything json still refuses (open sockets, thread handles, C
+      extension objects) falls back to ``repr(value)``.
+    * Result is truncated to ``_TRACE_FUNCTION_MAX_IO_CHARS`` chars so a
+      pathologically large arg can't blow up a span.
+    """
+    try:
+        s = json.dumps(value, default=str, ensure_ascii=False)
+    except (TypeError, ValueError):
+        s = repr(value)
+    if len(s) > _TRACE_FUNCTION_MAX_IO_CHARS:
+        s = s[:_TRACE_FUNCTION_MAX_IO_CHARS] + "…[truncated]"
+    return s
+
+
+def _build_inputs_payload(
+    func: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any]
+) -> str:
+    """
+    Turn a function's positional + keyword args into a stable JSON dict
+    keyed by the parameter name. Falls back to ``args[i]`` labels for
+    positional args that inspect can't bind (e.g. ``*args`` overflow).
+
+    Named-keys shape means dashboards can index into individual params
+    (``inputs.user_id``, ``inputs.query``, ...) without re-parsing.
+    """
+    try:
+        sig = inspect.signature(func)
+        bound = sig.bind_partial(*args, **kwargs)
+        # Don't `apply_defaults()` — capturing the caller's actual
+        # inputs (not "what defaults would have filled in") matches
+        # LangSmith and keeps the span faithful to what the caller
+        # really passed.
+        payload = dict(bound.arguments)
+    except (TypeError, ValueError):
+        # inspect.signature can raise on some C-extension callables;
+        # fall back to the raw shape rather than crashing observability.
+        payload = {
+            **{f"args[{i}]": v for i, v in enumerate(args)},
+            **kwargs,
+        }
+    return _serialize_for_span(payload)
 
 
 def trace_llm_call(
@@ -206,10 +266,21 @@ def trace_function(
     kind: SpanKind | str = SpanKind.INTERNAL,
     realtime_policy_id: str | None = None,
     trace_realtime_policy_id: str | None = None,
+    capture_io: bool = True,
     **span_attrs,
 ):
     """
     Decorator to automatically trace a function.
+
+    Auto-captures the function's inputs (positional + keyword args, keyed
+    by parameter name) and its return value onto the span as
+    ``agentic.function.inputs`` and ``agentic.function.output``. Both
+    values honor the content-capture opt-out (``set_capture_content(
+    False)`` / ``DISSEQT_SDK_CAPTURE_CONTENT=0``) since function args
+    can carry credentials or PII. Pass ``capture_io=False`` to skip.
+
+    Supports both sync and async functions — the wrapper is chosen
+    automatically based on the decorated callable.
 
     Args:
         client: DisseqtAgenticClient instance (required)
@@ -222,66 +293,124 @@ def trace_function(
             the auto-created trace. Use this when you want the whole trace
             (including any child spans opened inside the wrapped function) to
             run under a specific policy.
-        **span_attrs: Additional span attributes
+        capture_io: When True (default) auto-captures function args + return
+            value onto ``agentic.function.inputs`` / ``agentic.function.output``.
+            Set False for functions whose args are large binary blobs, non-
+            serializable handles, or otherwise not useful to record.
+        **span_attrs: Additional span attributes stamped once at span open.
 
     Example:
         >>> client = DisseqtAgenticClient(..., application_id="...")
         >>> @trace_function(client, name="my_function")
-        ... def my_function():
+        ... def my_function(user_id: str, query: str) -> str:
         ...     return "result"
+        >>> my_function("u_123", query="hello")
+        # Span carries:
+        #   agentic.function.inputs = '{"user_id": "u_123", "query": "hello"}'
+        #   agentic.function.output = '"result"'
+
+        >>> @trace_function(client, kind=SpanKind.MODEL_EXEC)
+        ... async def call_custom_llm(prompt: str) -> str:
+        ...     return await my_http_llm(prompt)
 
         >>> @trace_function(client, kind=SpanKind.AGENT_EXEC, agent_name="assistant")
-        ... def agent_function():
-        ...     return "result"
+        ... def agent_function(): ...
 
-        >>> @trace_function(client, kind="CUSTOM_OPERATION")
-        ... def custom_function():
-        ...     return "result"
-
-        >>> @trace_function(client, realtime_policy_id="policy-uuid-for-this-span")
-        ... def guarded_function():
-        ...     return "result"
+        >>> @trace_function(client, capture_io=False)  # skip I/O capture
+        ... def bulk_ingest(large_df): ...
     """
 
     def decorator(func: Callable) -> Callable:
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            from disseqt_agentic_sdk.api.trace import start_trace
-
-            span_name = name or func.__name__
-
-            # Convert string to SpanKind if it's a valid enum value, otherwise keep as string for custom kinds
-            if isinstance(kind, str):
-                try:
-                    span_kind = SpanKind(kind)
-                except ValueError:
-                    # Custom span kind - keep as string
-                    span_kind = kind
-            else:
+        # Convert string to SpanKind if it's a valid enum value,
+        # otherwise keep as string for custom kinds. Done once at
+        # decoration time (not on every call) since kind is static.
+        # SpanKind is a str Enum so ``isinstance(kind, str)`` is always
+        # True at runtime — the else branch is defensive for any future
+        # kind type that isn't a str subclass. mypy flags it as
+        # unreachable given today's SpanKind definition; ignore rather
+        # than delete so a signature widening doesn't lose the guard.
+        if isinstance(kind, str):
+            try:
+                span_kind: SpanKind | str = SpanKind(kind)
+            except ValueError:
                 span_kind = kind
+        else:
+            span_kind = kind  # type: ignore[unreachable]
+
+        span_name_default = name or func.__name__
+        is_coro = asyncio.iscoroutinefunction(func)
+
+        def _prep_span(span: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
+            """Stamp static + I/O attributes at span open."""
+            # Static attrs — honor content-capture gate for content-shaped keys
+            # (TP-2128 round-2 P0 #0.2).
+            for key, value in span_attrs.items():
+                safe_set(span, key, value)
+            if capture_io:
+                safe_set(
+                    span,
+                    AgenticAttributes.FUNCTION_INPUTS,
+                    _build_inputs_payload(func, args, kwargs),
+                )
+
+        def _record_output(span: Any, result: Any) -> None:
+            if capture_io:
+                safe_set(
+                    span,
+                    AgenticAttributes.FUNCTION_OUTPUT,
+                    _serialize_for_span(result),
+                )
+
+        if is_coro:
+
+            @wraps(func)
+            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                from disseqt_agentic_sdk.api.trace import start_trace
+
+                with start_trace(
+                    client,
+                    f"{span_name_default}_trace",
+                    realtime_policy_id=trace_realtime_policy_id,
+                ) as trace:
+                    with trace.start_span(
+                        span_name_default,
+                        span_kind,
+                        realtime_policy_id=realtime_policy_id,
+                    ) as span:
+                        _prep_span(span, args, kwargs)
+                        try:
+                            result = await func(*args, **kwargs)
+                        except Exception as e:
+                            span.set_error(str(e), error_type=type(e).__name__)
+                            raise
+                        _record_output(span, result)
+                        return result
+
+            return async_wrapper
+
+        @wraps(func)
+        def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+            from disseqt_agentic_sdk.api.trace import start_trace
 
             with start_trace(
                 client,
-                f"{span_name}_trace",
+                f"{span_name_default}_trace",
                 realtime_policy_id=trace_realtime_policy_id,
             ) as trace:
                 with trace.start_span(
-                    span_name, span_kind, realtime_policy_id=realtime_policy_id
+                    span_name_default,
+                    span_kind,
+                    realtime_policy_id=realtime_policy_id,
                 ) as span:
-                    # safe_set honors the content-capture gate for
-                    # any content-shaped keys passed via **span_attrs
-                    # (TP-2128 round-2 P0 #0.2).
-                    for key, value in span_attrs.items():
-                        safe_set(span, key, value)
-
-                    # Execute function
+                    _prep_span(span, args, kwargs)
                     try:
                         result = func(*args, **kwargs)
-                        return result
                     except Exception as e:
                         span.set_error(str(e), error_type=type(e).__name__)
                         raise
+                    _record_output(span, result)
+                    return result
 
-        return wrapper
+        return sync_wrapper
 
     return decorator
