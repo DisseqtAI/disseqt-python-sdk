@@ -6,13 +6,15 @@ agent actions, and tool calls.
 """
 
 import asyncio
+import contextlib
 import inspect
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from functools import wraps
 from typing import Any
 
 from disseqt_agentic_sdk.client import DisseqtAgenticClient
+from disseqt_agentic_sdk.context import get_current_trace
 from disseqt_agentic_sdk.enums import SpanKind
 from disseqt_agentic_sdk.instrumentation._utils import (
     safe_set,
@@ -279,6 +281,13 @@ def trace_function(
     False)`` / ``DISSEQT_SDK_CAPTURE_CONTENT=0``) since function args
     can carry credentials or PII. Pass ``capture_io=False`` to skip.
 
+    Auto-chains into a parent-child span tree: when a decorated
+    function calls another decorated function, the inner call opens a
+    child span on the outer trace instead of creating its own
+    top-level trace. Detection is via ``get_current_trace()`` (thread-
+    local) — a nested call sees the outer trace and nests under it;
+    a top-level call sees nothing and bootstraps its own trace.
+
     Supports both sync and async functions — the wrapper is chosen
     automatically based on the decorated callable.
 
@@ -361,12 +370,33 @@ def trace_function(
                     _serialize_for_span(result),
                 )
 
-        if is_coro:
+        @contextlib.contextmanager
+        def _open_span() -> Iterator[Any]:
+            """
+            Yield the span this call should populate — nested under an
+            active trace if one exists, otherwise wrapped in a freshly
+            bootstrapped trace.
 
-            @wraps(func)
-            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-                from disseqt_agentic_sdk.api.trace import start_trace
+            Chaining: when a decorated function calls another decorated
+            function, ``get_current_trace()`` returns the outer trace
+            (set by the outer ``start_trace``'s ``__enter__``), so the
+            inner call opens a *child span* on it instead of opening a
+            second top-level trace. Match the parent-child structure
+            other tracing SDKs produce via ContextVar-based run
+            detection — see the ``@trace_function`` docstring for a
+            waterfall example.
+            """
+            from disseqt_agentic_sdk.api.trace import start_trace
 
+            active = get_current_trace()
+            if active is not None:
+                with active.start_span(
+                    span_name_default,
+                    span_kind,
+                    realtime_policy_id=realtime_policy_id,
+                ) as span:
+                    yield span
+            else:
                 with start_trace(
                     client,
                     f"{span_name_default}_trace",
@@ -377,39 +407,35 @@ def trace_function(
                         span_kind,
                         realtime_policy_id=realtime_policy_id,
                     ) as span:
-                        _prep_span(span, args, kwargs)
-                        try:
-                            result = await func(*args, **kwargs)
-                        except Exception as e:
-                            span.set_error(str(e), error_type=type(e).__name__)
-                            raise
-                        _record_output(span, result)
-                        return result
+                        yield span
 
-            return async_wrapper
+        if is_coro:
 
-        @wraps(func)
-        def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
-            from disseqt_agentic_sdk.api.trace import start_trace
-
-            with start_trace(
-                client,
-                f"{span_name_default}_trace",
-                realtime_policy_id=trace_realtime_policy_id,
-            ) as trace:
-                with trace.start_span(
-                    span_name_default,
-                    span_kind,
-                    realtime_policy_id=realtime_policy_id,
-                ) as span:
+            @wraps(func)
+            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                with _open_span() as span:
                     _prep_span(span, args, kwargs)
                     try:
-                        result = func(*args, **kwargs)
+                        result = await func(*args, **kwargs)
                     except Exception as e:
                         span.set_error(str(e), error_type=type(e).__name__)
                         raise
                     _record_output(span, result)
                     return result
+
+            return async_wrapper
+
+        @wraps(func)
+        def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+            with _open_span() as span:
+                _prep_span(span, args, kwargs)
+                try:
+                    result = func(*args, **kwargs)
+                except Exception as e:
+                    span.set_error(str(e), error_type=type(e).__name__)
+                    raise
+                _record_output(span, result)
+                return result
 
         return sync_wrapper
 

@@ -588,6 +588,38 @@ class TestTraceFunctionIOCapture:
         inputs_str = _json.loads(span.attributes_json)[AgenticAttributes.FUNCTION_INPUTS]
         assert "Weird" in inputs_str or "<Weird instance>" in inputs_str
 
+    def test_nested_decorated_calls_share_one_trace(self):
+        """
+        Chaining: when a decorated function calls another decorated
+        function, the inner call must nest as a child span under the
+        outer trace — NOT open a second top-level trace. Detection
+        uses get_current_trace() (thread-local) set by the outer
+        start_trace's __enter__.
+        """
+
+        @trace_function(self.client, name="inner_step")
+        def inner():
+            return "inner_result"
+
+        @trace_function(self.client, name="outer_step")
+        def outer():
+            return inner()
+
+        assert outer() == "inner_result"
+
+        # Both spans should share the same trace_id — proves the inner
+        # call opened a child on the outer's trace instead of a new one.
+        outer_span = self._find_span("outer_step")
+        inner_span = self._find_span("inner_step")
+        assert (
+            outer_span.trace_id == inner_span.trace_id
+        ), f"expected shared trace; outer={outer_span.trace_id} inner={inner_span.trace_id}"
+
+        # And the inner span's parent should be the outer span.
+        assert (
+            inner_span.parent_span_id == outer_span.span_id
+        ), f"inner span parent {inner_span.parent_span_id} != outer {outer_span.span_id}"
+
     def test_large_payload_is_truncated(self):
         """A pathologically large arg must not be persisted verbatim."""
         import json as _json
