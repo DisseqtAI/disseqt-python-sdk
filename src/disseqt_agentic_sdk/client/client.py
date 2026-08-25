@@ -14,17 +14,33 @@ from disseqt_agentic_sdk.utils.logging import get_logger
 
 logger = get_logger()
 
-# Sentinel default for ``application_id`` so a caller who omits the
-# kwarg entirely gets our own ``ValueError`` (with the docs link)
-# instead of Python's stock
-# ``TypeError: missing 1 required keyword-only argument``. That
-# TypeError is raised by CPython's C-level arg-binder *before* the
-# constructor body runs, so a bare ``application_id: str`` with no
-# default never reaches our validation branch — the customer sees no
-# docs link and no context. Using ``object()`` as the sentinel keeps
-# ``None`` / ``""`` / whitespace-only as separately-distinguishable
-# "explicitly-passed but empty" cases.
-_APPLICATION_ID_MISSING: object = object()
+# Shared sentinel for every required-string constructor argument so a
+# caller who omits it entirely gets our own ``ValueError`` (with an
+# actionable message) instead of Python's stock
+# ``TypeError: missing N required ... argument``. That TypeError is
+# raised by CPython's C-level arg-binder *before* the constructor body
+# runs, so a bare ``foo: str`` with no default never reaches our
+# validation branch — the customer sees a bare parameter-name message,
+# no context on why it matters or what to do next. Using ``object()``
+# keeps ``None`` / ``""`` / whitespace-only as
+# separately-distinguishable "explicitly-passed but empty" cases.
+_MISSING: object = object()
+
+
+def _reject_missing_or_empty(value: object, name: str, extra_hint: str = "") -> None:
+    """Raise ValueError if ``value`` is the sentinel, None, empty, or whitespace.
+
+    Every required-string constructor argument routes through this
+    helper so a call like ``DisseqtAgenticClient()`` — omitting the
+    positional/kwonly args entirely — raises the same actionable
+    ValueError shape that ``DisseqtAgenticClient(api_key="")`` /
+    ``... api_key=None)`` already produced.
+    """
+    if value is _MISSING or value is None or not str(value).strip():
+        msg = f"{name} is required and cannot be empty"
+        if extra_hint:
+            msg = f"{msg}. {extra_hint}"
+        raise ValueError(msg)
 
 
 # The two things that actually break sending an application_id as an
@@ -121,9 +137,9 @@ class DisseqtAgenticClient:
 
     def __init__(
         self,
-        api_key: str,
-        project_id: str,
-        service_name: str,
+        api_key: str = _MISSING,  # type: ignore[assignment]
+        project_id: str = _MISSING,  # type: ignore[assignment]
+        service_name: str = _MISSING,  # type: ignore[assignment]
         endpoint: str = "https://api.disseqt.ai/agentic-monitoring/api/v1/traces",
         service_version: str = "1.0.0",
         environment: str = "production",
@@ -132,7 +148,7 @@ class DisseqtAgenticClient:
         max_retries: int = 3,
         realtime_policy_id: str | None = None,
         *,
-        application_id: str = _APPLICATION_ID_MISSING,  # type: ignore[assignment]
+        application_id: str = _MISSING,  # type: ignore[assignment]
     ):
         """
         Initialize SDK client.
@@ -180,47 +196,36 @@ class DisseqtAgenticClient:
             ValueError: If any required field is missing or empty
 
         """
-        # Validate required fields. service_name is required regardless
-        # of realtime_policy_id (it populates the OTel resource attribute
-        # on every span), which means setting realtime_policy_id
-        # automatically requires service_name too — same rule as
-        # disseqt_sdk.Client's (realtime_policy_id ⇒ application_name)
-        # check.
-        if not api_key or not api_key.strip():
-            raise ValueError("api_key is required and cannot be empty")
-
-        if not project_id or not project_id.strip():
-            raise ValueError("project_id is required and cannot be empty")
-
-        if not service_name or not service_name.strip():
-            raise ValueError(
-                "service_name is required and cannot be empty "
-                "(also identifies the application on the policies "
-                "dashboard when realtime_policy_id is set)"
-            )
-
-        if not endpoint or not endpoint.strip():
-            raise ValueError("endpoint is required and cannot be empty")
-
-        if not environment or not environment.strip():
-            raise ValueError("environment is required and cannot be empty")
-
-        # application_id is required. Reject missing / empty / whitespace-
-        # only with the same message shape as the other required-field
-        # checks. Kong's traces-auth plugin drops every POST that arrives
-        # without a matching X-Application-Id header, so silently
-        # constructing a client that will never be able to deliver spans
-        # is worse than failing loudly here.
-        if (
-            application_id is _APPLICATION_ID_MISSING
-            or not application_id
-            or not application_id.strip()
-        ):
-            raise ValueError(
-                "application_id is required and cannot be empty. "
-                "See https://docs.disseqt.ai/docs/disseqt-sdk/agentic-observability/applications-registry "
-                "for how to obtain one."
-            )
+        # Validate required fields. Every check routes through
+        # ``_reject_missing_or_empty`` so a call that omits the arg
+        # entirely (sentinel default) raises the same actionable
+        # ``ValueError`` as an explicit empty / whitespace-only value,
+        # instead of Python's stock ``TypeError`` from the arg-binder.
+        # service_name is required regardless of realtime_policy_id (it
+        # populates the OTel resource attribute on every span), which
+        # means setting realtime_policy_id automatically requires
+        # service_name too — same rule as disseqt_sdk.Client's
+        # (realtime_policy_id ⇒ application_name) check.
+        _reject_missing_or_empty(api_key, "api_key")
+        _reject_missing_or_empty(project_id, "project_id")
+        _reject_missing_or_empty(
+            service_name,
+            "service_name",
+            "Also identifies the application on the policies "
+            "dashboard when realtime_policy_id is set.",
+        )
+        _reject_missing_or_empty(endpoint, "endpoint")
+        _reject_missing_or_empty(environment, "environment")
+        # application_id is required. Kong's traces-auth plugin drops
+        # every POST that arrives without a matching X-Application-Id
+        # header, so silently constructing a client that will never be
+        # able to deliver spans is worse than failing loudly here.
+        _reject_missing_or_empty(
+            application_id,
+            "application_id",
+            "See https://docs.disseqt.ai/docs/disseqt-sdk/agentic-observability/applications-registry "
+            "for how to obtain one.",
+        )
 
         # Configuration
         self.api_key = api_key
