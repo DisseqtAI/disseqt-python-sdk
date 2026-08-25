@@ -588,6 +588,53 @@ class TestTraceFunctionIOCapture:
         inputs_str = _json.loads(span.attributes_json)[AgenticAttributes.FUNCTION_INPUTS]
         assert "Weird" in inputs_str or "<Weird instance>" in inputs_str
 
+    def test_model_exec_kind_stamps_llm_shape_from_str_in_str_out(self):
+        """
+        When kind=MODEL_EXEC and the function is str-in / str-out, the
+        decorator also stamps agentic.input.messages /
+        agentic.output.messages / agentic.operation.name so the span
+        matches native auto-instrumented provider spans downstream.
+        """
+        import json as _json
+
+        @trace_function(self.client, kind=SpanKind.MODEL_EXEC, name="my_custom_llm")
+        def my_llm(query: str) -> str:
+            return f"echo: {query}"
+
+        my_llm("What is the capital of France?")
+
+        span = self._find_span("my_custom_llm")
+        attrs = _json.loads(span.attributes_json)
+
+        # LLM-shaped attrs — identical shape to a native OpenAI /
+        # Gemini / Anthropic auto-instrumented span.
+        assert attrs[AgenticAttributes.INPUT_MESSAGES] == [
+            {"role": "user", "content": "What is the capital of France?"}
+        ]
+        assert attrs[AgenticAttributes.OUTPUT_MESSAGES] == [
+            {"role": "assistant", "content": "echo: What is the capital of France?"}
+        ]
+        assert attrs[AgenticAttributes.OPERATION_NAME] == AgenticOperation.CHAT
+
+        # Generic function.inputs/output still land for the debug view.
+        assert AgenticAttributes.FUNCTION_INPUTS in attrs
+        assert AgenticAttributes.FUNCTION_OUTPUT in attrs
+
+    def test_non_model_exec_kind_skips_llm_shape(self):
+        """kind=INTERNAL keeps only function.inputs/output — no LLM attrs."""
+        import json as _json
+
+        @trace_function(self.client, name="plain_step")
+        def plain(x: str) -> str:
+            return f"plain: {x}"
+
+        plain("hello")
+
+        span = self._find_span("plain_step")
+        attrs = _json.loads(span.attributes_json)
+        assert AgenticAttributes.INPUT_MESSAGES not in attrs
+        assert AgenticAttributes.OUTPUT_MESSAGES not in attrs
+
     def test_nested_decorated_calls_share_one_trace(self):
         """
         Chaining: when a decorated function calls another decorated

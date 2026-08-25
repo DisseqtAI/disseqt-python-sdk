@@ -51,6 +51,105 @@ def _serialize_for_span(value: Any) -> str:
     return s
 
 
+def _extract_llm_input_messages(
+    func: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any]
+) -> list[dict[str, str]] | None:
+    """
+    Best-effort turn a ``kind=MODEL_EXEC`` function's args into an
+    OpenAI-shaped ``input_messages`` list so the span matches native
+    auto-instrumented provider spans (dashboards + validators keying
+    on ``agentic.input.messages`` work unchanged).
+
+    Priority: ``messages`` (already list) → ``prompt`` / ``query`` /
+    ``question`` / ``input`` (str) → first string param. Returns None
+    when nothing matches — caller falls back to generic function.inputs
+    only (no LLM-shape attrs stamped).
+    """
+    try:
+        sig = inspect.signature(func)
+        bound = sig.bind_partial(*args, **kwargs)
+        params = bound.arguments
+    except (TypeError, ValueError):
+        return None
+
+    val = params.get("messages")
+    if isinstance(val, list):
+        return val  # already OpenAI chat shape — pass through unchanged
+
+    for name in ("prompt", "query", "question", "input"):
+        val = params.get(name)
+        if isinstance(val, str) and val:
+            return [{"role": "user", "content": val}]
+
+    # Fallback: first string-valued arg (respects call order via
+    # inspect.signature.bind_partial keeping insertion order).
+    for val in params.values():
+        if isinstance(val, str) and val:
+            return [{"role": "user", "content": val}]
+    return None
+
+
+def _extract_llm_output_messages(
+    result: Any,
+) -> list[dict[str, str]] | None:
+    """
+    Best-effort turn a ``kind=MODEL_EXEC`` function's return value
+    into an OpenAI-shaped ``output_messages`` list.
+
+    Recognizes plain str, OpenAI ChatCompletion (``choices[0].message.
+    content``), Anthropic Message (``content[0].text``), and Gemini
+    GenerateContentResponse (``candidates[0].content.parts[0].text``)
+    — the four shapes native auto-instrumented providers already
+    produce. Returns None on anything else — caller falls back to
+    generic function.output only.
+    """
+    if isinstance(result, str) and result:
+        return [{"role": "assistant", "content": result}]
+
+    # Duck-type into common provider response shapes. Wrap in try to
+    # never crash observability on an unexpected wire shape.
+    try:
+        # OpenAI-shape (dict or pydantic-with-attrs)
+        choices = _read_attr_or_key(result, "choices")
+        if choices:
+            first = choices[0]
+            message = _read_attr_or_key(first, "message")
+            content = _read_attr_or_key(message, "content")
+            if isinstance(content, str) and content:
+                return [{"role": "assistant", "content": content}]
+
+        # Anthropic-shape
+        content_blocks = _read_attr_or_key(result, "content")
+        if isinstance(content_blocks, list) and content_blocks:
+            first_block = content_blocks[0]
+            text = _read_attr_or_key(first_block, "text")
+            if isinstance(text, str) and text:
+                return [{"role": "assistant", "content": text}]
+
+        # Gemini-shape
+        candidates = _read_attr_or_key(result, "candidates")
+        if candidates:
+            first_cand = candidates[0]
+            cand_content = _read_attr_or_key(first_cand, "content")
+            parts = _read_attr_or_key(cand_content, "parts")
+            if parts:
+                text = _read_attr_or_key(parts[0], "text")
+                if isinstance(text, str) and text:
+                    return [{"role": "assistant", "content": text}]
+    except (AttributeError, TypeError, IndexError, KeyError):
+        pass
+    return None
+
+
+def _read_attr_or_key(obj: Any, name: str) -> Any:
+    """Tolerant attr-or-key read used by the LLM-shape duck-typers."""
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        return obj.get(name)
+    return getattr(obj, name, None)
+
+
 def _build_inputs_payload(
     func: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any]
 ) -> str:
@@ -348,6 +447,13 @@ def trace_function(
 
         span_name_default = name or func.__name__
         is_coro = asyncio.iscoroutinefunction(func)
+        # When kind=MODEL_EXEC we ALSO stamp the LLM-shaped attrs
+        # (agentic.input.messages / agentic.output.messages /
+        # agentic.operation.name) alongside the generic
+        # function.inputs/output. That makes a decorated custom LLM
+        # call indistinguishable from a native auto-instrumented
+        # provider call for every downstream validator / dashboard.
+        is_llm_kind = span_kind == SpanKind.MODEL_EXEC
 
         def _prep_span(span: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
             """Stamp static + I/O attributes at span open."""
@@ -361,6 +467,12 @@ def trace_function(
                     AgenticAttributes.FUNCTION_INPUTS,
                     _build_inputs_payload(func, args, kwargs),
                 )
+                if is_llm_kind:
+                    # Stamp operation.name to match native providers.
+                    safe_set(span, AgenticAttributes.OPERATION_NAME, AgenticOperation.CHAT)
+                    input_messages = _extract_llm_input_messages(func, args, kwargs)
+                    if input_messages is not None:
+                        set_messages_if_capturing(span, input_messages=input_messages)
 
         def _record_output(span: Any, result: Any) -> None:
             if capture_io:
@@ -369,6 +481,10 @@ def trace_function(
                     AgenticAttributes.FUNCTION_OUTPUT,
                     _serialize_for_span(result),
                 )
+                if is_llm_kind:
+                    output_messages = _extract_llm_output_messages(result)
+                    if output_messages is not None:
+                        set_messages_if_capturing(span, output_messages=output_messages)
 
         @contextlib.contextmanager
         def _open_span() -> Iterator[Any]:
