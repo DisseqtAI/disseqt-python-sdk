@@ -8,18 +8,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- ``@trace_function(...)`` now auto-captures the decorated function's
-  inputs (positional + keyword args, keyed by parameter name) and
-  return value onto the span as ``agentic.function.inputs`` /
-  ``agentic.function.output``. Turns any user function — custom LLM
-  call, retrieval step, business-logic step — into a first-class
-  traced span without manually stamping I/O. Both async and sync
-  functions supported (wrapper auto-selected). Both attributes honor
-  the content-capture opt-out (``set_capture_content(False)`` /
-  ``DISSEQT_SDK_CAPTURE_CONTENT=0``); values exceeding 20 000 chars
-  are JSON-truncated to keep single spans from bloating wire
-  payloads. Opt out per-decorator with ``capture_io=False`` for
-  functions whose args are large blobs or non-serializable handles.
+- ``@trace_function`` is now a full first-class span decorator for
+  any user function — custom LLM call, retrieval step, business-
+  logic step. Highlights:
+
+  * **Ergonomic decorator forms** — three usages all work:
+    ``@trace_function`` (bare, no parens); ``@trace_function(
+    kind=SpanKind.MODEL_EXEC, name="my_llm")`` (parametrized);
+    ``@trace_function(client=other_client, ...)`` (explicit-client
+    override for multi-client deployments).
+  * **Default-client resolution** — ``DisseqtAgenticClient.__init__``
+    auto-registers itself as the process default, so decorators
+    without an explicit ``client=`` argument resolve it at call
+    time via ``get_client()``.
+  * **Auto-chained parent-child spans** — nested decorated calls
+    detect the outer trace via ``get_current_trace()`` and open
+    child spans on it instead of creating separate top-level traces
+    (one trace, waterfall of nested spans).
+  * **LLM-shaped attrs when ``kind=SpanKind.MODEL_EXEC``** — the
+    decorator stamps ``agentic.input.messages`` /
+    ``agentic.output.messages`` / ``agentic.operation.name`` in the
+    same shape native auto-instrumented provider spans produce, so
+    dashboards and validators can't distinguish a decorated custom
+    LLM from a real OpenAI/Anthropic/Gemini call. Shape detection is
+    best-effort: input via param names (``messages``, ``prompt``,
+    ``query``, ``question``, ``input``) or first-string-arg fallback;
+    output via ``str``, OpenAI ChatCompletion, Anthropic Message, or
+    Gemini GenerateContentResponse shapes. Content-capture opt-out
+    (``set_capture_content(False)``) honored.
+  * **Sync + async** — wrapper auto-selected via
+    ``asyncio.iscoroutinefunction``.
+  * ``capture_io=False`` opt-out on a per-decorator basis (for
+    MODEL_EXEC functions whose args aren't safe/useful to record).
 
 ## [0.11.1] - 2026-08-24
 

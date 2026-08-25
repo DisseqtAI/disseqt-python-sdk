@@ -8,7 +8,6 @@ agent actions, and tool calls.
 import asyncio
 import contextlib
 import inspect
-import json
 from collections.abc import Callable, Iterator
 from functools import wraps
 from typing import Any
@@ -21,34 +20,6 @@ from disseqt_agentic_sdk.instrumentation._utils import (
     set_messages_if_capturing,
 )
 from disseqt_agentic_sdk.semantics import AgenticAttributes, AgenticOperation
-
-# Maximum characters per auto-captured I/O value. Truncates the JSON
-# string on the span if the caller's args or return value are absurdly
-# large (a 50MB payload, a numpy array's full repr, etc.). Chosen large
-# enough to not lose typical chat / RAG payloads (usually 5–20 KB),
-# small enough to keep a single span from bloating the wire request.
-_TRACE_FUNCTION_MAX_IO_CHARS = 20_000
-
-
-def _serialize_for_span(value: Any) -> str:
-    """
-    Best-effort JSON-serialize a value for storage on a span attribute.
-
-    * ``json.dumps(..., default=str)`` covers pydantic models
-      (via ``model_dump`` if the model overrides ``__str__``), datetime,
-      Decimal, UUID, and everything with a sane ``__str__``.
-    * Anything json still refuses (open sockets, thread handles, C
-      extension objects) falls back to ``repr(value)``.
-    * Result is truncated to ``_TRACE_FUNCTION_MAX_IO_CHARS`` chars so a
-      pathologically large arg can't blow up a span.
-    """
-    try:
-        s = json.dumps(value, default=str, ensure_ascii=False)
-    except (TypeError, ValueError):
-        s = repr(value)
-    if len(s) > _TRACE_FUNCTION_MAX_IO_CHARS:
-        s = s[:_TRACE_FUNCTION_MAX_IO_CHARS] + "…[truncated]"
-    return s
 
 
 def _extract_llm_input_messages(
@@ -148,34 +119,6 @@ def _read_attr_or_key(obj: Any, name: str) -> Any:
     if isinstance(obj, dict):
         return obj.get(name)
     return getattr(obj, name, None)
-
-
-def _build_inputs_payload(
-    func: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any]
-) -> str:
-    """
-    Turn a function's positional + keyword args into a stable JSON dict
-    keyed by the parameter name. Falls back to ``args[i]`` labels for
-    positional args that inspect can't bind (e.g. ``*args`` overflow).
-
-    Named-keys shape means dashboards can index into individual params
-    (``inputs.user_id``, ``inputs.query``, ...) without re-parsing.
-    """
-    try:
-        sig = inspect.signature(func)
-        bound = sig.bind_partial(*args, **kwargs)
-        # Don't `apply_defaults()` — capturing the caller's actual
-        # inputs (not "what defaults would have filled in") keeps the
-        # span faithful to what the caller really passed.
-        payload = dict(bound.arguments)
-    except (TypeError, ValueError):
-        # inspect.signature can raise on some C-extension callables;
-        # fall back to the raw shape rather than crashing observability.
-        payload = {
-            **{f"args[{i}]": v for i, v in enumerate(args)},
-            **kwargs,
-        }
-    return _serialize_for_span(payload)
 
 
 def trace_llm_call(
@@ -372,12 +315,16 @@ def trace_function(
     """
     Decorator to automatically trace a function.
 
-    Auto-captures the function's inputs (positional + keyword args, keyed
-    by parameter name) and its return value onto the span as
-    ``agentic.function.inputs`` and ``agentic.function.output``. Both
-    values honor the content-capture opt-out (``set_capture_content(
-    False)`` / ``DISSEQT_SDK_CAPTURE_CONTENT=0``) since function args
-    can carry credentials or PII. Pass ``capture_io=False`` to skip.
+    When ``kind=SpanKind.MODEL_EXEC``, auto-captures the function's
+    LLM-shaped inputs and output onto the span as
+    ``agentic.input.messages`` / ``agentic.output.messages`` /
+    ``agentic.operation.name`` — the same attribute keys native
+    auto-instrumented providers produce, so validators / dashboards
+    treat a decorated custom LLM identically to a real provider call.
+    Other span kinds get just the span itself (no I/O attributes). Both
+    LLM attributes honor the content-capture opt-out
+    (``set_capture_content(False)`` / ``DISSEQT_SDK_CAPTURE_CONTENT=0``);
+    pass ``capture_io=False`` to skip stamping entirely.
 
     Auto-chains into a parent-child span tree: when a decorated
     function calls another decorated function, the inner call opens a
@@ -419,10 +366,11 @@ def trace_function(
             the auto-created trace. Use this when you want the whole trace
             (including any child spans opened inside the wrapped function) to
             run under a specific policy.
-        capture_io: When True (default) auto-captures function args + return
-            value onto ``agentic.function.inputs`` / ``agentic.function.output``.
-            Set False for functions whose args are large binary blobs, non-
-            serializable handles, or otherwise not useful to record.
+        capture_io: When True (default) and ``kind=MODEL_EXEC``,
+            stamps the LLM-shaped attributes described above. Other
+            span kinds ignore this flag (no I/O captured for them
+            anyway). Set False to skip LLM-shape stamping on a
+            MODEL_EXEC span whose args aren't safe/useful to record.
         **span_attrs: Additional span attributes stamped once at span open.
 
     Example:
@@ -472,12 +420,12 @@ def trace_function(
 
         span_name_default = name or func.__name__
         is_coro = asyncio.iscoroutinefunction(func)
-        # When kind=MODEL_EXEC we ALSO stamp the LLM-shaped attrs
+        # When kind=MODEL_EXEC we stamp the LLM-shaped attrs
         # (agentic.input.messages / agentic.output.messages /
-        # agentic.operation.name) alongside the generic
-        # function.inputs/output. That makes a decorated custom LLM
-        # call indistinguishable from a native auto-instrumented
-        # provider call for every downstream validator / dashboard.
+        # agentic.operation.name) so a decorated custom LLM call is
+        # indistinguishable from a native auto-instrumented provider
+        # call for every downstream validator / dashboard. Other span
+        # kinds get just the span itself — no I/O attribute pollution.
         is_llm_kind = span_kind == SpanKind.MODEL_EXEC
 
         def _prep_span(span: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
@@ -486,30 +434,17 @@ def trace_function(
             # (TP-2128 round-2 P0 #0.2).
             for key, value in span_attrs.items():
                 safe_set(span, key, value)
-            if capture_io:
-                safe_set(
-                    span,
-                    AgenticAttributes.FUNCTION_INPUTS,
-                    _build_inputs_payload(func, args, kwargs),
-                )
-                if is_llm_kind:
-                    # Stamp operation.name to match native providers.
-                    safe_set(span, AgenticAttributes.OPERATION_NAME, AgenticOperation.CHAT)
-                    input_messages = _extract_llm_input_messages(func, args, kwargs)
-                    if input_messages is not None:
-                        set_messages_if_capturing(span, input_messages=input_messages)
+            if capture_io and is_llm_kind:
+                safe_set(span, AgenticAttributes.OPERATION_NAME, AgenticOperation.CHAT)
+                input_messages = _extract_llm_input_messages(func, args, kwargs)
+                if input_messages is not None:
+                    set_messages_if_capturing(span, input_messages=input_messages)
 
         def _record_output(span: Any, result: Any) -> None:
-            if capture_io:
-                safe_set(
-                    span,
-                    AgenticAttributes.FUNCTION_OUTPUT,
-                    _serialize_for_span(result),
-                )
-                if is_llm_kind:
-                    output_messages = _extract_llm_output_messages(result)
-                    if output_messages is not None:
-                        set_messages_if_capturing(span, output_messages=output_messages)
+            if capture_io and is_llm_kind:
+                output_messages = _extract_llm_output_messages(result)
+                if output_messages is not None:
+                    set_messages_if_capturing(span, output_messages=output_messages)
 
         @contextlib.contextmanager
         def _open_span() -> Iterator[Any]:

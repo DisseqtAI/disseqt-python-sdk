@@ -415,11 +415,12 @@ class TestHelpers:
 
 class TestTraceFunctionIOCapture:
     """
-    trace_function auto-captures the decorated function's inputs
-    (positional + keyword args keyed by parameter name) and return
-    value onto the span as ``agentic.function.inputs`` /
-    ``agentic.function.output``. Both honor the content-capture
-    opt-out and support both sync and async functions.
+    trace_function with ``kind=SpanKind.MODEL_EXEC`` auto-stamps the
+    LLM-shaped attributes (``agentic.input.messages`` /
+    ``agentic.output.messages`` / ``agentic.operation.name``) so a
+    decorated custom LLM is indistinguishable from a native
+    auto-instrumented provider call downstream. Other span kinds get
+    just the span itself — no I/O attribute pollution.
     """
 
     @pytest.fixture(autouse=True)
@@ -455,46 +456,31 @@ class TestTraceFunctionIOCapture:
         names = [s.name for s in self.client.buffer.spans]  # type: ignore[attr-defined]
         raise AssertionError(f"no span named {name!r}; got {names}")
 
-    def test_captures_positional_and_keyword_args(self):
+    def test_capture_io_false_skips_llm_shape(self):
+        """capture_io=False on MODEL_EXEC skips all LLM-shape stamping."""
         import json as _json
 
-        @trace_function(self.client, name="capture_io_kw")
-        def echo(user_id, query, limit=10):
-            return {"user_id": user_id, "hits": [f"result for {query}"][:limit]}
-
-        result = echo("u_123", query="hello world", limit=5)
-        assert result == {"user_id": "u_123", "hits": ["result for hello world"]}
-
-        span = self._find_span("capture_io_kw")
-        # Inputs — keyed by parameter name (positional args bound by
-        # inspect.signature).
-        inputs = _json.loads(_json.loads(span.attributes_json)[AgenticAttributes.FUNCTION_INPUTS])
-        assert inputs == {"user_id": "u_123", "query": "hello world", "limit": 5}
-        # Output — return value serialized as-is.
-        assert _json.loads(
-            _json.loads(span.attributes_json)[AgenticAttributes.FUNCTION_OUTPUT]
-        ) == {
-            "user_id": "u_123",
-            "hits": ["result for hello world"],
-        }
-
-    def test_capture_io_false_skips_both(self):
-        import json as _json
-
-        @trace_function(self.client, name="capture_io_off", capture_io=False)
+        @trace_function(
+            self.client,
+            kind=SpanKind.MODEL_EXEC,
+            name="capture_io_off",
+            capture_io=False,
+        )
         def sensitive(secret):
             return "ok"
 
         sensitive("hunter2")
 
-        span = self._find_span("capture_io_off")
-        assert AgenticAttributes.FUNCTION_INPUTS not in _json.loads(span.attributes_json)
-        assert AgenticAttributes.FUNCTION_OUTPUT not in _json.loads(span.attributes_json)
+        attrs = _json.loads(self._find_span("capture_io_off").attributes_json)
+        assert AgenticAttributes.INPUT_MESSAGES not in attrs
+        assert AgenticAttributes.OUTPUT_MESSAGES not in attrs
+        assert AgenticAttributes.OPERATION_NAME not in attrs
 
-    def test_capture_content_off_gates_inputs_and_output(self):
+    def test_capture_content_off_gates_llm_shape(self):
         """
-        FUNCTION_INPUTS / FUNCTION_OUTPUT are in _CONTENT_ATTR_KEYS, so
-        set_capture_content(False) at deploy time must redact them.
+        INPUT_MESSAGES / OUTPUT_MESSAGES are in _CONTENT_ATTR_KEYS, so
+        set_capture_content(False) at deploy time must redact them
+        even for a MODEL_EXEC-decorated custom LLM.
         """
         import json as _json
 
@@ -507,86 +493,62 @@ class TestTraceFunctionIOCapture:
         set_capture_content(False)
         try:
 
-            @trace_function(self.client, name="gated_capture")
-            def leaky(user_id, api_key):
-                return f"charged {user_id} with {api_key}"
+            @trace_function(self.client, kind=SpanKind.MODEL_EXEC, name="gated_capture")
+            def leaky(api_key):
+                return f"charged with {api_key}"
 
-            leaky("u_1", api_key="sk_LIVE_secret")
+            leaky("sk_LIVE_secret")
         finally:
             set_capture_content(original)
 
-        span = self._find_span("gated_capture")
-        attrs = _json.loads(span.attributes_json)
+        attrs = _json.loads(self._find_span("gated_capture").attributes_json)
         payload = _json.dumps(attrs, default=str)
         assert "sk_LIVE_secret" not in payload
         assert "charged" not in payload
-        # And the specific keys shouldn't be set at all.
-        assert AgenticAttributes.FUNCTION_INPUTS not in attrs
-        assert AgenticAttributes.FUNCTION_OUTPUT not in attrs
+        assert AgenticAttributes.INPUT_MESSAGES not in attrs
+        assert AgenticAttributes.OUTPUT_MESSAGES not in attrs
 
     def test_async_function_is_traced(self):
+        """Async MODEL_EXEC-decorated functions stamp the LLM attrs too."""
         import asyncio
         import json as _json
 
-        @trace_function(self.client, name="async_op")
-        async def fetch(url, timeout=5):
+        @trace_function(self.client, kind=SpanKind.MODEL_EXEC, name="async_llm")
+        async def fetch(query: str) -> str:
             await asyncio.sleep(0)
-            return {"url": url, "status": 200}
+            return f"async echo: {query}"
 
-        result = asyncio.run(fetch("https://example.com", timeout=3))
-        assert result == {"url": "https://example.com", "status": 200}
+        result = asyncio.run(fetch("hello"))
+        assert result == "async echo: hello"
 
-        span = self._find_span("async_op")
-        inputs = _json.loads(_json.loads(span.attributes_json)[AgenticAttributes.FUNCTION_INPUTS])
-        assert inputs == {"url": "https://example.com", "timeout": 3}
-        assert _json.loads(
-            _json.loads(span.attributes_json)[AgenticAttributes.FUNCTION_OUTPUT]
-        ) == {
-            "url": "https://example.com",
-            "status": 200,
-        }
+        attrs = _json.loads(self._find_span("async_llm").attributes_json)
+        assert attrs[AgenticAttributes.INPUT_MESSAGES] == [{"role": "user", "content": "hello"}]
+        assert attrs[AgenticAttributes.OUTPUT_MESSAGES] == [
+            {"role": "assistant", "content": "async echo: hello"}
+        ]
 
-    def test_exception_still_captures_inputs_and_records_error(self):
+    def test_exception_marks_span_error(self):
         """
-        On exception, inputs still land (they were stamped at span
-        open) but no output attribute is set. The exception propagates
-        and is recorded as span error.
+        On exception, no output attributes land (there was no return
+        value) but the span is marked ERROR and the exception
+        propagates unchanged.
         """
         import json as _json
 
-        @trace_function(self.client, name="raising_fn")
-        def blow_up(x):
-            raise RuntimeError(f"boom {x}")
+        @trace_function(self.client, kind=SpanKind.MODEL_EXEC, name="raising_llm")
+        def blow_up(query: str) -> str:
+            raise RuntimeError(f"boom {query}")
 
-        with pytest.raises(RuntimeError, match="boom 42"):
-            blow_up(42)
+        with pytest.raises(RuntimeError, match="boom hello"):
+            blow_up("hello")
 
-        span = self._find_span("raising_fn")
-        inputs = _json.loads(_json.loads(span.attributes_json)[AgenticAttributes.FUNCTION_INPUTS])
-        assert inputs == {"x": 42}
+        span = self._find_span("raising_llm")
+        attrs = _json.loads(span.attributes_json)
+        # Input messages still land (stamped at span open, before call).
+        assert attrs[AgenticAttributes.INPUT_MESSAGES] == [{"role": "user", "content": "hello"}]
         # No output on failure.
-        assert AgenticAttributes.FUNCTION_OUTPUT not in _json.loads(span.attributes_json)
-        # And the span was marked ERROR.
+        assert AgenticAttributes.OUTPUT_MESSAGES not in attrs
         assert span.status_code == "ERROR"
-
-    def test_non_serializable_arg_falls_back_gracefully(self):
-        """A non-JSON-serializable arg must not crash the decorator."""
-        import json as _json
-
-        class Weird:
-            def __str__(self):
-                return "<Weird instance>"
-
-        @trace_function(self.client, name="weird_arg")
-        def take_weird(obj):
-            return "ok"
-
-        take_weird(Weird())
-
-        span = self._find_span("weird_arg")
-        # Inputs key present; value contains the __str__ fallback.
-        inputs_str = _json.loads(span.attributes_json)[AgenticAttributes.FUNCTION_INPUTS]
-        assert "Weird" in inputs_str or "<Weird instance>" in inputs_str
 
     def test_model_exec_kind_stamps_llm_shape_from_str_in_str_out(self):
         """
@@ -616,12 +578,8 @@ class TestTraceFunctionIOCapture:
         ]
         assert attrs[AgenticAttributes.OPERATION_NAME] == AgenticOperation.CHAT
 
-        # Generic function.inputs/output still land for the debug view.
-        assert AgenticAttributes.FUNCTION_INPUTS in attrs
-        assert AgenticAttributes.FUNCTION_OUTPUT in attrs
-
     def test_non_model_exec_kind_skips_llm_shape(self):
-        """kind=INTERNAL keeps only function.inputs/output — no LLM attrs."""
+        """kind=INTERNAL (default) stamps no I/O attributes at all."""
         import json as _json
 
         @trace_function(self.client, name="plain_step")
@@ -630,10 +588,10 @@ class TestTraceFunctionIOCapture:
 
         plain("hello")
 
-        span = self._find_span("plain_step")
-        attrs = _json.loads(span.attributes_json)
+        attrs = _json.loads(self._find_span("plain_step").attributes_json)
         assert AgenticAttributes.INPUT_MESSAGES not in attrs
         assert AgenticAttributes.OUTPUT_MESSAGES not in attrs
+        assert AgenticAttributes.OPERATION_NAME not in attrs
 
     def test_default_client_resolved_when_client_omitted(self):
         """
@@ -714,24 +672,6 @@ class TestTraceFunctionIOCapture:
         assert (
             inner_span.parent_span_id == outer_span.span_id
         ), f"inner span parent {inner_span.parent_span_id} != outer {outer_span.span_id}"
-
-    def test_large_payload_is_truncated(self):
-        """A pathologically large arg must not be persisted verbatim."""
-        import json as _json
-
-        big = "A" * 100_000
-
-        @trace_function(self.client, name="big_arg")
-        def take_big(blob):
-            return "ok"
-
-        take_big(big)
-
-        span = self._find_span("big_arg")
-        inputs_str = _json.loads(span.attributes_json)[AgenticAttributes.FUNCTION_INPUTS]
-        # Well under the raw 100_000 chars.
-        assert len(inputs_str) < 25_000
-        assert "truncated" in inputs_str
 
 
 class TestClientHelpers:
