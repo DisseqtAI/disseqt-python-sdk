@@ -14,6 +14,7 @@ from disseqt_agentic_sdk.utils.logging import get_logger
 
 logger = get_logger()
 
+
 # Shared sentinel for every required-string constructor argument so a
 # caller who omits it entirely gets our own ``ValueError`` (with an
 # actionable message) instead of Python's stock
@@ -24,11 +25,37 @@ logger = get_logger()
 # no context on why it matters or what to do next. Using ``object()``
 # keeps ``None`` / ``""`` / whitespace-only as
 # separately-distinguishable "explicitly-passed but empty" cases.
-_MISSING: object = object()
+class _MissingSentinel:
+    """Distinct sentinel type per required-string constructor argument.
+
+    A single shared ``object()`` default caused CodeQL's dataflow to
+    treat all sentinel-defaulted parameters as one aliased source:
+    ``api_key`` is flagged as a password source by name, and every
+    other parameter sharing the same default inherited that taint —
+    so innocuous fields like ``service_name`` landed in a
+    ``py/clear-text-logging-sensitive-data`` alert when logged in
+    ``logger.info(...)``. Giving each parameter its own instance
+    keeps their flows independent for the taint tracker without
+    changing runtime behavior (the ``isinstance`` check below matches
+    every instance uniformly).
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover — debug aid
+        return "<missing>"
+
+
+# One sentinel per required argument. Do NOT share instances — see
+# ``_MissingSentinel`` for the reason.
+_MISSING_API_KEY: object = _MissingSentinel()
+_MISSING_PROJECT_ID: object = _MissingSentinel()
+_MISSING_SERVICE_NAME: object = _MissingSentinel()
+_MISSING_APPLICATION_ID: object = _MissingSentinel()
 
 
 def _reject_missing_or_empty(value: object, name: str, extra_hint: str = "") -> None:
-    """Raise ValueError if ``value`` is the sentinel, None, empty, or whitespace.
+    """Raise ValueError if ``value`` is a missing sentinel, None, empty, or whitespace.
 
     Every required-string constructor argument routes through this
     helper so a call like ``DisseqtAgenticClient()`` — omitting the
@@ -36,7 +63,7 @@ def _reject_missing_or_empty(value: object, name: str, extra_hint: str = "") -> 
     ValueError shape that ``DisseqtAgenticClient(api_key="")`` /
     ``... api_key=None)`` already produced.
     """
-    if value is _MISSING or value is None or not str(value).strip():
+    if isinstance(value, _MissingSentinel) or value is None or not str(value).strip():
         msg = f"{name} is required and cannot be empty"
         if extra_hint:
             msg = f"{msg}. {extra_hint}"
@@ -137,9 +164,9 @@ class DisseqtAgenticClient:
 
     def __init__(
         self,
-        api_key: str = _MISSING,  # type: ignore[assignment]
-        project_id: str = _MISSING,  # type: ignore[assignment]
-        service_name: str = _MISSING,  # type: ignore[assignment]
+        api_key: str = _MISSING_API_KEY,  # type: ignore[assignment]
+        project_id: str = _MISSING_PROJECT_ID,  # type: ignore[assignment]
+        service_name: str = _MISSING_SERVICE_NAME,  # type: ignore[assignment]
         endpoint: str = "https://api.disseqt.ai/agentic-monitoring/api/v1/traces",
         service_version: str = "1.0.0",
         environment: str = "production",
@@ -148,7 +175,7 @@ class DisseqtAgenticClient:
         max_retries: int = 3,
         realtime_policy_id: str | None = None,
         *,
-        application_id: str = _MISSING,  # type: ignore[assignment]
+        application_id: str = _MISSING_APPLICATION_ID,  # type: ignore[assignment]
     ):
         """
         Initialize SDK client.
