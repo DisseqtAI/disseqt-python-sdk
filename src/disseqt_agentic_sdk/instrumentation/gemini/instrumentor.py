@@ -21,6 +21,7 @@ from collections.abc import Callable
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
+from disseqt_agentic_sdk.context import get_current_trace
 from disseqt_agentic_sdk.enums import SpanKind
 from disseqt_agentic_sdk.instrumentation._kwargs import (
     KW_CONFIG,
@@ -167,6 +168,81 @@ def _normalize_content_entry(entry: Any) -> dict[str, Any]:
     return {"role": "user", "content": str(entry)}
 
 
+def _safe_set_details(span: DisseqtSpan, key: str, value: Any) -> None:
+    """
+    Serialize a per-modality token-details list (Gemini's
+    ``prompt_tokens_details`` / ``candidates_tokens_details``) to JSON
+    and stamp it on the span. Handles pydantic objects (via
+    ``model_dump``) and falls back to ``str()`` if anything refuses.
+    Silent no-op on None / empty so plain single-modality calls stay
+    clean.
+    """
+    if not value:
+        return
+
+    def _serialize(item: Any) -> Any:
+        if hasattr(item, "model_dump"):
+            return item.model_dump(exclude_none=True)
+        if isinstance(item, dict):
+            return item
+        return {"modality": read(item, "modality"), "token_count": read(item, "token_count")}
+
+    try:
+        serialized = [_serialize(item) for item in value]
+        safe_set(span, key, json.dumps(serialized, default=str))
+    except Exception:  # noqa: BLE001 — observability never crashes the caller
+        safe_set(span, key, str(value))
+
+
+def _emit_server_tool_spans(candidate: Any) -> None:
+    """
+    Emit a synthetic ``TOOL_EXEC`` child span for each server-executed
+    tool Gemini ran during this call. Today that's Google Search
+    grounding (``grounding_metadata``) — the tool runs on Google's
+    infrastructure, so there is no local Python function for the
+    ``@disseqt_trace`` decorator to wrap, and without this hook the
+    only trace of the search is one attribute on the MODEL_EXEC span.
+
+    Opens the span as a child of the currently-active MODEL_EXEC span
+    via ``get_current_trace()`` + ``trace.start_span(...)``, so the
+    resulting tree is:
+
+        gemini.generate_content   (MODEL_EXEC — parent)
+        └── google_search         (TOOL_EXEC — this)
+
+    Wall-clock duration is 0 — the search happened on Google's side
+    inside the model call, we can't measure it accurately.
+    """
+    trace = get_current_trace()
+    if trace is None:
+        return
+    grounding = read(candidate, "grounding_metadata")
+    if grounding is None:
+        return
+
+    queries = read(grounding, "web_search_queries") or []
+    chunks = read(grounding, "grounding_chunks") or []
+    sources: list[dict[str, Any]] = []
+    for chunk in chunks:
+        web = read(chunk, "web")
+        if web is not None:
+            sources.append({"uri": read(web, "uri"), "title": read(web, "title")})
+
+    # Nothing worth surfacing (no queries, no sources) → skip; keeps
+    # traces clean when a call had grounding enabled but the model
+    # answered from its own knowledge.
+    if not queries and not sources:
+        return
+
+    with trace.start_span("google_search", SpanKind.TOOL_EXEC) as tool_span:
+        safe_set(tool_span, AgenticAttributes.TOOL_NAME, "google_search")
+        safe_set(tool_span, AgenticAttributes.OPERATION_NAME, AgenticOperation.EXECUTE_TOOL)
+        if queries:
+            safe_set(tool_span, AgenticAttributes.TOOL_ARGS, {"queries": list(queries)})
+        if sources:
+            safe_set(tool_span, AgenticAttributes.TOOL_RESULT, {"sources": sources})
+
+
 def _set_response_attrs(span: DisseqtSpan, response: Any) -> None:
     resp_id = read(response, "response_id")
     resp_model = read(response, "model_version")
@@ -185,11 +261,44 @@ def _set_response_attrs(span: DisseqtSpan, response: Any) -> None:
         # so the bug went unnoticed. See TP-2128 P0 #0.3.
         prompt_tokens = read(usage, "prompt_token_count") or 0
         candidates_tokens = read(usage, "candidates_token_count") or 0
+        # Prefer Gemini's own ``total_token_count`` — it includes hidden
+        # categories the plain sum misses (thoughts_token_count for
+        # reasoning models, tool_use_prompt_token_count for grounded
+        # search / code execution, cached_content_token_count for prompt
+        # caching). Pass to set_token_usage so BOTH ``agentic.usage.*``
+        # and ``gen_ai.usage.*`` report the same authoritative billed
+        # total instead of diverging.
         total = read(usage, "total_token_count") or (prompt_tokens + candidates_tokens)
-        span.set_token_usage(prompt_tokens, candidates_tokens)
+        span.set_token_usage(prompt_tokens, candidates_tokens, total_tokens=total)
         safe_set(span, GenAIAttributes.USAGE_INPUT_TOKENS, prompt_tokens)
         safe_set(span, GenAIAttributes.USAGE_OUTPUT_TOKENS, candidates_tokens)
         safe_set(span, GenAIAttributes.USAGE_TOTAL_TOKENS, total)
+        # Break out the hidden-token categories so dashboards can
+        # explain why ``total`` > ``input + output``. Skipped when 0
+        # / None (safe_set handles that) so a plain non-reasoning
+        # call stays clean.
+        thoughts = read(usage, "thoughts_token_count")
+        if thoughts:
+            safe_set(span, AgenticAttributes.USAGE_THOUGHTS_TOKENS, thoughts)
+        tool_use = read(usage, "tool_use_prompt_token_count")
+        if tool_use:
+            safe_set(span, AgenticAttributes.USAGE_TOOL_USE_PROMPT_TOKENS, tool_use)
+        cached = read(usage, "cached_content_token_count")
+        if cached:
+            safe_set(span, AgenticAttributes.USAGE_CACHED_CONTENT_TOKENS, cached)
+        # Per-modality breakdowns — Gemini returns lists of
+        # ``{modality, token_count}``. Serialize whole list as JSON so
+        # a mixed text+image prompt keeps its breakdown intact.
+        _safe_set_details(
+            span,
+            AgenticAttributes.USAGE_PROMPT_TOKENS_DETAILS,
+            read(usage, "prompt_tokens_details"),
+        )
+        _safe_set_details(
+            span,
+            AgenticAttributes.USAGE_CANDIDATES_TOKENS_DETAILS,
+            read(usage, "candidates_tokens_details"),
+        )
 
     candidates = read(response, "candidates") or []
     if candidates:
@@ -232,6 +341,13 @@ def _set_response_attrs(span: DisseqtSpan, response: Any) -> None:
             _notify_planned_tool_calls(tool_calls)
             safe_set(span, GenAIAttributes.TOOL_CALLS, tool_calls)
             set_first_tool_call_attrs(span, tool_calls)
+
+        # Server-executed tools (Google Search grounding today; code
+        # execution / URL context in future) don't hit ``parts`` as
+        # function_call blocks — they land in ``grounding_metadata``.
+        # Emit a synthetic TOOL_EXEC child span so the search shows up
+        # in the trace tree just like a locally-executed tool.
+        safe_call(_emit_server_tool_spans, first)
 
 
 def _candidate_parts(candidate: Any) -> list[Any]:
@@ -369,6 +485,21 @@ class _StreamAccumulator:
         self.response_id: str | None = None
         self.prompt_tokens: int | None = None
         self.response_tokens: int | None = None
+        # Authoritative total from Gemini (includes hidden thoughts /
+        # tool_use / cached_content tokens). Fall back to
+        # prompt+response only if the stream never surfaced it.
+        self.total_tokens: int | None = None
+        # Hidden-token breakdown, when Gemini reports them.
+        self.thoughts_tokens: int | None = None
+        self.tool_use_prompt_tokens: int | None = None
+        self.cached_content_tokens: int | None = None
+        # Per-modality lists (text/image/audio), as returned by Gemini.
+        self.prompt_tokens_details: Any = None
+        self.candidates_tokens_details: Any = None
+        # Grounding metadata from server-executed tools (Google Search
+        # today). Captured from candidate 0 whenever present on any
+        # chunk — usually only on the last one.
+        self.grounding_candidate: Any = None
         # Per-position accumulator for streamed function calls.
         #
         # Position (in ``candidate.content.parts``) keeps two identical
@@ -397,10 +528,23 @@ class _StreamAccumulator:
             # Real field is `candidates_token_count`; see the note on the
             # non-streaming path above.
             rt = read(usage, "candidates_token_count")
+            tt = read(usage, "total_token_count")
             if pt is not None:
                 self.prompt_tokens = pt
             if rt is not None:
                 self.response_tokens = rt
+            if tt is not None:
+                self.total_tokens = tt
+            for attr, field in (
+                ("thoughts_tokens", "thoughts_token_count"),
+                ("tool_use_prompt_tokens", "tool_use_prompt_token_count"),
+                ("cached_content_tokens", "cached_content_token_count"),
+                ("prompt_tokens_details", "prompt_tokens_details"),
+                ("candidates_tokens_details", "candidates_tokens_details"),
+            ):
+                val = read(usage, field)
+                if val is not None:
+                    setattr(self, attr, val)
 
         candidates = read(chunk, "candidates") or []
         if candidates:
@@ -411,6 +555,11 @@ class _StreamAccumulator:
             text = _extract_candidate_text(first)
             if text:
                 self.buffer.append(text)
+            # Grounding metadata usually lands on the final chunk;
+            # keep the latest non-None so we can emit a tool span
+            # for it in finalize().
+            if read(first, "grounding_metadata") is not None:
+                self.grounding_candidate = first
             for position, part in enumerate(_candidate_parts(first)):
                 fc = read(part, "function_call")
                 if fc is None:
@@ -455,13 +604,43 @@ class _StreamAccumulator:
             safe_set(span, AgenticAttributes.RESPONSE_FINISH_REASON, self.finish_reason)
             safe_set(span, GenAIAttributes.RESPONSE_FINISH_REASONS, [self.finish_reason])
         if self.prompt_tokens is not None and self.response_tokens is not None:
-            span.set_token_usage(self.prompt_tokens, self.response_tokens)
+            # Prefer Gemini's own total_token_count (captures hidden
+            # thoughts / tool_use / cached_content tokens). Fall back
+            # to prompt+response if the stream never surfaced it.
+            total = (
+                self.total_tokens
+                if self.total_tokens is not None
+                else self.prompt_tokens + self.response_tokens
+            )
+            span.set_token_usage(self.prompt_tokens, self.response_tokens, total_tokens=total)
             safe_set(span, GenAIAttributes.USAGE_INPUT_TOKENS, self.prompt_tokens)
             safe_set(span, GenAIAttributes.USAGE_OUTPUT_TOKENS, self.response_tokens)
-            safe_set(
+            safe_set(span, GenAIAttributes.USAGE_TOTAL_TOKENS, total)
+            # Hidden-token breakdown — safe_set skips None/0 so a
+            # plain non-reasoning stream stays clean.
+            if self.thoughts_tokens:
+                safe_set(span, AgenticAttributes.USAGE_THOUGHTS_TOKENS, self.thoughts_tokens)
+            if self.tool_use_prompt_tokens:
+                safe_set(
+                    span,
+                    AgenticAttributes.USAGE_TOOL_USE_PROMPT_TOKENS,
+                    self.tool_use_prompt_tokens,
+                )
+            if self.cached_content_tokens:
+                safe_set(
+                    span,
+                    AgenticAttributes.USAGE_CACHED_CONTENT_TOKENS,
+                    self.cached_content_tokens,
+                )
+            _safe_set_details(
                 span,
-                GenAIAttributes.USAGE_TOTAL_TOKENS,
-                self.prompt_tokens + self.response_tokens,
+                AgenticAttributes.USAGE_PROMPT_TOKENS_DETAILS,
+                self.prompt_tokens_details,
+            )
+            _safe_set_details(
+                span,
+                AgenticAttributes.USAGE_CANDIDATES_TOKENS_DETAILS,
+                self.candidates_tokens_details,
             )
 
         # Emit in position order — matches the order the model produced.
@@ -477,6 +656,12 @@ class _StreamAccumulator:
             _notify_planned_tool_calls(tool_calls)
             safe_set(span, GenAIAttributes.TOOL_CALLS, tool_calls)
             set_first_tool_call_attrs(span, tool_calls)
+
+        # Server-executed tools (Google Search grounding) — mirror
+        # non-streaming: extract from candidate + emit a TOOL_EXEC
+        # child span nested under this MODEL_EXEC.
+        if self.grounding_candidate is not None:
+            safe_call(_emit_server_tool_spans, self.grounding_candidate)
 
 
 def _sync_stream(instrumentor: GeminiInstrumentor) -> Callable[..., Any]:

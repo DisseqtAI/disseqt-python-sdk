@@ -8,6 +8,7 @@ agent actions, and tool calls.
 import asyncio
 import contextlib
 import inspect
+import json
 from collections.abc import Callable, Iterator
 from functools import wraps
 from typing import Any
@@ -58,6 +59,45 @@ def _extract_llm_input_messages(
         if isinstance(val, str) and val:
             return [{"role": "user", "content": val}]
     return None
+
+
+def _extract_tool_args(
+    func: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any]
+) -> dict[str, Any] | None:
+    """
+    Bind ``args``/``kwargs`` back to the function signature so tool
+    invocations record a dict of ``{param_name: value}`` on
+    ``agentic.tool.args`` — matching the shape auto-instrumented
+    provider tool_call spans produce.
+    """
+    try:
+        sig = inspect.signature(func)
+        bound = sig.bind_partial(*args, **kwargs)
+    except (TypeError, ValueError):
+        return None
+    if not bound.arguments:
+        return None
+    return dict(bound.arguments)
+
+
+def _json_safe(value: Any) -> Any:
+    """
+    Coerce arbitrary tool return values into something the span's
+    ``attributes_json`` serializer can handle. Pass primitives / lists
+    / dicts through; fall back to ``str()`` for objects that don't
+    round-trip through ``json.dumps`` (pydantic models, ORM rows,
+    custom classes). Never raises — worst case yields ``repr()``.
+    """
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    try:
+        json.dumps(value)
+        return value
+    except (TypeError, ValueError):
+        try:
+            return str(value)
+        except Exception:
+            return repr(value)
 
 
 def _extract_llm_output_messages(
@@ -321,10 +361,25 @@ def disseqt_trace(
     ``agentic.operation.name`` — the same attribute keys native
     auto-instrumented providers produce, so validators / dashboards
     treat a decorated custom LLM identically to a real provider call.
-    Other span kinds get just the span itself (no I/O attributes). Both
-    LLM attributes honor the content-capture opt-out
-    (``set_capture_content(False)`` / ``DISSEQT_SDK_CAPTURE_CONTENT=0``);
-    pass ``capture_io=False`` to skip stamping entirely.
+
+    When ``kind=SpanKind.TOOL_EXEC``, stamps tool-shape attrs so the
+    span is indistinguishable from a tool_call span the auto-
+    instrumentors already produce: ``agentic.tool.name`` (the function
+    name or the ``name=`` decorator arg — this one drives the
+    ``is_tool_call`` server-side flag, since it's computed as
+    ``tool_name IS NOT NULL``), ``agentic.tool.args`` (the bound
+    kwargs), ``agentic.tool.result`` (the return value), and
+    ``agentic.operation.name = "execute_tool"``. Non-JSON-serializable
+    return values are coerced to ``str()`` so a weird tool response
+    doesn't fail the span send.
+
+    Other span kinds get just the span itself (no I/O attributes).
+    ``agentic.input.messages``, ``agentic.output.messages``,
+    ``agentic.tool.args`` and ``agentic.tool.result`` all honor the
+    content-capture opt-out (``set_capture_content(False)`` /
+    ``DISSEQT_SDK_CAPTURE_CONTENT=0``); pass ``capture_io=False`` to
+    skip content stamping entirely (tool.name and operation.name stay
+    since they're not content).
 
     Auto-chains into a parent-child span tree: when a decorated
     function calls another decorated function, the inner call opens a
@@ -366,11 +421,15 @@ def disseqt_trace(
             the auto-created trace. Use this when you want the whole trace
             (including any child spans opened inside the wrapped function) to
             run under a specific policy.
-        capture_io: When True (default) and ``kind=MODEL_EXEC``,
-            stamps the LLM-shaped attributes described above. Other
-            span kinds ignore this flag (no I/O captured for them
-            anyway). Set False to skip LLM-shape stamping on a
-            MODEL_EXEC span whose args aren't safe/useful to record.
+        capture_io: When True (default), stamps the LLM-shaped
+            attributes on a MODEL_EXEC span or the tool-shape
+            ``agentic.tool.args`` / ``agentic.tool.result`` on a
+            TOOL_EXEC span. Set False to skip content stamping on a
+            span whose args or return value aren't safe/useful to
+            record. TOOL_EXEC's ``tool.name`` and
+            ``operation.name=execute_tool`` are always stamped since
+            they aren't content and the server derives
+            ``is_tool_call`` from ``tool.name``.
         **span_attrs: Additional span attributes stamped once at span open.
 
     Example:
@@ -427,6 +486,14 @@ def disseqt_trace(
         # call for every downstream validator / dashboard. Other span
         # kinds get just the span itself — no I/O attribute pollution.
         is_llm_kind = span_kind == SpanKind.MODEL_EXEC
+        # kind=TOOL_EXEC stamps tool-shape attrs so the span looks
+        # identical to a tool_call span produced by native auto-
+        # instrumentation. In particular ``agentic.tool.name`` is what
+        # the backend enricher extracts into the ``tool_name`` column;
+        # the ``is_tool_call`` flag is computed as
+        # ``tool_name IS NOT NULL``, so without this the flag stays
+        # false even on a TOOL_EXEC span.
+        is_tool_kind = span_kind == SpanKind.TOOL_EXEC
 
         def _prep_span(span: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
             """Stamp static + I/O attributes at span open."""
@@ -439,12 +506,34 @@ def disseqt_trace(
                 input_messages = _extract_llm_input_messages(func, args, kwargs)
                 if input_messages is not None:
                     set_messages_if_capturing(span, input_messages=input_messages)
+            elif is_tool_kind:
+                # tool.name is unconditional — it drives ``is_tool_call``
+                # server-side. Only tool.args goes through the content
+                # gate (it can carry PII / credentials).
+                safe_set(span, AgenticAttributes.TOOL_NAME, span_name_default)
+                safe_set(span, AgenticAttributes.OPERATION_NAME, AgenticOperation.EXECUTE_TOOL)
+                if capture_io:
+                    tool_args = _extract_tool_args(func, args, kwargs)
+                    if tool_args is not None:
+                        safe_set(
+                            span,
+                            AgenticAttributes.TOOL_ARGS,
+                            {k: _json_safe(v) for k, v in tool_args.items()},
+                        )
 
         def _record_output(span: Any, result: Any) -> None:
             if capture_io and is_llm_kind:
                 output_messages = _extract_llm_output_messages(result)
                 if output_messages is not None:
                     set_messages_if_capturing(span, output_messages=output_messages)
+            elif capture_io and is_tool_kind and result is not None:
+                # safe_set gates TOOL_RESULT via _CONTENT_ATTR_KEYS, so
+                # set_capture_content(False) redacts tool returns just
+                # like it redacts message content. _json_safe coerces
+                # non-serializable return values (pydantic models, ORM
+                # rows) into a string so a weird tool return doesn't
+                # crash the whole span send at json.dumps time.
+                safe_set(span, AgenticAttributes.TOOL_RESULT, _json_safe(result))
 
         @contextlib.contextmanager
         def _open_span() -> Iterator[Any]:

@@ -94,6 +94,7 @@ _CONTENT_ATTR_KEYS: frozenset[str] = frozenset(
         AgenticAttributes.SYSTEM_INSTRUCTIONS,
         AgenticAttributes.TOOL_CALLS,
         AgenticAttributes.TOOL_ARGS,
+        AgenticAttributes.TOOL_RESULT,
         AgenticAttributes.REQUEST_TOOLS,
         # TOOL_DEFINITIONS is where tool *schemas* are stored — those
         # schemas can carry credential-shaped defaults (e.g. a

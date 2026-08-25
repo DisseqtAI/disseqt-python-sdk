@@ -200,6 +200,7 @@ class DisseqtSpan:
         self,
         input_tokens: int,
         output_tokens: int,
+        total_tokens: int | None = None,
     ) -> "DisseqtSpan":
         """
         Set token usage.
@@ -207,13 +208,24 @@ class DisseqtSpan:
         Args:
             input_tokens: Input tokens
             output_tokens: Output tokens
+            total_tokens: Optional provider-authoritative total. When
+                the provider reports its own total (Gemini's
+                ``usage_metadata.total_token_count``, Anthropic's cache
+                / thinking tokens, OpenAI's reasoning tokens), pass it
+                here so ``agentic.usage.total_tokens`` reflects the
+                true billed count instead of a plain ``input +
+                output`` sum that misses hidden categories (server-
+                side tool use, reasoning, prompt caching). When None,
+                falls back to ``input_tokens + output_tokens``.
 
         Returns:
             self for method chaining
         """
         self.attributes[AgenticAttributes.USAGE_INPUT_TOKENS] = input_tokens
         self.attributes[AgenticAttributes.USAGE_OUTPUT_TOKENS] = output_tokens
-        self.attributes[AgenticAttributes.USAGE_TOTAL_TOKENS] = input_tokens + output_tokens
+        self.attributes[AgenticAttributes.USAGE_TOTAL_TOKENS] = (
+            total_tokens if total_tokens is not None else input_tokens + output_tokens
+        )
         return self
 
     def set_messages(

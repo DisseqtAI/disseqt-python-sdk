@@ -91,6 +91,30 @@ class AgenticAttributes:
     # the two categories separately.
     USAGE_CACHE_CREATION_INPUT_TOKENS = "agentic.usage.cache_creation_input_tokens"
     USAGE_CACHE_READ_INPUT_TOKENS = "agentic.usage.cache_read_input_tokens"
+    # Provider-hidden token categories that count toward the billed
+    # ``total_token_count`` but NEVER appear in ``candidates_token_count``
+    # / ``output_tokens``. Exposing them as separate attributes lets
+    # cost dashboards explain the delta between "input + visible output"
+    # and Gemini's authoritative total.
+    #   * THOUGHTS  — Gemini 2.5+/3.x internal reasoning ("thinking")
+    #     tokens. On models like ``gemini-3.6-flash`` these can dwarf
+    #     the visible output (e.g. 530 hidden vs 27 visible for a
+    #     one-sentence answer).
+    #   * TOOL_USE_PROMPT — tokens Gemini consumed running server-side
+    #     tools (Google Search grounding, code execution).
+    #   * CACHED_CONTENT  — Gemini's prompt caching counterpart to
+    #     Anthropic's cache_read_input_tokens.
+    USAGE_THOUGHTS_TOKENS = "agentic.usage.thoughts_tokens"
+    USAGE_TOOL_USE_PROMPT_TOKENS = "agentic.usage.tool_use_prompt_tokens"
+    USAGE_CACHED_CONTENT_TOKENS = "agentic.usage.cached_content_tokens"
+    # Per-modality breakdown of prompt / response tokens (Gemini
+    # returns ``prompt_tokens_details`` /
+    # ``candidates_tokens_details`` as ``[{modality, token_count}, ...]``
+    # so a call mixing text + image can be priced separately). Stored
+    # as JSON strings since dict-of-list doesn't fit a single scalar
+    # attribute cleanly.
+    USAGE_PROMPT_TOKENS_DETAILS = "agentic.usage.prompt_tokens_details"
+    USAGE_CANDIDATES_TOKENS_DETAILS = "agentic.usage.candidates_tokens_details"
 
     # Messages
     INPUT_MESSAGES = "agentic.input.messages"
