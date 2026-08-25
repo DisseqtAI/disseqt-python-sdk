@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Missing ``application_id`` on ``DisseqtAgenticClient(...)`` now raises
+  ``ValueError`` (with the actionable docs URL) instead of Python's
+  stock ``TypeError``. In 0.11.1 the bare keyword-only parameter caused
+  CPython's C-level argument-binder to raise TypeError before the
+  constructor body ran, so the customer-facing docs link never
+  appeared in the exception. Uses a sentinel-default pattern so
+  missing / ``None`` / empty / whitespace-only all route through the
+  same validation branch.
+
 ## [0.11.1] - 2026-08-24
 
 ### Changed
