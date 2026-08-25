@@ -41,15 +41,27 @@ def _make_client(**overrides):
 
 
 class TestApplicationIdRequired:
-    def test_missing_application_id_raises_type_error(self):
-        """Not passing application_id at all is a Python-level TypeError."""
-        with pytest.raises(TypeError, match="application_id"):
+    def test_missing_application_id_raises_value_error_with_docs_link(self):
+        """
+        Omitting ``application_id`` entirely used to raise Python's
+        stock ``TypeError`` at the C-level arg-binder, which fires
+        BEFORE the constructor body — so our own ``ValueError`` with
+        the docs link was unreachable. The sentinel-default pattern
+        (``_APPLICATION_ID_MISSING = object()``) reroutes that case
+        into the same validation branch as ``application_id=None`` /
+        empty / whitespace, so the customer always sees the actionable
+        message.
+        """
+        with pytest.raises(ValueError, match="application_id is required") as exc_info:
             DisseqtAgenticClient(
                 api_key="k",
                 project_id="p",
                 service_name="s",
                 endpoint="http://localhost/v1/traces",
             )
+        # Docs link must be in the message so the customer knows where
+        # to obtain a value.
+        assert "docs.disseqt.ai" in str(exc_info.value)
 
     def test_none_application_id_raises_value_error(self):
         with pytest.raises(ValueError, match="application_id is required"):

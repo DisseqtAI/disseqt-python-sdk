@@ -41,6 +41,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   * ``capture_io=False`` opt-out on a per-decorator basis (for
     MODEL_EXEC functions whose args aren't safe/useful to record).
 
+### Fixed
+- Missing **any** required-string constructor argument on
+  ``DisseqtAgenticClient(...)`` — ``api_key``, ``project_id``,
+  ``service_name``, or ``application_id`` — now raises ``ValueError``
+  with an actionable message instead of Python's stock ``TypeError``.
+  In 0.11.1 the bare parameters caused CPython's C-level argument-
+  binder to raise TypeError before the constructor body ran, so the
+  customer-facing messages (including the docs URL for ``application_id``)
+  never appeared. Uses a sentinel-default pattern routed through a
+  shared ``_reject_missing_or_empty`` helper so missing / ``None`` /
+  empty / whitespace-only all produce the same actionable error shape.
+
 ## [0.11.1] - 2026-08-24
 
 ### Changed

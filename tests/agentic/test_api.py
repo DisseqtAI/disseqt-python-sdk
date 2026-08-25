@@ -37,19 +37,35 @@ class TestPublicAPI:
         assert client.buffer is mock_buffer_instance
 
     def test_client_missing_api_key(self):
-        """Test client fails with missing api_key."""
-        with pytest.raises(TypeError):
-            DisseqtAgenticClient(project_id="proj_456", service_name="test_service")
+        """Missing api_key raises ValueError (not Python's stock TypeError).
+
+        Sentinel-default pattern routes the omission into the same
+        validation branch as ``api_key=""``.
+        """
+        with pytest.raises(ValueError, match="api_key is required"):
+            DisseqtAgenticClient(
+                project_id="proj_456",
+                service_name="test_service",
+                application_id="test-app-id",
+            )
 
     def test_client_missing_project_id_only(self):
-        """Test client fails with missing project_id."""
-        with pytest.raises(TypeError):
-            DisseqtAgenticClient(api_key="key", service_name="test_service")
+        """Missing project_id raises ValueError (not TypeError)."""
+        with pytest.raises(ValueError, match="project_id is required"):
+            DisseqtAgenticClient(
+                api_key="key",
+                service_name="test_service",
+                application_id="test-app-id",
+            )
 
     def test_client_missing_service_name_only(self):
-        """Test client fails with missing service_name."""
-        with pytest.raises(TypeError):
-            DisseqtAgenticClient(api_key="key", project_id="proj_456")
+        """Missing service_name raises ValueError (not TypeError)."""
+        with pytest.raises(ValueError, match="service_name is required"):
+            DisseqtAgenticClient(
+                api_key="key",
+                project_id="proj_456",
+                application_id="test-app-id",
+            )
 
     def test_client_empty_project_id(self):
         """Test client fails with empty project_id."""
