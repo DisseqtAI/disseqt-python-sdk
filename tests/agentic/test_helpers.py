@@ -9,8 +9,8 @@ import pytest
 from disseqt_agentic_sdk import DisseqtAgenticClient, start_trace
 from disseqt_agentic_sdk.api.client import get_client, set_client
 from disseqt_agentic_sdk.api.helpers import (
+    disseqt_trace,
     trace_agent_action,
-    trace_function,
     trace_llm_call,
     trace_tool_call,
 )
@@ -283,10 +283,10 @@ class TestHelpers:
                 # set_agent_info, not the kwargs loop).
                 assert agent_span.attributes[AgenticAttributes.AGENT_NAME] == "assistant"
 
-            # 4. trace_function decorator — content-shaped span_attr
+            # 4. disseqt_trace decorator — content-shaped span_attr
             # must not land either. TP-2128 round-3 senior review P3
             # #3.1: this block used to just call the decorated function
-            # without asserting anything, so a revert of trace_function's
+            # without asserting anything, so a revert of disseqt_trace's
             # own safe_set() fix (back to a raw span.set_attribute())
             # would have gone undetected. Swap in a RecordingBuffer so
             # the span this decorator closes is actually introspectable.
@@ -300,7 +300,7 @@ class TestHelpers:
             self.client.buffer = recording_buffer
             try:
 
-                @trace_function(
+                @disseqt_trace(
                     self.client,
                     name="dec_fn",
                     **{AgenticAttributes.INPUT_MESSAGES: "MY_SECRET_FN_MSG"},
@@ -315,97 +315,97 @@ class TestHelpers:
                 # a plain substring check is enough here.
                 assert (
                     "MY_SECRET_FN_MSG" not in fn_span.attributes_json
-                ), "trace_function must route content-shaped span_attrs through the gate"
+                ), "disseqt_trace must route content-shaped span_attrs through the gate"
             finally:
                 self.client.buffer = original_buffer
         finally:
             set_capture_content(original)
 
-    def test_trace_function_decorator_basic(self):
-        """Test trace_function decorator."""
+    def test_disseqt_trace_decorator_basic(self):
+        """Test disseqt_trace decorator."""
 
-        @trace_function(self.client, name="my_function")
+        @disseqt_trace(self.client, name="my_function")
         def my_function():
             return "result"
 
         result = my_function()
         assert result == "result"
 
-    def test_trace_function_decorator_with_kind(self):
-        """Test trace_function decorator with custom kind."""
+    def test_disseqt_trace_decorator_with_kind(self):
+        """Test disseqt_trace decorator with custom kind."""
 
-        @trace_function(self.client, name="agent_func", kind=SpanKind.AGENT_EXEC)
+        @disseqt_trace(self.client, name="agent_func", kind=SpanKind.AGENT_EXEC)
         def agent_function():
             return "agent_result"
 
         result = agent_function()
         assert result == "agent_result"
 
-    def test_trace_function_decorator_with_attrs(self):
-        """Test trace_function decorator with attributes."""
+    def test_disseqt_trace_decorator_with_attrs(self):
+        """Test disseqt_trace decorator with attributes."""
 
-        @trace_function(self.client, name="func", agent_name="test_agent")
+        @disseqt_trace(self.client, name="func", agent_name="test_agent")
         def test_func():
             return "test"
 
         result = test_func()
         assert result == "test"
 
-    def test_trace_function_decorator_with_exception(self):
-        """Test trace_function decorator handles exceptions."""
+    def test_disseqt_trace_decorator_with_exception(self):
+        """Test disseqt_trace decorator handles exceptions."""
 
-        @trace_function(self.client, name="error_func")
+        @disseqt_trace(self.client, name="error_func")
         def error_function():
             raise ValueError("Test error")
 
         with pytest.raises(ValueError, match="Test error"):
             error_function()
 
-    def test_trace_function_decorator_without_init(self):
-        """Test trace_function decorator - client is always required now."""
+    def test_disseqt_trace_decorator_without_init(self):
+        """Test disseqt_trace decorator - client is always required now."""
 
         # Client is required, so this test just verifies it works
-        @trace_function(self.client, name="func")
+        @disseqt_trace(self.client, name="func")
         def test_func():
             return "result"
 
         result = test_func()
         assert result == "result"
 
-    def test_trace_function_decorator_default_name(self):
-        """Test trace_function decorator uses function name when name not provided."""
+    def test_disseqt_trace_decorator_default_name(self):
+        """Test disseqt_trace decorator uses function name when name not provided."""
 
-        @trace_function(self.client)
+        @disseqt_trace(self.client)
         def my_custom_function():
             return "result"
 
         result = my_custom_function()
         assert result == "result"
 
-    def test_trace_function_decorator_string_kind(self):
-        """Test trace_function decorator with string kind."""
+    def test_disseqt_trace_decorator_string_kind(self):
+        """Test disseqt_trace decorator with string kind."""
 
-        @trace_function(self.client, name="func", kind="MODEL_EXEC")
+        @disseqt_trace(self.client, name="func", kind="MODEL_EXEC")
         def test_func():
             return "result"
 
         result = test_func()
         assert result == "result"
 
-    def test_trace_function_decorator_custom_span_kind(self):
-        """Test trace_function decorator with custom span kind string."""
+    def test_disseqt_trace_decorator_custom_span_kind(self):
+        """Test disseqt_trace decorator with custom span kind string."""
 
-        @trace_function(self.client, name="func", kind="CUSTOM_OPERATION")
+        @disseqt_trace(self.client, name="func", kind="CUSTOM_OPERATION")
         def test_func():
             return "result"
 
         result = test_func()
         assert result == "result"
 
-    def test_trace_function_decorator_invalid_enum_keeps_string(self):
-        """Test trace_function decorator keeps invalid enum as string for custom kinds."""
+    def test_disseqt_trace_decorator_invalid_enum_keeps_string(self):
+        """Test disseqt_trace decorator keeps invalid enum as string for custom kinds."""
 
-        @trace_function(self.client, name="func", kind="DATA_PROCESSING")
+        @disseqt_trace(self.client, name="func", kind="DATA_PROCESSING")
         def test_func():
             return "result"
 
@@ -413,9 +413,9 @@ class TestHelpers:
         assert result == "result"
 
 
-class TestTraceFunctionIOCapture:
+class TestDisseqtTraceIOCapture:
     """
-    trace_function with ``kind=SpanKind.MODEL_EXEC`` auto-stamps the
+    disseqt_trace with ``kind=SpanKind.MODEL_EXEC`` auto-stamps the
     LLM-shaped attributes (``agentic.input.messages`` /
     ``agentic.output.messages`` / ``agentic.operation.name``) so a
     decorated custom LLM is indistinguishable from a native
@@ -460,7 +460,7 @@ class TestTraceFunctionIOCapture:
         """capture_io=False on MODEL_EXEC skips all LLM-shape stamping."""
         import json as _json
 
-        @trace_function(
+        @disseqt_trace(
             self.client,
             kind=SpanKind.MODEL_EXEC,
             name="capture_io_off",
@@ -493,7 +493,7 @@ class TestTraceFunctionIOCapture:
         set_capture_content(False)
         try:
 
-            @trace_function(self.client, kind=SpanKind.MODEL_EXEC, name="gated_capture")
+            @disseqt_trace(self.client, kind=SpanKind.MODEL_EXEC, name="gated_capture")
             def leaky(api_key):
                 return f"charged with {api_key}"
 
@@ -513,7 +513,7 @@ class TestTraceFunctionIOCapture:
         import asyncio
         import json as _json
 
-        @trace_function(self.client, kind=SpanKind.MODEL_EXEC, name="async_llm")
+        @disseqt_trace(self.client, kind=SpanKind.MODEL_EXEC, name="async_llm")
         async def fetch(query: str) -> str:
             await asyncio.sleep(0)
             return f"async echo: {query}"
@@ -535,7 +535,7 @@ class TestTraceFunctionIOCapture:
         """
         import json as _json
 
-        @trace_function(self.client, kind=SpanKind.MODEL_EXEC, name="raising_llm")
+        @disseqt_trace(self.client, kind=SpanKind.MODEL_EXEC, name="raising_llm")
         def blow_up(query: str) -> str:
             raise RuntimeError(f"boom {query}")
 
@@ -559,7 +559,7 @@ class TestTraceFunctionIOCapture:
         """
         import json as _json
 
-        @trace_function(self.client, kind=SpanKind.MODEL_EXEC, name="my_custom_llm")
+        @disseqt_trace(self.client, kind=SpanKind.MODEL_EXEC, name="my_custom_llm")
         def my_llm(query: str) -> str:
             return f"echo: {query}"
 
@@ -582,7 +582,7 @@ class TestTraceFunctionIOCapture:
         """kind=INTERNAL (default) stamps no I/O attributes at all."""
         import json as _json
 
-        @trace_function(self.client, name="plain_step")
+        @disseqt_trace(self.client, name="plain_step")
         def plain(x: str) -> str:
             return f"plain: {x}"
 
@@ -596,14 +596,14 @@ class TestTraceFunctionIOCapture:
     def test_default_client_resolved_when_client_omitted(self):
         """
         ``DisseqtAgenticClient(...)`` auto-registers as the process
-        default (via ``set_client(self)``), so ``@trace_function`` used
+        default (via ``set_client(self)``), so ``@disseqt_trace`` used
         without an explicit ``client=`` argument resolves it via
         ``get_client()`` at call time. Matches the ergonomic
         no-client-required decorator form comparable SDKs ship.
         """
         # Fixture already constructed self.client, which auto-registered.
 
-        @trace_function(name="no_client_arg")
+        @disseqt_trace(name="no_client_arg")
         def step(x):
             return x + 1
 
@@ -613,12 +613,12 @@ class TestTraceFunctionIOCapture:
 
     def test_bare_decorator_no_parens(self):
         """
-        ``@trace_function`` used without parens applies immediately with
+        ``@disseqt_trace`` used without parens applies immediately with
         all defaults + the process-default client — same ergonomics as
         the bare-decorator form of comparable tracing SDKs.
         """
 
-        @trace_function
+        @disseqt_trace
         def bare_step(y):
             return y * 2
 
@@ -634,7 +634,7 @@ class TestTraceFunctionIOCapture:
         depend on this.
         """
 
-        @trace_function(client=self.client, name="explicit_client")
+        @disseqt_trace(client=self.client, name="explicit_client")
         def step():
             return "ok"
 
@@ -650,11 +650,11 @@ class TestTraceFunctionIOCapture:
         start_trace's __enter__.
         """
 
-        @trace_function(self.client, name="inner_step")
+        @disseqt_trace(self.client, name="inner_step")
         def inner():
             return "inner_result"
 
-        @trace_function(self.client, name="outer_step")
+        @disseqt_trace(self.client, name="outer_step")
         def outer():
             return inner()
 

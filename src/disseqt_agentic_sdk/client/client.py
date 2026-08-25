@@ -290,7 +290,7 @@ class DisseqtAgenticClient:
         atexit.register(self.shutdown)
 
         # Auto-register as the process-default client so helpers that
-        # accept ``client=None`` (e.g. ``@trace_function`` without an
+        # accept ``client=None`` (e.g. ``@disseqt_trace`` without an
         # explicit client arg) can resolve it via ``get_client()``. Last
         # constructed client wins — matches the common single-client
         # deployment pattern; callers running multiple clients in the

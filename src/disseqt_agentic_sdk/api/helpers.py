@@ -8,6 +8,7 @@ agent actions, and tool calls.
 import asyncio
 import contextlib
 import inspect
+import json
 from collections.abc import Callable, Iterator
 from functools import wraps
 from typing import Any
@@ -58,6 +59,45 @@ def _extract_llm_input_messages(
         if isinstance(val, str) and val:
             return [{"role": "user", "content": val}]
     return None
+
+
+def _extract_tool_args(
+    func: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any]
+) -> dict[str, Any] | None:
+    """
+    Bind ``args``/``kwargs`` back to the function signature so tool
+    invocations record a dict of ``{param_name: value}`` on
+    ``agentic.tool.args`` — matching the shape auto-instrumented
+    provider tool_call spans produce.
+    """
+    try:
+        sig = inspect.signature(func)
+        bound = sig.bind_partial(*args, **kwargs)
+    except (TypeError, ValueError):
+        return None
+    if not bound.arguments:
+        return None
+    return dict(bound.arguments)
+
+
+def _json_safe(value: Any) -> Any:
+    """
+    Coerce arbitrary tool return values into something the span's
+    ``attributes_json`` serializer can handle. Pass primitives / lists
+    / dicts through; fall back to ``str()`` for objects that don't
+    round-trip through ``json.dumps`` (pydantic models, ORM rows,
+    custom classes). Never raises — worst case yields ``repr()``.
+    """
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    try:
+        json.dumps(value)
+        return value
+    except (TypeError, ValueError):
+        try:
+            return str(value)
+        except Exception:
+            return repr(value)
 
 
 def _extract_llm_output_messages(
@@ -303,7 +343,7 @@ def trace_tool_call(
     return span
 
 
-def trace_function(
+def disseqt_trace(
     client: DisseqtAgenticClient | Callable[..., Any] | None = None,
     name: str | None = None,
     kind: SpanKind | str = SpanKind.INTERNAL,
@@ -321,10 +361,25 @@ def trace_function(
     ``agentic.operation.name`` — the same attribute keys native
     auto-instrumented providers produce, so validators / dashboards
     treat a decorated custom LLM identically to a real provider call.
-    Other span kinds get just the span itself (no I/O attributes). Both
-    LLM attributes honor the content-capture opt-out
-    (``set_capture_content(False)`` / ``DISSEQT_SDK_CAPTURE_CONTENT=0``);
-    pass ``capture_io=False`` to skip stamping entirely.
+
+    When ``kind=SpanKind.TOOL_EXEC``, stamps tool-shape attrs so the
+    span is indistinguishable from a tool_call span the auto-
+    instrumentors already produce: ``agentic.tool.name`` (the function
+    name or the ``name=`` decorator arg — this one drives the
+    ``is_tool_call`` server-side flag, since it's computed as
+    ``tool_name IS NOT NULL``), ``agentic.tool.args`` (the bound
+    kwargs), ``agentic.tool.result`` (the return value), and
+    ``agentic.operation.name = "execute_tool"``. Non-JSON-serializable
+    return values are coerced to ``str()`` so a weird tool response
+    doesn't fail the span send.
+
+    Other span kinds get just the span itself (no I/O attributes).
+    ``agentic.input.messages``, ``agentic.output.messages``,
+    ``agentic.tool.args`` and ``agentic.tool.result`` all honor the
+    content-capture opt-out (``set_capture_content(False)`` /
+    ``DISSEQT_SDK_CAPTURE_CONTENT=0``); pass ``capture_io=False`` to
+    skip content stamping entirely (tool.name and operation.name stay
+    since they're not content).
 
     Auto-chains into a parent-child span tree: when a decorated
     function calls another decorated function, the inner call opens a
@@ -342,11 +397,11 @@ def trace_function(
         has been constructed yet.
 
     Usage forms:
-      * ``@trace_function`` — bare, no parens. Uses defaults + default
+      * ``@disseqt_trace`` — bare, no parens. Uses defaults + default
         client. Cheapest ergonomic form.
-      * ``@trace_function(kind=SpanKind.MODEL_EXEC, name="my_llm")`` —
+      * ``@disseqt_trace(kind=SpanKind.MODEL_EXEC, name="my_llm")`` —
         parametrized, still uses default client.
-      * ``@trace_function(client=my_client, ...)`` — explicit client
+      * ``@disseqt_trace(client=my_client, ...)`` — explicit client
         (only needed when running multiple clients in one process).
 
     Supports both sync and async functions — the wrapper is chosen
@@ -366,30 +421,34 @@ def trace_function(
             the auto-created trace. Use this when you want the whole trace
             (including any child spans opened inside the wrapped function) to
             run under a specific policy.
-        capture_io: When True (default) and ``kind=MODEL_EXEC``,
-            stamps the LLM-shaped attributes described above. Other
-            span kinds ignore this flag (no I/O captured for them
-            anyway). Set False to skip LLM-shape stamping on a
-            MODEL_EXEC span whose args aren't safe/useful to record.
+        capture_io: When True (default), stamps the LLM-shaped
+            attributes on a MODEL_EXEC span or the tool-shape
+            ``agentic.tool.args`` / ``agentic.tool.result`` on a
+            TOOL_EXEC span. Set False to skip content stamping on a
+            span whose args or return value aren't safe/useful to
+            record. TOOL_EXEC's ``tool.name`` and
+            ``operation.name=execute_tool`` are always stamped since
+            they aren't content and the server derives
+            ``is_tool_call`` from ``tool.name``.
         **span_attrs: Additional span attributes stamped once at span open.
 
     Example:
         >>> client = DisseqtAgenticClient(..., application_id="...")
 
         >>> # Simplest — bare decorator, uses defaults + default client.
-        >>> @trace_function
+        >>> @disseqt_trace
         ... def my_step(x): return x + 1
 
         >>> # LLM-shaped span, no client passed — resolves via get_client().
-        >>> @trace_function(kind=SpanKind.MODEL_EXEC, name="my_llm")
+        >>> @disseqt_trace(kind=SpanKind.MODEL_EXEC, name="my_llm")
         ... def my_llm(query: str) -> str: return call_my_model(query)
 
         >>> # Explicit client override — multi-client deployments.
-        >>> @trace_function(client=other_client, kind=SpanKind.AGENT_EXEC)
+        >>> @disseqt_trace(client=other_client, kind=SpanKind.AGENT_EXEC)
         ... def agent_step(): ...
     """
-    # Bare-decorator detection: ``@trace_function`` (no parens) makes
-    # Python call ``trace_function(the_decorated_function)`` — so the
+    # Bare-decorator detection: ``@disseqt_trace`` (no parens) makes
+    # Python call ``disseqt_trace(the_decorated_function)`` — so the
     # ``client`` positional slot actually holds a plain callable. Wrap
     # + apply immediately with ``client=None`` (resolved at call time
     # via get_client()). This matches the ergonomic bare-decorator
@@ -427,6 +486,14 @@ def trace_function(
         # call for every downstream validator / dashboard. Other span
         # kinds get just the span itself — no I/O attribute pollution.
         is_llm_kind = span_kind == SpanKind.MODEL_EXEC
+        # kind=TOOL_EXEC stamps tool-shape attrs so the span looks
+        # identical to a tool_call span produced by native auto-
+        # instrumentation. In particular ``agentic.tool.name`` is what
+        # the backend enricher extracts into the ``tool_name`` column;
+        # the ``is_tool_call`` flag is computed as
+        # ``tool_name IS NOT NULL``, so without this the flag stays
+        # false even on a TOOL_EXEC span.
+        is_tool_kind = span_kind == SpanKind.TOOL_EXEC
 
         def _prep_span(span: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
             """Stamp static + I/O attributes at span open."""
@@ -439,12 +506,34 @@ def trace_function(
                 input_messages = _extract_llm_input_messages(func, args, kwargs)
                 if input_messages is not None:
                     set_messages_if_capturing(span, input_messages=input_messages)
+            elif is_tool_kind:
+                # tool.name is unconditional — it drives ``is_tool_call``
+                # server-side. Only tool.args goes through the content
+                # gate (it can carry PII / credentials).
+                safe_set(span, AgenticAttributes.TOOL_NAME, span_name_default)
+                safe_set(span, AgenticAttributes.OPERATION_NAME, AgenticOperation.EXECUTE_TOOL)
+                if capture_io:
+                    tool_args = _extract_tool_args(func, args, kwargs)
+                    if tool_args is not None:
+                        safe_set(
+                            span,
+                            AgenticAttributes.TOOL_ARGS,
+                            {k: _json_safe(v) for k, v in tool_args.items()},
+                        )
 
         def _record_output(span: Any, result: Any) -> None:
             if capture_io and is_llm_kind:
                 output_messages = _extract_llm_output_messages(result)
                 if output_messages is not None:
                     set_messages_if_capturing(span, output_messages=output_messages)
+            elif capture_io and is_tool_kind and result is not None:
+                # safe_set gates TOOL_RESULT via _CONTENT_ATTR_KEYS, so
+                # set_capture_content(False) redacts tool returns just
+                # like it redacts message content. _json_safe coerces
+                # non-serializable return values (pydantic models, ORM
+                # rows) into a string so a weird tool return doesn't
+                # crash the whole span send at json.dumps time.
+                safe_set(span, AgenticAttributes.TOOL_RESULT, _json_safe(result))
 
         @contextlib.contextmanager
         def _open_span() -> Iterator[Any]:
@@ -459,7 +548,7 @@ def trace_function(
             inner call opens a *child span* on it instead of opening a
             second top-level trace. Match the parent-child structure
             other tracing SDKs produce via ContextVar-based run
-            detection — see the ``@trace_function`` docstring for a
+            detection — see the ``@disseqt_trace`` docstring for a
             waterfall example.
             """
             from disseqt_agentic_sdk.api.client import get_client
@@ -486,7 +575,7 @@ def trace_function(
             call_time_client = resolved_client or get_client()
             if call_time_client is None:
                 raise RuntimeError(
-                    "@trace_function has no client to open a trace with. "
+                    "@disseqt_trace has no client to open a trace with. "
                     "Either construct a DisseqtAgenticClient(...) before "
                     "calling the decorated function (the constructor auto-"
                     "registers as the process default), or pass "
@@ -534,7 +623,7 @@ def trace_function(
 
         return sync_wrapper
 
-    # Bare-decorator (@trace_function without parens): apply immediately.
+    # Bare-decorator (@disseqt_trace without parens): apply immediately.
     if func_being_decorated is not None:
         return decorator(func_being_decorated)
     return decorator

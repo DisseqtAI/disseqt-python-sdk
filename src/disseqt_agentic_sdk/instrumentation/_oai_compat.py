@@ -130,10 +130,41 @@ def set_chat_response(span: DisseqtSpan, response: Any) -> None:
     if usage is not None:
         prompt_tokens = read(usage, "prompt_tokens") or read(usage, "input_tokens") or 0
         completion_tokens = read(usage, "completion_tokens") or read(usage, "output_tokens") or 0
-        span.set_token_usage(prompt_tokens, completion_tokens)
+        # Prefer the provider's own ``total_tokens`` — for o1/o3
+        # reasoning models this includes hidden
+        # ``completion_tokens_details.reasoning_tokens`` that never
+        # appear in ``completion_tokens``. Fall back to a plain sum
+        # when the field is absent. isinstance guard so a MagicMock
+        # usage in unit tests (attr access returns truthy MagicMock,
+        # not None) doesn't smuggle a non-serializable object in.
+        raw_total = read(usage, "total_tokens")
+        total_tokens = (
+            raw_total if isinstance(raw_total, int) else (prompt_tokens + completion_tokens)
+        )
+        span.set_token_usage(prompt_tokens, completion_tokens, total_tokens=total_tokens)
         safe_set(span, GenAIAttributes.USAGE_INPUT_TOKENS, prompt_tokens)
         safe_set(span, GenAIAttributes.USAGE_OUTPUT_TOKENS, completion_tokens)
-        safe_set(span, GenAIAttributes.USAGE_TOTAL_TOKENS, prompt_tokens + completion_tokens)
+        safe_set(span, GenAIAttributes.USAGE_TOTAL_TOKENS, total_tokens)
+        # Hidden reasoning tokens (OpenAI o1 / o3 / gpt-5 reasoning
+        # models). Analogous to Gemini's thoughts_token_count — burned
+        # for chain-of-thought but not surfaced in ``completion_tokens``,
+        # so ``total - (input+output)`` looks off without this attr.
+        # isinstance guard so MagicMock attribute access in unit tests
+        # (which yields a truthy MagicMock rather than None) doesn't
+        # smuggle a non-serializable object into the attributes dict.
+        completion_details = read(usage, "completion_tokens_details")
+        if completion_details is not None:
+            reasoning = read(completion_details, "reasoning_tokens")
+            if isinstance(reasoning, int) and reasoning:
+                safe_set(span, AgenticAttributes.USAGE_THOUGHTS_TOKENS, reasoning)
+        # Prompt caching — OpenAI's counterpart to Anthropic's
+        # cache_read_input_tokens. Same attribute key so cross-
+        # provider cost dashboards work unchanged.
+        prompt_details = read(usage, "prompt_tokens_details")
+        if prompt_details is not None:
+            cached = read(prompt_details, "cached_tokens")
+            if isinstance(cached, int) and cached:
+                safe_set(span, AgenticAttributes.USAGE_CACHE_READ_INPUT_TOKENS, cached)
 
     choices = read(response, "choices") or []
     output_messages: list[dict[str, Any]] = []
@@ -243,6 +274,13 @@ class ChatStreamAccumulator:
         self.response_id: str | None = None
         self.prompt_tokens: int | None = None
         self.completion_tokens: int | None = None
+        # Authoritative total from the provider (o1/o3 reasoning models
+        # include hidden reasoning_tokens here that aren't in
+        # completion_tokens). Fall back to sum if never surfaced.
+        self.total_tokens: int | None = None
+        # Hidden token categories, when the provider reports them.
+        self.reasoning_tokens: int | None = None
+        self.cached_prompt_tokens: int | None = None
         # OpenAI streams tool calls one index at a time, with `function.arguments`
         # arriving as concatenatable text fragments. Merge by `index`.
         self._tool_calls: dict[int, dict[str, Any]] = {}
@@ -270,6 +308,26 @@ class ChatStreamAccumulator:
                 or read(usage, "output_tokens")
                 or self.completion_tokens
             )
+            # isinstance guards: MagicMock attribute access in unit
+            # tests yields a truthy MagicMock rather than None, which
+            # would otherwise smuggle a non-serializable object into
+            # the span attributes at finalize.
+            tt = read(usage, "total_tokens")
+            if isinstance(tt, int):
+                self.total_tokens = tt
+            # Reasoning tokens (o1/o3 chain-of-thought) live inside
+            # completion_tokens_details, not on the top-level usage.
+            completion_details = read(usage, "completion_tokens_details")
+            if completion_details is not None:
+                reasoning = read(completion_details, "reasoning_tokens")
+                if isinstance(reasoning, int) and reasoning:
+                    self.reasoning_tokens = reasoning
+            # Prompt caching hits live inside prompt_tokens_details.
+            prompt_details = read(usage, "prompt_tokens_details")
+            if prompt_details is not None:
+                cached = read(prompt_details, "cached_tokens")
+                if isinstance(cached, int) and cached:
+                    self.cached_prompt_tokens = cached
 
         for choice in read(chunk, "choices") or []:
             # Streaming absorbs choice 0 only (TP-2128 P2 #2.7). The
@@ -351,14 +409,27 @@ class ChatStreamAccumulator:
             safe_set(span, AgenticAttributes.RESPONSE_FINISH_REASON, self.finish_reason)
             safe_set(span, GenAIAttributes.RESPONSE_FINISH_REASONS, [self.finish_reason])
         if self.prompt_tokens is not None and self.completion_tokens is not None:
-            span.set_token_usage(self.prompt_tokens, self.completion_tokens)
+            total = (
+                self.total_tokens
+                if self.total_tokens is not None
+                else self.prompt_tokens + self.completion_tokens
+            )
+            span.set_token_usage(
+                self.prompt_tokens,
+                self.completion_tokens,
+                total_tokens=total,
+            )
             safe_set(span, GenAIAttributes.USAGE_INPUT_TOKENS, self.prompt_tokens)
             safe_set(span, GenAIAttributes.USAGE_OUTPUT_TOKENS, self.completion_tokens)
-            safe_set(
-                span,
-                GenAIAttributes.USAGE_TOTAL_TOKENS,
-                self.prompt_tokens + self.completion_tokens,
-            )
+            safe_set(span, GenAIAttributes.USAGE_TOTAL_TOKENS, total)
+            if self.reasoning_tokens:
+                safe_set(span, AgenticAttributes.USAGE_THOUGHTS_TOKENS, self.reasoning_tokens)
+            if self.cached_prompt_tokens:
+                safe_set(
+                    span,
+                    AgenticAttributes.USAGE_CACHE_READ_INPUT_TOKENS,
+                    self.cached_prompt_tokens,
+                )
 
         if self._tool_calls:
             # Flatten index-keyed dict into list ordered by index, drop entries

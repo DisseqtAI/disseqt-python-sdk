@@ -153,4 +153,7 @@ class TestStreamAccumulatorWithListContent:
         # set_token_usage was called with the parsed counts — proves
         # finalize actually reached that line (before the fix it crashed
         # on the join earlier).
-        span.set_token_usage.assert_called_with(3, 4)
+        # Streaming path now forwards the provider's authoritative
+        # ``total_tokens`` (7) so reasoning-model hidden tokens counted
+        # by the provider aren't lost to a plain input+output sum.
+        span.set_token_usage.assert_called_with(3, 4, total_tokens=7)

@@ -8,14 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- ``@trace_function`` is now a full first-class span decorator for
-  any user function — custom LLM call, retrieval step, business-
-  logic step. Highlights:
+- ``@disseqt_trace`` (renamed from ``@trace_function`` before ship)
+  is now a full first-class span decorator for any user function —
+  custom LLM call, retrieval step, business-logic step. Highlights:
 
   * **Ergonomic decorator forms** — three usages all work:
-    ``@trace_function`` (bare, no parens); ``@trace_function(
+    ``@disseqt_trace`` (bare, no parens); ``@disseqt_trace(
     kind=SpanKind.MODEL_EXEC, name="my_llm")`` (parametrized);
-    ``@trace_function(client=other_client, ...)`` (explicit-client
+    ``@disseqt_trace(client=other_client, ...)`` (explicit-client
     override for multi-client deployments).
   * **Default-client resolution** — ``DisseqtAgenticClient.__init__``
     auto-registers itself as the process default, so decorators

@@ -15,7 +15,7 @@ class SpanKind(str, Enum):
 
     Custom span kinds:
         You can use custom span kinds by passing any string value directly to start_span()
-        or trace_function(). The SDK accepts both SpanKind enum values and string values.
+        or disseqt_trace(). The SDK accepts both SpanKind enum values and string values.
 
         Examples:
             # Using enum value
@@ -26,7 +26,7 @@ class SpanKind(str, Enum):
             trace.start_span("data_processing", "DATA_PROCESSING")
 
             # With decorator
-            @trace_function(client, kind="CUSTOM_OPERATION")
+            @disseqt_trace(client, kind="CUSTOM_OPERATION")
             def my_function():
                 pass
 
