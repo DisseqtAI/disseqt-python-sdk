@@ -635,6 +635,54 @@ class TestTraceFunctionIOCapture:
         assert AgenticAttributes.INPUT_MESSAGES not in attrs
         assert AgenticAttributes.OUTPUT_MESSAGES not in attrs
 
+    def test_default_client_resolved_when_client_omitted(self):
+        """
+        ``DisseqtAgenticClient(...)`` auto-registers as the process
+        default (via ``set_client(self)``), so ``@trace_function`` used
+        without an explicit ``client=`` argument resolves it via
+        ``get_client()`` at call time. Matches the ergonomic
+        no-client-required decorator form comparable SDKs ship.
+        """
+        # Fixture already constructed self.client, which auto-registered.
+
+        @trace_function(name="no_client_arg")
+        def step(x):
+            return x + 1
+
+        assert step(41) == 42
+        span = self._find_span("no_client_arg")
+        assert span is not None  # got shipped through the default client's buffer
+
+    def test_bare_decorator_no_parens(self):
+        """
+        ``@trace_function`` used without parens applies immediately with
+        all defaults + the process-default client — same ergonomics as
+        the bare-decorator form of comparable tracing SDKs.
+        """
+
+        @trace_function
+        def bare_step(y):
+            return y * 2
+
+        assert bare_step(5) == 10
+        # Span named after the function (default when name not passed).
+        span = self._find_span("bare_step")
+        assert span is not None
+
+    def test_explicit_client_overrides_default(self):
+        """
+        When ``client=`` is passed, it must be used even if a different
+        client is registered as the default. Multi-client deployments
+        depend on this.
+        """
+
+        @trace_function(client=self.client, name="explicit_client")
+        def step():
+            return "ok"
+
+        step()
+        assert self._find_span("explicit_client") is not None
+
     def test_nested_decorated_calls_share_one_trace(self):
         """
         Chaining: when a decorated function calls another decorated
