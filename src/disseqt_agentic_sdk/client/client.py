@@ -289,6 +289,16 @@ class DisseqtAgenticClient:
         # Register cleanup on exit
         atexit.register(self.shutdown)
 
+        # Auto-register as the process-default client so helpers that
+        # accept ``client=None`` (e.g. ``@trace_function`` without an
+        # explicit client arg) can resolve it via ``get_client()``. Last
+        # constructed client wins — matches the common single-client
+        # deployment pattern; callers running multiple clients in the
+        # same process should pass ``client=...`` explicitly.
+        from disseqt_agentic_sdk.api.client import set_client
+
+        set_client(self)
+
         # Defense-in-depth: never log the project_id (a sensitive identifier),
         # even though the logger would redact it. Only non-sensitive fields here.
         logger.info(
