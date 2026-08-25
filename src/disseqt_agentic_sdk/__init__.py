@@ -37,9 +37,9 @@ from disseqt_agentic_sdk._version import SDK_VERSION as __version__
 
 # Public API
 from disseqt_agentic_sdk.api import (
+    disseqt_trace,
     start_trace,
     trace_agent_action,
-    trace_function,
     trace_llm_call,
     trace_tool_call,
 )
@@ -89,7 +89,7 @@ __all__ = [
     "trace_llm_call",
     "trace_agent_action",
     "trace_tool_call",
-    "trace_function",
+    "disseqt_trace",
     # Enums
     "SpanKind",
     "SpanStatus",

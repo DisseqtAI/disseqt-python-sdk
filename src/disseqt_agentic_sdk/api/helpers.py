@@ -303,7 +303,7 @@ def trace_tool_call(
     return span
 
 
-def trace_function(
+def disseqt_trace(
     client: DisseqtAgenticClient | Callable[..., Any] | None = None,
     name: str | None = None,
     kind: SpanKind | str = SpanKind.INTERNAL,
@@ -342,11 +342,11 @@ def trace_function(
         has been constructed yet.
 
     Usage forms:
-      * ``@trace_function`` — bare, no parens. Uses defaults + default
+      * ``@disseqt_trace`` — bare, no parens. Uses defaults + default
         client. Cheapest ergonomic form.
-      * ``@trace_function(kind=SpanKind.MODEL_EXEC, name="my_llm")`` —
+      * ``@disseqt_trace(kind=SpanKind.MODEL_EXEC, name="my_llm")`` —
         parametrized, still uses default client.
-      * ``@trace_function(client=my_client, ...)`` — explicit client
+      * ``@disseqt_trace(client=my_client, ...)`` — explicit client
         (only needed when running multiple clients in one process).
 
     Supports both sync and async functions — the wrapper is chosen
@@ -377,19 +377,19 @@ def trace_function(
         >>> client = DisseqtAgenticClient(..., application_id="...")
 
         >>> # Simplest — bare decorator, uses defaults + default client.
-        >>> @trace_function
+        >>> @disseqt_trace
         ... def my_step(x): return x + 1
 
         >>> # LLM-shaped span, no client passed — resolves via get_client().
-        >>> @trace_function(kind=SpanKind.MODEL_EXEC, name="my_llm")
+        >>> @disseqt_trace(kind=SpanKind.MODEL_EXEC, name="my_llm")
         ... def my_llm(query: str) -> str: return call_my_model(query)
 
         >>> # Explicit client override — multi-client deployments.
-        >>> @trace_function(client=other_client, kind=SpanKind.AGENT_EXEC)
+        >>> @disseqt_trace(client=other_client, kind=SpanKind.AGENT_EXEC)
         ... def agent_step(): ...
     """
-    # Bare-decorator detection: ``@trace_function`` (no parens) makes
-    # Python call ``trace_function(the_decorated_function)`` — so the
+    # Bare-decorator detection: ``@disseqt_trace`` (no parens) makes
+    # Python call ``disseqt_trace(the_decorated_function)`` — so the
     # ``client`` positional slot actually holds a plain callable. Wrap
     # + apply immediately with ``client=None`` (resolved at call time
     # via get_client()). This matches the ergonomic bare-decorator
@@ -459,7 +459,7 @@ def trace_function(
             inner call opens a *child span* on it instead of opening a
             second top-level trace. Match the parent-child structure
             other tracing SDKs produce via ContextVar-based run
-            detection — see the ``@trace_function`` docstring for a
+            detection — see the ``@disseqt_trace`` docstring for a
             waterfall example.
             """
             from disseqt_agentic_sdk.api.client import get_client
@@ -486,7 +486,7 @@ def trace_function(
             call_time_client = resolved_client or get_client()
             if call_time_client is None:
                 raise RuntimeError(
-                    "@trace_function has no client to open a trace with. "
+                    "@disseqt_trace has no client to open a trace with. "
                     "Either construct a DisseqtAgenticClient(...) before "
                     "calling the decorated function (the constructor auto-"
                     "registers as the process default), or pass "
@@ -534,7 +534,7 @@ def trace_function(
 
         return sync_wrapper
 
-    # Bare-decorator (@trace_function without parens): apply immediately.
+    # Bare-decorator (@disseqt_trace without parens): apply immediately.
     if func_being_decorated is not None:
         return decorator(func_being_decorated)
     return decorator
