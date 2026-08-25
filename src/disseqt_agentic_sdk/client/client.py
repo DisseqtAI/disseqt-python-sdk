@@ -14,6 +14,18 @@ from disseqt_agentic_sdk.utils.logging import get_logger
 
 logger = get_logger()
 
+# Sentinel default for ``application_id`` so a caller who omits the
+# kwarg entirely gets our own ``ValueError`` (with the docs link)
+# instead of Python's stock
+# ``TypeError: missing 1 required keyword-only argument``. That
+# TypeError is raised by CPython's C-level arg-binder *before* the
+# constructor body runs, so a bare ``application_id: str`` with no
+# default never reaches our validation branch — the customer sees no
+# docs link and no context. Using ``object()`` as the sentinel keeps
+# ``None`` / ``""`` / whitespace-only as separately-distinguishable
+# "explicitly-passed but empty" cases.
+_APPLICATION_ID_MISSING: object = object()
+
 
 # The two things that actually break sending an application_id as an
 # HTTP header, checked directly against the real failure modes rather
@@ -120,7 +132,7 @@ class DisseqtAgenticClient:
         max_retries: int = 3,
         realtime_policy_id: str | None = None,
         *,
-        application_id: str,
+        application_id: str = _APPLICATION_ID_MISSING,  # type: ignore[assignment]
     ):
         """
         Initialize SDK client.
@@ -199,7 +211,11 @@ class DisseqtAgenticClient:
         # without a matching X-Application-Id header, so silently
         # constructing a client that will never be able to deliver spans
         # is worse than failing loudly here.
-        if not application_id or not application_id.strip():
+        if (
+            application_id is _APPLICATION_ID_MISSING
+            or not application_id
+            or not application_id.strip()
+        ):
             raise ValueError(
                 "application_id is required and cannot be empty. "
                 "See https://docs.disseqt.ai/docs/disseqt-sdk/agentic-observability/applications-registry "
