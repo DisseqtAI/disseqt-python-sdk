@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-08-26
+
 ### Added
 - ``@disseqt_trace`` (renamed from ``@trace_function`` before ship)
   is now a full first-class span decorator for any user function —
