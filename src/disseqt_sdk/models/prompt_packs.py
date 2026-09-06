@@ -70,6 +70,13 @@ class CreateRunRequest:
         api_key: LLM provider API key
         model_name: Model to use (e.g. "gpt-4")
         provider: LLM provider (e.g. "openai")
+        application_id: Optional id of a registered Application ("AI System")
+            to scope this run to. When set and none of llm_id/
+            app_integration_id/custom_llm_id is otherwise supplied, the
+            backend auto-resolves this to the Application's one linked
+            integration. Omitted from the payload entirely when unset --
+            existing callers that don't pass it see no change in the request
+            body sent over the wire.
     """
 
     run_name: str
@@ -77,16 +84,20 @@ class CreateRunRequest:
     api_key: str
     model_name: str
     provider: str
+    application_id: str | None = None
 
     def to_payload(self) -> dict[str, Any]:
         """Convert to API payload."""
-        return {
+        payload: dict[str, Any] = {
             "run_name": self.run_name,
             "run_type": self.run_type,
             "api_key": self.api_key,
             "model_name": self.model_name,
             "provider": self.provider,
         }
+        if self.application_id is not None:
+            payload["application_id"] = self.application_id
+        return payload
 
 
 class PromptPackOutputValidationCategory(str, Enum):

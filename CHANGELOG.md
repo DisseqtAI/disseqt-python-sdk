@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- ``CreateRunRequest`` (prompt packs) gained an optional ``application_id``
+  field. When set and no explicit ``llm_id``/``app_integration_id``/
+  ``custom_llm_id`` is otherwise supplied on the run, the backend
+  auto-resolves it to that Application's ("AI System") one linked
+  integration. Omitted from the request payload entirely when unset --
+  existing callers see no change on the wire.
+
 ## [0.11.2] - 2026-08-26
 
 ### Added
