@@ -149,6 +149,47 @@ class TestCreateRunRequest:
         assert "project_id" not in payload
         assert "organization_id" not in payload
 
+    def test_to_payload_without_application_id_is_unchanged(self, create_run_request):
+        """Backward compatibility: an existing caller that never passes
+        application_id must get a byte-identical payload to before this field
+        existed -- the key must be OMITTED, not sent as `"application_id": null`.
+        A null may be read differently by the backend than an absent key, and
+        that is exactly how an "optional" field breaks existing callers.
+        """
+        payload = create_run_request.to_payload()
+
+        assert payload == {
+            "run_name": "Test Run",
+            "run_type": "evaluation",
+            "api_key": "llm-api-key",
+            "model_name": "gpt-4",
+            "provider": "openai",
+        }
+        assert "application_id" not in payload
+        assert "application_id" not in json.dumps(payload)
+
+    def test_to_payload_with_application_id_included(self):
+        """When set, application_id is included in the payload."""
+        request = CreateRunRequest(
+            run_name="Test Run",
+            run_type="evaluation",
+            api_key="llm-api-key",
+            model_name="gpt-4",
+            provider="openai",
+            application_id="app-123",
+        )
+        payload = request.to_payload()
+
+        assert payload["application_id"] == "app-123"
+
+    def test_application_id_is_keyword_only_by_position(self):
+        """application_id must never become required or move before the
+        existing positional args -- an existing caller that constructs
+        CreateRunRequest with 5 positional args must keep working unchanged.
+        """
+        request = CreateRunRequest("Test Run", "evaluation", "llm-api-key", "gpt-4", "openai")
+        assert request.application_id is None
+
 
 class TestMetricEvaluation:
     """Test MetricEvaluation model."""
