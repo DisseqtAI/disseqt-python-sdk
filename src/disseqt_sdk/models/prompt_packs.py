@@ -65,11 +65,33 @@ class CreateRunRequest:
     project_id and organization_id are supplied by Kong gateway (from URL/headers), not in the request body.
 
     Attributes:
-        run_name: Name for this run
-        run_type: Type of run (e.g. "evaluation")
+        run_name: Name for this run. Sent on the wire as
+            "prompt_pack_run_name" -- the backend's request struct
+            (api/prompt_pack_runs_handlers.go, PromptPackRunRequest) has
+            bound that JSON key since the endpoint's very first commit; it
+            has never had a "run_name" binding. Until this was fixed, every
+            run_name a caller supplied was silently ignored and the backend
+            fell back to its own auto-generated name, with no error. If your
+            runs used to show generated names regardless of what you passed
+            here, this is why -- passing run_name now actually works.
+        run_type: Accepted for backward compatibility but NOT sent to the
+            server: the backend has never had a matching field (verified
+            against its full git history back to the endpoint's first
+            commit) and always computes its own run type server-side from
+            whether specific prompts were selected. This argument does
+            nothing today; kept required, unremoved, so no existing caller
+            breaks. Flagged for a future decision on formally deprecating
+            it.
         api_key: LLM provider API key
         model_name: Model to use (e.g. "gpt-4")
         provider: LLM provider (e.g. "openai")
+        application_id: Optional id of a registered Application ("AI System")
+            to scope this run to. When set and none of llm_id/
+            app_integration_id/custom_llm_id is otherwise supplied, the
+            backend auto-resolves this to the Application's one linked
+            integration. Omitted from the payload entirely when unset --
+            existing callers that don't pass it see no change in the request
+            body sent over the wire.
     """
 
     run_name: str
@@ -77,16 +99,19 @@ class CreateRunRequest:
     api_key: str
     model_name: str
     provider: str
+    application_id: str | None = None
 
     def to_payload(self) -> dict[str, Any]:
         """Convert to API payload."""
-        return {
-            "run_name": self.run_name,
-            "run_type": self.run_type,
+        payload: dict[str, Any] = {
+            "prompt_pack_run_name": self.run_name,
             "api_key": self.api_key,
             "model_name": self.model_name,
             "provider": self.provider,
         }
+        if self.application_id is not None:
+            payload["application_id"] = self.application_id
+        return payload
 
 
 class PromptPackOutputValidationCategory(str, Enum):

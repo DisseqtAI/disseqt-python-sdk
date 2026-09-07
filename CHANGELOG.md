@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **``CreateRunRequest.run_name`` now actually reaches the server.** Since
+  this SDK's first release, ``to_payload()`` sent the run name under the
+  key ``"run_name"``, but the backend has only ever bound
+  ``"prompt_pack_run_name"``. Every ``run_name`` a caller supplied was
+  silently ignored — no error, no warning — and the backend fell back to
+  its own auto-generated name. If your runs have shown auto-generated
+  names regardless of what you passed as ``run_name``, this was why.
+  **No code change is required on your part** — the constructor argument
+  is still ``run_name``; only the wire key changed. Runs you create after
+  upgrading will use the name you actually give them. If anything of
+  yours (a dashboard, a script, a test) keys off the auto-generated name
+  pattern, expect that to change.
+- ``CreateRunRequest.run_type`` is no longer sent to the server. The
+  backend has never had a matching field — verified against its full git
+  history back to this endpoint's first commit — and always computes its
+  own run type server-side. This argument has done nothing since it was
+  introduced; it remains a required constructor argument so no existing
+  caller breaks, but is now omitted from the payload rather than sent as
+  dead weight. No observable behavior change from the caller's side of a
+  successful call.
+
+### Added
+- ``CreateRunRequest`` (prompt packs) gained an optional ``application_id``
+  field. When set and no explicit ``llm_id``/``app_integration_id``/
+  ``custom_llm_id`` is otherwise supplied on the run, the backend
+  auto-resolves it to that Application's ("AI System") one linked
+  integration. Omitted from the request payload entirely when unset --
+  existing callers see no change on the wire.
+
 ## [0.11.2] - 2026-08-26
 
 ### Added

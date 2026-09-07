@@ -138,16 +138,91 @@ class TestCreateRunRequest:
     """Test CreateRunRequest model."""
 
     def test_to_payload(self, create_run_request):
-        """Test run request serialization (project_id/organization_id come from Kong, not body)."""
+        """Test run request serialization (project_id/organization_id come from Kong, not body).
+
+        run_name is sent as "prompt_pack_run_name" -- the only JSON key the
+        backend's PromptPackRunRequest actually binds for a run's display
+        name (api/prompt_pack_runs_handlers.go). "run_name" itself must be
+        ABSENT: the backend never reads it, so sending it as well would be
+        silently-ignored noise, not a harmless alias.
+
+        run_type must also be ABSENT: the backend has never had a matching
+        field at any point in its history and always computes its own run
+        type server-side. Sending a "run_type" key reaches nothing.
+        """
         payload = create_run_request.to_payload()
 
-        assert payload["run_name"] == "Test Run"
-        assert payload["run_type"] == "evaluation"
+        assert payload["prompt_pack_run_name"] == "Test Run"
+        assert "run_name" not in payload
+        assert "run_type" not in payload
         assert payload["api_key"] == "llm-api-key"
         assert payload["model_name"] == "gpt-4"
         assert payload["provider"] == "openai"
         assert "project_id" not in payload
         assert "organization_id" not in payload
+
+    def test_to_payload_wrong_keys_are_absent(self, create_run_request):
+        """Load-bearing: proves the two keys the backend never binds --
+        "run_name" (real key is "prompt_pack_run_name") and "run_type" (no
+        backend field exists at all) -- are genuinely absent from both the
+        dict and its serialized form, not merely unequal to some value.
+        A regression that re-adds either key under its wrong name would fail
+        this even if every other assertion in this file kept passing.
+        """
+        payload = create_run_request.to_payload()
+        serialized = json.dumps(payload)
+
+        assert "run_name" not in payload
+        assert '"run_name"' not in serialized
+        assert "run_type" not in payload
+        assert '"run_type"' not in serialized
+
+    def test_to_payload_without_application_id_is_unchanged(self, create_run_request):
+        """Backward compatibility: an existing caller that never passes
+        application_id must get a byte-identical payload to before this field
+        existed -- the key must be OMITTED, not sent as `"application_id": null`.
+        A null may be read differently by the backend than an absent key, and
+        that is exactly how an "optional" field breaks existing callers.
+
+        This is the CORRECTED expected payload (prompt_pack_run_name, no
+        run_type) following the run_name/run_type wire-key fix -- rewritten
+        deliberately to the new correct shape, not merely edited to match
+        whatever to_payload() currently emits. It still asserts an exact key
+        set: a regression that adds run_name/run_type back, or drops a real
+        field, fails this equality check.
+        """
+        payload = create_run_request.to_payload()
+
+        assert payload == {
+            "prompt_pack_run_name": "Test Run",
+            "api_key": "llm-api-key",
+            "model_name": "gpt-4",
+            "provider": "openai",
+        }
+        assert "application_id" not in payload
+        assert "application_id" not in json.dumps(payload)
+
+    def test_to_payload_with_application_id_included(self):
+        """When set, application_id is included in the payload."""
+        request = CreateRunRequest(
+            run_name="Test Run",
+            run_type="evaluation",
+            api_key="llm-api-key",
+            model_name="gpt-4",
+            provider="openai",
+            application_id="app-123",
+        )
+        payload = request.to_payload()
+
+        assert payload["application_id"] == "app-123"
+
+    def test_application_id_is_keyword_only_by_position(self):
+        """application_id must never become required or move before the
+        existing positional args -- an existing caller that constructs
+        CreateRunRequest with 5 positional args must keep working unchanged.
+        """
+        request = CreateRunRequest("Test Run", "evaluation", "llm-api-key", "gpt-4", "openai")
+        assert request.application_id is None
 
 
 class TestMetricEvaluation:
@@ -379,15 +454,22 @@ class TestRunEndpoints:
     RUN_ID = "run-xyz-456"
 
     def test_create_run(self, requests_mock, api_client, create_run_request):
-        """Test creating a run."""
-        mock_response = {"id": self.RUN_ID, "run_name": "Test Run"}
+        """Test creating a run.
+
+        Asserts the wire key is "prompt_pack_run_name" (what the backend
+        actually binds), not "run_name" -- the two are easy to confuse
+        since run_name is still the caller-facing constructor argument.
+        """
+        mock_response = {"id": self.RUN_ID, "prompt_pack_run_name": "Test Run"}
         requests_mock.post(f"{PREFIX}/{self.PACK_ID}/runs", json=mock_response)
 
         result = api_client.create_run(self.PACK_ID, create_run_request)
 
         assert result == mock_response
         sent = json.loads(requests_mock.request_history[0].text)
-        assert sent["run_name"] == "Test Run"
+        assert sent["prompt_pack_run_name"] == "Test Run"
+        assert "run_name" not in sent
+        assert "run_type" not in sent
         assert sent["model_name"] == "gpt-4"
         assert sent["provider"] == "openai"
 
