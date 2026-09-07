@@ -578,6 +578,84 @@ class TestDisseqtTraceIOCapture:
         ]
         assert attrs[AgenticAttributes.OPERATION_NAME] == AgenticOperation.CHAT
 
+    def test_model_exec_stamps_model_and_provider_kwargs(self):
+        """
+        Custom-LLM decorator use case: users on a proprietary model
+        pass ``model=`` + ``provider=`` so the backend can look up
+        their registered pricing rate. The kwargs write the SAME
+        attribute keys (``agentic.request.model`` +
+        ``agentic.provider.name``) that native auto-instrumentors
+        produce, so downstream cost / usage aggregation treats them
+        identically to an auto-captured OpenAI/Anthropic/Gemini span.
+        """
+        import json as _json
+
+        @disseqt_trace(
+            self.client,
+            kind=SpanKind.MODEL_EXEC,
+            name="custom_llm_call",
+            model="my-custom-llm-v1",
+            provider="custom",
+        )
+        def call_custom(q: str) -> str:
+            return f"answer: {q}"
+
+        call_custom("hello")
+
+        attrs = _json.loads(self._find_span("custom_llm_call").attributes_json)
+        assert attrs[AgenticAttributes.REQUEST_MODEL] == "my-custom-llm-v1"
+        assert attrs[AgenticAttributes.PROVIDER_NAME] == "custom"
+
+    def test_model_kwarg_ignored_when_kind_not_model_exec(self):
+        """
+        A stray ``model=`` on a non-MODEL_EXEC decorator must NOT leak
+        into an unrelated attr — the backend uses REQUEST_MODEL as a
+        pricing key, so writing it on e.g. a TOOL_EXEC or AGENT_EXEC
+        span would silently create a phantom LLM row on the Cost
+        Tracking dashboard.
+        """
+        import json as _json
+
+        @disseqt_trace(
+            self.client,
+            kind=SpanKind.TOOL_EXEC,
+            name="tool_step",
+            model="should-not-appear",
+            provider="also-not",
+        )
+        def tool(x: str) -> str:
+            return x
+
+        tool("x")
+
+        attrs = _json.loads(self._find_span("tool_step").attributes_json)
+        assert AgenticAttributes.REQUEST_MODEL not in attrs
+        assert AgenticAttributes.PROVIDER_NAME not in attrs
+
+    def test_provider_ignored_when_model_absent(self):
+        """
+        ``provider=`` alone is meaningless — the backend keys pricing
+        on ``model`` first and then narrows by provider. Skipping the
+        provider write when no model is supplied avoids stamping a
+        provider on an otherwise identity-less span.
+        """
+        import json as _json
+
+        @disseqt_trace(
+            self.client,
+            kind=SpanKind.MODEL_EXEC,
+            name="provider_only_llm",
+            provider="custom",
+        )
+        def anon_llm(q: str) -> str:
+            return q
+
+        anon_llm("ping")
+
+        attrs = _json.loads(self._find_span("provider_only_llm").attributes_json)
+        assert AgenticAttributes.REQUEST_MODEL not in attrs
+        assert AgenticAttributes.PROVIDER_NAME not in attrs
+
     def test_non_model_exec_kind_skips_llm_shape(self):
         """kind=INTERNAL (default) stamps no I/O attributes at all."""
         import json as _json
