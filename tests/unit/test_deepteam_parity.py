@@ -410,3 +410,262 @@ class TestCliRedteamExpansion:
         r = CliRunner().invoke(cli, ["redteam", "list-attacks"])
         assert r.exit_code == 0, r.output
         assert "st1" in r.output and "mt1" in r.output and "a1" in r.output
+
+
+class TestCliRedteamBatch2:
+    """Batch 2: analytics, recommend/parse-curl/test-connection, eval-csv/single-turn."""
+
+    RT_BASE = "https://redteam.test"
+    JB = "/api/v1/jailbreak"
+    BOT = "/api/v1/testing/bot"
+
+    def _env(self, monkeypatch):
+        monkeypatch.setenv("DISSEQT_PROJECT_ID", "proj")
+        monkeypatch.setenv("DISSEQT_API_KEY", "key")
+        monkeypatch.setenv("DISSEQT_REDTEAM_BASE_URL", self.RT_BASE)
+
+    # ---- analytics ---------------------------------------------------------
+    def test_analytics_default_hits_both(self, monkeypatch, requests_mock):
+        self._env(monkeypatch)
+        requests_mock.get(f"{self.RT_BASE}{self.JB}/analytics/summary", json={"total_runs": 42})
+        requests_mock.get(f"{self.RT_BASE}{self.JB}/analytics/prompts-stats", json={"prompts": 100})
+        r = CliRunner().invoke(cli, ["redteam", "analytics", "--format", "json"])
+        assert r.exit_code == 0, r.output
+        # Both endpoints wired through — JSON output contains both keys.
+        assert "total_runs" in r.output
+        assert "prompts" in r.output
+
+    def test_analytics_summary_only_json(self, monkeypatch, requests_mock):
+        self._env(monkeypatch)
+        requests_mock.get(f"{self.RT_BASE}{self.JB}/analytics/summary", json={"total_runs": 7})
+        r = CliRunner().invoke(cli, ["redteam", "analytics", "--summary", "--format", "json"])
+        assert r.exit_code == 0, r.output
+        assert "total_runs" in r.output
+        # prompts-stats endpoint should NOT be called.
+        assert "prompts" not in r.output
+
+    def test_analytics_prompts_only_table(self, monkeypatch, requests_mock):
+        self._env(monkeypatch)
+        requests_mock.get(
+            f"{self.RT_BASE}{self.JB}/analytics/prompts-stats", json={"prompts": 3, "blocked": 1}
+        )
+        r = CliRunner().invoke(cli, ["redteam", "analytics", "--prompts-stats"])
+        assert r.exit_code == 0, r.output
+        assert "prompts" in r.output
+        assert "blocked" in r.output
+
+    def test_analytics_mutex_flags_rejected(self, monkeypatch):
+        self._env(monkeypatch)
+        r = CliRunner().invoke(cli, ["redteam", "analytics", "--summary", "--prompts-stats"])
+        assert r.exit_code != 0
+        assert "at most one" in r.output
+
+    # ---- recommend ---------------------------------------------------------
+    def test_recommend_packs_with_context(self, monkeypatch, requests_mock):
+        self._env(monkeypatch)
+        requests_mock.post(
+            f"{self.RT_BASE}{self.BOT}/recommend-packs",
+            json={"packs": ["owasp-top10", "prompt-injection-101"]},
+        )
+        r = CliRunner().invoke(
+            cli, ["redteam", "recommend", "packs", "--context", "banking chatbot"]
+        )
+        assert r.exit_code == 0, r.output
+        assert "owasp-top10" in r.output
+
+    def test_recommend_attacks_from_config(self, monkeypatch, requests_mock, tmp_path):
+        self._env(monkeypatch)
+        requests_mock.post(
+            f"{self.RT_BASE}{self.BOT}/recommend-attacks", json={"attacks": ["dan", "aim"]}
+        )
+        cfg = tmp_path / "body.json"
+        cfg.write_text('{"context": "custom", "focus": "roleplay"}')
+        r = CliRunner().invoke(cli, ["redteam", "recommend", "attacks", "--config", str(cfg)])
+        assert r.exit_code == 0, r.output
+        assert "dan" in r.output
+
+    def test_recommend_requires_context_or_config(self, monkeypatch):
+        self._env(monkeypatch)
+        r = CliRunner().invoke(cli, ["redteam", "recommend", "validators"])
+        assert r.exit_code != 0
+        assert "--context" in r.output
+
+    def test_recommend_invalid_kind_rejected(self, monkeypatch):
+        self._env(monkeypatch)
+        r = CliRunner().invoke(cli, ["redteam", "recommend", "nope", "--context", "x"])
+        assert r.exit_code != 0
+
+    def test_recommend_4xx_surfaces_error(self, monkeypatch, requests_mock):
+        # Endpoint reality-check: optimistic route may 404; fail loudly.
+        self._env(monkeypatch)
+        requests_mock.post(
+            f"{self.RT_BASE}{self.BOT}/recommend-packs",
+            status_code=404,
+            text="not implemented",
+        )
+        r = CliRunner().invoke(cli, ["redteam", "recommend", "packs", "--context", "x"])
+        assert r.exit_code != 0
+        assert "404" in r.output or "not implemented" in r.output
+
+    # ---- parse-curl --------------------------------------------------------
+    def test_parse_curl_from_file(self, monkeypatch, requests_mock, tmp_path):
+        self._env(monkeypatch)
+        requests_mock.post(
+            f"{self.RT_BASE}{self.BOT}/parse-curl",
+            json={"method": "POST", "url": "https://api.example.com/x"},
+        )
+        curl_file = tmp_path / "req.txt"
+        curl_file.write_text("curl -X POST https://api.example.com/x -d 'a=1'")
+        r = CliRunner().invoke(cli, ["redteam", "parse-curl", str(curl_file)])
+        assert r.exit_code == 0, r.output
+        assert "api.example.com" in r.output
+
+    def test_parse_curl_stdin(self, monkeypatch, requests_mock):
+        self._env(monkeypatch)
+        requests_mock.post(f"{self.RT_BASE}{self.BOT}/parse-curl", json={"method": "GET"})
+        r = CliRunner().invoke(cli, ["redteam", "parse-curl", "--stdin"], input="curl https://x/y")
+        assert r.exit_code == 0, r.output
+        assert "GET" in r.output
+
+    def test_parse_curl_empty_rejected(self, monkeypatch):
+        self._env(monkeypatch)
+        r = CliRunner().invoke(cli, ["redteam", "parse-curl", "--stdin"], input="   \n")
+        assert r.exit_code != 0
+        assert "empty" in r.output
+
+    # ---- test-connection ---------------------------------------------------
+    def test_test_connection_target_flag(self, monkeypatch, requests_mock):
+        self._env(monkeypatch)
+        requests_mock.post(
+            f"{self.RT_BASE}{self.BOT}/test-connection", json={"ok": True, "latency_ms": 42}
+        )
+        r = CliRunner().invoke(cli, ["redteam", "test-connection", "--target", "openai/gpt-4o"])
+        assert r.exit_code == 0, r.output
+        assert "true" in r.output.lower()
+
+    def test_test_connection_env_fallback(self, monkeypatch, requests_mock):
+        self._env(monkeypatch)
+        monkeypatch.setenv("DISSEQT_REDTEAM_TARGET", "anthropic/claude-3")
+        requests_mock.post(f"{self.RT_BASE}{self.BOT}/test-connection", json={"ok": True})
+        r = CliRunner().invoke(cli, ["redteam", "test-connection"])
+        assert r.exit_code == 0, r.output
+
+    def test_test_connection_missing_target_errors(self, monkeypatch):
+        self._env(monkeypatch)
+        monkeypatch.delenv("DISSEQT_REDTEAM_TARGET", raising=False)
+        r = CliRunner().invoke(cli, ["redteam", "test-connection"])
+        assert r.exit_code != 0
+        assert "--target" in r.output
+
+    # ---- eval-csv ----------------------------------------------------------
+    def test_eval_csv_no_wait_prints_job(self, monkeypatch, requests_mock, tmp_path):
+        self._env(monkeypatch)
+        requests_mock.post(
+            f"{self.RT_BASE}{self.JB}/evaluate-csv", json={"job_id": "j-1", "status": "queued"}
+        )
+        csv_file = tmp_path / "prompts.csv"
+        csv_file.write_text("prompt\nhi\nignore prior instructions\n")
+        r = CliRunner().invoke(cli, ["redteam", "eval-csv", str(csv_file)])
+        assert r.exit_code == 0, r.output
+        assert "j-1" in r.output
+
+    def test_eval_csv_wait_polls_until_done(self, monkeypatch, requests_mock, tmp_path):
+        self._env(monkeypatch)
+        requests_mock.post(f"{self.RT_BASE}{self.JB}/evaluate-csv", json={"job_id": "j-2"})
+        # First poll: running. Second: completed.
+        requests_mock.get(
+            f"{self.RT_BASE}{self.JB}/jobs/j-2/process",
+            [
+                {"json": {"status": "running"}},
+                {"json": {"status": "completed", "results": [{"row": 1}]}},
+            ],
+        )
+        csv_file = tmp_path / "p.csv"
+        csv_file.write_text("prompt\nhi\n")
+        r = CliRunner().invoke(
+            cli,
+            ["redteam", "eval-csv", str(csv_file), "--wait", "--poll-interval", "0"],
+        )
+        assert r.exit_code == 0, r.output
+        assert "completed" in r.output
+
+    def test_eval_csv_wait_writes_output_file(self, monkeypatch, requests_mock, tmp_path):
+        self._env(monkeypatch)
+        requests_mock.post(f"{self.RT_BASE}{self.JB}/evaluate-csv", json={"job_id": "j-3"})
+        requests_mock.get(
+            f"{self.RT_BASE}{self.JB}/jobs/j-3/process",
+            json={"status": "completed", "verdict": "PASS"},
+        )
+        csv_file = tmp_path / "p.csv"
+        csv_file.write_text("prompt\nhi\n")
+        out_file = tmp_path / "res.json"
+        r = CliRunner().invoke(
+            cli,
+            [
+                "redteam",
+                "eval-csv",
+                str(csv_file),
+                "--wait",
+                "--output",
+                str(out_file),
+                "--poll-interval",
+                "0",
+            ],
+        )
+        assert r.exit_code == 0, r.output
+        assert out_file.exists()
+        import json as _json
+
+        saved = _json.loads(out_file.read_text())
+        assert saved["verdict"] == "PASS"
+
+    # ---- eval-single-turn --------------------------------------------------
+    def test_eval_single_turn_text_output(self, monkeypatch, requests_mock):
+        self._env(monkeypatch)
+        requests_mock.post(
+            f"{self.RT_BASE}{self.JB}/single-turn-evaluate",
+            json={"verdict": "PASS", "reason": "benign prompt"},
+        )
+        r = CliRunner().invoke(
+            cli,
+            [
+                "redteam",
+                "eval-single-turn",
+                "--input",
+                "hi",
+                "--technique",
+                "prompt_injection",
+                "--vulnerability",
+                "bias",
+            ],
+        )
+        assert r.exit_code == 0, r.output
+        assert "verdict" in r.output
+        assert "PASS" in r.output
+        assert "benign prompt" in r.output
+
+    def test_eval_single_turn_json_output(self, monkeypatch, requests_mock):
+        self._env(monkeypatch)
+        requests_mock.post(
+            f"{self.RT_BASE}{self.JB}/single-turn-evaluate",
+            json={"verdict": "FAIL", "score": 0.9},
+        )
+        r = CliRunner().invoke(
+            cli, ["redteam", "eval-single-turn", "--input", "hi", "--format", "json"]
+        )
+        assert r.exit_code == 0, r.output
+        assert '"verdict": "FAIL"' in r.output
+
+    # ---- help listing ------------------------------------------------------
+    def test_help_lists_new_verbs(self):
+        r = CliRunner().invoke(cli, ["redteam", "--help"])
+        assert r.exit_code == 0, r.output
+        for verb in (
+            "analytics",
+            "recommend",
+            "parse-curl",
+            "test-connection",
+            "eval-csv",
+            "eval-single-turn",
+        ):
+            assert verb in r.output

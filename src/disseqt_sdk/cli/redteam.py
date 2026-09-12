@@ -456,3 +456,252 @@ def report(job_id: str, fmt: str) -> None:
         echo_json(payload)
     else:  # markdown
         click.echo(_results_to_markdown(payload))
+
+
+# ---------------------------------------------------------------------------
+# Follow-up additions (batch 2):
+#   - analytics [--summary|--prompts-stats]
+#   - recommend {packs,attacks,validators}
+#   - parse-curl / test-connection
+#   - eval-csv / eval-single-turn
+# ---------------------------------------------------------------------------
+
+_JAILBREAK_BASE = "/api/v1/jailbreak"
+_BOT_BASE = "/api/v1/testing/bot"
+
+
+def _render_kv_table(title: str, payload: Any) -> None:
+    """Best-effort rich table for a dict payload; fall back to JSON."""
+    try:
+        from rich.console import Console
+        from rich.table import Table
+    except ImportError:  # pragma: no cover — rich is a first-party dep
+        click.secho(title, fg="cyan", bold=True)
+        echo_json(payload)
+        return
+    if not isinstance(payload, dict):
+        # Non-dict (list/scalar) — render as JSON under the title.
+        click.secho(title, fg="cyan", bold=True)
+        echo_json(payload)
+        return
+    table = Table(title=title, show_header=True, header_style="bold cyan")
+    table.add_column("field")
+    table.add_column("value")
+    for key, value in payload.items():
+        table.add_row(str(key), _stringify(value))
+    Console().print(table)
+
+
+@redteam.command("analytics")
+@click.option("--summary", "summary_only", is_flag=True, help="Only fetch the summary endpoint.")
+@click.option(
+    "--prompts-stats", "prompts_only", is_flag=True, help="Only fetch the prompts-stats endpoint."
+)
+@click.option(
+    "--format", "fmt", type=click.Choice(["table", "json"]), default="table", help="Output format."
+)
+def analytics(summary_only: bool, prompts_only: bool, fmt: str) -> None:
+    """Show jailbreak analytics (summary + prompts-stats)."""
+    if summary_only and prompts_only:
+        raise click.UsageError("pass at most one of --summary or --prompts-stats")
+
+    want_summary = summary_only or not prompts_only
+    want_prompts = prompts_only or not summary_only
+
+    out: dict[str, Any] = {}
+    if want_summary:
+        out["summary"] = _http.request(
+            "GET", BASE_ENV, DEFAULT_BASE, f"{_JAILBREAK_BASE}/analytics/summary"
+        )
+    if want_prompts:
+        out["prompts_stats"] = _http.request(
+            "GET", BASE_ENV, DEFAULT_BASE, f"{_JAILBREAK_BASE}/analytics/prompts-stats"
+        )
+
+    if fmt == "json":
+        # Unwrap single-key output when only one endpoint was requested.
+        echo_json(next(iter(out.values())) if len(out) == 1 else out)
+        return
+    for title, payload in out.items():
+        _render_kv_table(title.replace("_", " ").title(), payload)
+
+
+_RECOMMEND_PATHS = {
+    "packs": f"{_BOT_BASE}/recommend-packs",
+    "attacks": f"{_BOT_BASE}/recommend-attacks",
+    "validators": f"{_BOT_BASE}/recommend-validators",
+}
+
+
+@redteam.command("recommend")
+@click.argument("kind", type=click.Choice(sorted(_RECOMMEND_PATHS)))
+@click.option("--context", "context", help="Free-form context string.")
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(exists=True, dir_okay=False),
+    help="JSON body to send instead of --context.",
+)
+def recommend(kind: str, context: str | None, config_path: str | None) -> None:
+    """Ask the bot to recommend packs / attacks / validators."""
+    if not context and not config_path:
+        raise click.UsageError("pass --context or --config FILE")
+    if context and config_path:
+        raise click.UsageError("pass exactly one of --context or --config")
+    if config_path:
+        with open(config_path, encoding="utf-8") as f:
+            body = json.load(f)
+        if not isinstance(body, dict):
+            raise click.ClickException(f"{config_path}: top-level must be a JSON object")
+    else:
+        body = {"context": context}
+    echo_json(_http.request("POST", BASE_ENV, DEFAULT_BASE, _RECOMMEND_PATHS[kind], json_body=body))
+
+
+@redteam.command("parse-curl")
+@click.argument("source", required=False, type=click.Path(exists=True, dir_okay=False))
+@click.option("--stdin", "from_stdin", is_flag=True, help="Read curl string from stdin.")
+def parse_curl(source: str | None, from_stdin: bool) -> None:
+    """Parse a curl command into a structured request payload."""
+    if source == "-" or from_stdin or (source is None and not sys.stdin.isatty()):
+        curl_text = sys.stdin.read()
+    elif source:
+        with open(source, encoding="utf-8") as f:
+            curl_text = f.read()
+    else:
+        raise click.UsageError("provide a FILE path, --stdin, or pipe curl on stdin")
+    curl_text = curl_text.strip()
+    if not curl_text:
+        raise click.UsageError("empty curl input")
+    echo_json(
+        _http.request(
+            "POST", BASE_ENV, DEFAULT_BASE, f"{_BOT_BASE}/parse-curl", json_body={"curl": curl_text}
+        )
+    )
+
+
+@redteam.command("test-connection")
+@click.option(
+    "--target",
+    help="Target as provider/model (e.g., openai/gpt-4o). Falls back to active profile.",
+)
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(exists=True, dir_okay=False),
+    help="JSON body with a full target dict.",
+)
+def test_connection(target: str | None, config_path: str | None) -> None:
+    """Ping the target model through the bot connectivity endpoint."""
+    if config_path:
+        with open(config_path, encoding="utf-8") as f:
+            body = json.load(f)
+        if not isinstance(body, dict):
+            raise click.ClickException(f"{config_path}: top-level must be a JSON object")
+    elif target:
+        if "/" in target:
+            provider, _, model = target.partition("/")
+            body = {"target": {"provider": provider, "model": model}}
+        else:
+            body = {"target": {"id": target}}
+    else:
+        # ponytail: no profile store yet; fall back to env var if set,
+        # otherwise fail with a clear hint. Add a profile lookup when
+        # multi-target profiles ship.
+        env_target = os.environ.get("DISSEQT_REDTEAM_TARGET")
+        if not env_target:
+            raise click.UsageError(
+                "pass --target provider/model, --config FILE, " "or set DISSEQT_REDTEAM_TARGET"
+            )
+        provider, _, model = env_target.partition("/")
+        body = (
+            {"target": {"provider": provider, "model": model}}
+            if model
+            else {"target": {"id": env_target}}
+        )
+    echo_json(
+        _http.request(
+            "POST", BASE_ENV, DEFAULT_BASE, f"{_BOT_BASE}/test-connection", json_body=body
+        )
+    )
+
+
+@redteam.command("eval-csv")
+@click.argument("path", type=click.Path(exists=True, dir_okay=False))
+@click.option("--output", "output_path", type=click.Path(dir_okay=False), help="Save results JSON.")
+@click.option("--wait", "wait_for_completion", is_flag=True, help="Poll until the job finishes.")
+@click.option("--poll-interval", default=2.0, help="Seconds between poll requests.")
+@click.option("--max-wait", default=600.0, help="Max seconds to wait for completion.")
+def eval_csv(
+    path: str,
+    output_path: str | None,
+    wait_for_completion: bool,
+    poll_interval: float,
+    max_wait: float,
+) -> None:
+    """Upload a CSV to the bulk-evaluate endpoint and optionally poll for results."""
+    with open(path, "rb") as fh:
+        files = {"file": (os.path.basename(path), fh.read(), "text/csv")}
+    submit = _http.request(
+        "POST",
+        BASE_ENV,
+        DEFAULT_BASE,
+        f"{_JAILBREAK_BASE}/evaluate-csv",
+        files=files,
+    )
+    job_id = _resolve_id(submit, "job_id", "id")
+
+    if not wait_for_completion:
+        echo_json(submit)
+        return
+    if not job_id:
+        raise click.ClickException(f"could not resolve job id from response: {submit!r}")
+
+    deadline = time.monotonic() + max_wait
+    last: Any = None
+    while time.monotonic() < deadline:
+        last = _http.request(
+            "GET", BASE_ENV, DEFAULT_BASE, f"{_JAILBREAK_BASE}/jobs/{job_id}/process"
+        )
+        state = (last or {}).get("status") or (last or {}).get("state") or ""
+        if str(state).lower() in _TERMINAL_STATES:
+            if output_path:
+                with open(output_path, "w", encoding="utf-8") as out:
+                    json.dump(last, out, indent=2, default=str)
+                click.secho(f"wrote {output_path}", fg="green")
+            else:
+                echo_json(last)
+            return
+        time.sleep(poll_interval)
+    raise click.ClickException(f"job {job_id} did not finish within {max_wait}s")
+
+
+@redteam.command("eval-single-turn")
+@click.option("--input", "input_text", required=True, help="Prompt to evaluate.")
+@click.option("--technique", help="Attack technique to attribute the prompt to.")
+@click.option("--vulnerability", help="Vulnerability to score against.")
+@click.option("--format", "fmt", type=click.Choice(["text", "json"]), default="text")
+def eval_single_turn(
+    input_text: str, technique: str | None, vulnerability: str | None, fmt: str
+) -> None:
+    """Evaluate one prompt against the single-turn jailbreak scorer."""
+    body: dict[str, Any] = {"input": input_text}
+    if technique:
+        body["technique"] = technique
+    if vulnerability:
+        body["vulnerability"] = vulnerability
+    payload = _http.request(
+        "POST", BASE_ENV, DEFAULT_BASE, f"{_JAILBREAK_BASE}/single-turn-evaluate", json_body=body
+    )
+    if fmt == "json":
+        echo_json(payload)
+        return
+    if isinstance(payload, dict):
+        verdict = payload.get("verdict") or payload.get("decision") or "?"
+        reason = payload.get("reason") or payload.get("rationale") or ""
+        color = "green" if str(verdict).upper() in ("PASS", "SAFE", "OK") else "red"
+        click.secho(f"verdict: {verdict}", fg=color, bold=True)
+        if reason:
+            click.echo(f"reason: {reason}")
+    else:
+        echo_json(payload)
