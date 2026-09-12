@@ -247,16 +247,9 @@ class TestCliValidate:
         r = CliRunner().invoke(cli, ["run", str(cfg), "--fail-on-block"])
         assert r.exit_code == 1, r.output
 
-    def test_scan_missing_binary(self, monkeypatch):
-        monkeypatch.delenv("DISSEQT_SCAN_BIN", raising=False)
-        # Force shutil.which to return None so the missing-binary path is
-        # exercised even on machines with a coincidentally-named binary.
-        import disseqt_sdk.cli.scan as scan_mod
-
-        monkeypatch.setattr(scan_mod, "_resolve_bin", lambda: None)
-        r = CliRunner().invoke(cli, ["scan"])
-        assert r.exit_code == 127, r.output
-
+    # Removed: `disseqt scan` no longer shells out to a binary. The skeleton's
+    # _resolve_bin / DISSEQT_SCAN_BIN path was replaced in 4a1310a with pure-Python
+    # HTTP dispatch to disseqt-go; transport behavior is covered by tests/unit/test_scan.py.
 
 class TestCliRedteamExpansion:
     """Follow-up: verify each new redteam verb wires up correctly."""
