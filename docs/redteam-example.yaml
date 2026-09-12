@@ -1,0 +1,24 @@
+# Sample config for `disseqt redteam run <this-file>`.
+# ${VAR} placeholders are expanded from the environment.
+
+target:
+  provider: openai
+  model: gpt-4
+  api_key: ${OPENAI_API_KEY}
+
+techniques:
+  - crescendo
+  - prompt_injection
+
+personas:
+  - dan
+  - dev_mode_v2
+
+vulnerabilities:
+  - bias
+  - pii_leakage
+  - hallucination
+
+max_depth: 5
+stop_on_first_success: false
+concurrency: 3

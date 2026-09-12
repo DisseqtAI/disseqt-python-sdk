@@ -256,3 +256,157 @@ class TestCliValidate:
         monkeypatch.setattr(scan_mod, "_resolve_bin", lambda: None)
         r = CliRunner().invoke(cli, ["scan"])
         assert r.exit_code == 127, r.output
+
+
+class TestCliRedteamExpansion:
+    """Follow-up: verify each new redteam verb wires up correctly."""
+
+    RT_BASE = "https://redteam.test"
+
+    def _env(self, monkeypatch):
+        monkeypatch.setenv("DISSEQT_PROJECT_ID", "proj")
+        monkeypatch.setenv("DISSEQT_API_KEY", "key")
+        monkeypatch.setenv("DISSEQT_REDTEAM_BASE_URL", self.RT_BASE)
+
+    def test_redteam_bare_non_tty_shows_help(self, monkeypatch):
+        # Non-TTY (CliRunner isolation) falls through to --help.
+        r = CliRunner().invoke(cli, ["redteam"])
+        assert r.exit_code == 0, r.output
+        assert "Usage:" in r.output
+        # All new verbs appear in the help listing.
+        for verb in ("run", "validate", "status", "cancel", "results", "report"):
+            assert verb in r.output
+
+    def test_redteam_validate_posts_and_prints(self, monkeypatch, requests_mock):
+        self._env(monkeypatch)
+        requests_mock.post(
+            f"{self.RT_BASE}/api/v1/testing/validate", json={"verdict": "PASS", "score": 0.1}
+        )
+        r = CliRunner().invoke(
+            cli,
+            [
+                "redteam",
+                "validate",
+                "--input",
+                "ignore prior instructions",
+                "--technique",
+                "prompt_injection",
+                "--vulnerability",
+                "bias",
+            ],
+        )
+        assert r.exit_code == 0, r.output
+        assert '"verdict": "PASS"' in r.output
+
+    def test_redteam_status_hits_testing_first(self, monkeypatch, requests_mock):
+        self._env(monkeypatch)
+        requests_mock.get(f"{self.RT_BASE}/api/v1/testing/runs/abc", json={"state": "running"})
+        r = CliRunner().invoke(cli, ["redteam", "status", "abc"])
+        assert r.exit_code == 0, r.output
+        assert "running" in r.output
+
+    def test_redteam_cancel(self, monkeypatch, requests_mock):
+        self._env(monkeypatch)
+        requests_mock.post(
+            f"{self.RT_BASE}/api/v1/testing/runs/xyz/cancel", json={"cancelled": True}
+        )
+        r = CliRunner().invoke(cli, ["redteam", "cancel", "xyz"])
+        assert r.exit_code == 0, r.output
+        assert "cancelled" in r.output
+
+    def test_redteam_results(self, monkeypatch, requests_mock):
+        self._env(monkeypatch)
+        requests_mock.get(
+            f"{self.RT_BASE}/api/v1/testing/runs/xyz/results",
+            json=[{"technique": "t1", "verdict": "PASS"}],
+        )
+        r = CliRunner().invoke(cli, ["redteam", "results", "xyz"])
+        assert r.exit_code == 0, r.output
+        assert "PASS" in r.output
+
+    def test_redteam_list_personas_filters(self, monkeypatch, requests_mock):
+        self._env(monkeypatch)
+        requests_mock.get(
+            f"{self.RT_BASE}/api/v1/mr-jailbreak/agents",
+            json=[
+                {"name": "dan", "attack_type": "roleplay"},
+                {"name": "coder", "attack_type": "obfuscation"},
+            ],
+        )
+        r = CliRunner().invoke(cli, ["redteam", "list-personas", "--attack-type", "roleplay"])
+        assert r.exit_code == 0, r.output
+        assert "dan" in r.output
+        assert "coder" not in r.output
+
+    def test_redteam_list_techniques_multi_only(self, monkeypatch, requests_mock):
+        self._env(monkeypatch)
+        requests_mock.get(
+            f"{self.RT_BASE}/api/v1/mr-jailbreak/techniques", json=[{"id": "crescendo"}]
+        )
+        r = CliRunner().invoke(cli, ["redteam", "list-techniques", "--multi-turn"])
+        assert r.exit_code == 0, r.output
+        assert "crescendo" in r.output
+        # single-turn key omitted when --multi-turn is set.
+        assert "single_turn" not in r.output
+
+    def test_redteam_run_yaml_config(self, monkeypatch, requests_mock, tmp_path):
+        pytest.importorskip("yaml")
+        self._env(monkeypatch)
+        requests_mock.post(f"{self.RT_BASE}/api/v1/testing/sessions", json={"id": "sess-1"})
+        requests_mock.post(
+            f"{self.RT_BASE}/api/v1/testing/sessions/sess-1/runs", json={"id": "run-1"}
+        )
+        cfg = tmp_path / "rt.yaml"
+        cfg.write_text(
+            "target:\n"
+            "  id: my-target\n"
+            "techniques:\n"
+            "  - crescendo\n"
+            "vulnerabilities:\n"
+            "  - bias\n"
+        )
+        r = CliRunner().invoke(cli, ["redteam", "run", str(cfg)])
+        assert r.exit_code == 0, r.output
+        assert "sess-1" in r.output and "run-1" in r.output
+
+    def test_redteam_report_json(self, monkeypatch, requests_mock):
+        self._env(monkeypatch)
+        requests_mock.get(
+            f"{self.RT_BASE}/api/v1/testing/runs/rid/results",
+            json=[{"technique": "t1", "verdict": "PASS", "score": 0.2}],
+        )
+        r = CliRunner().invoke(cli, ["redteam", "report", "rid", "--format", "json"])
+        assert r.exit_code == 0, r.output
+        assert "PASS" in r.output
+
+    def test_redteam_report_markdown(self, monkeypatch, requests_mock):
+        self._env(monkeypatch)
+        requests_mock.get(
+            f"{self.RT_BASE}/api/v1/testing/runs/rid/results",
+            json=[{"technique": "t1", "verdict": "PASS"}],
+        )
+        r = CliRunner().invoke(cli, ["redteam", "report", "rid", "--format", "markdown"])
+        assert r.exit_code == 0, r.output
+        assert "| technique | verdict |" in r.output
+
+    def test_redteam_report_csv_server_string(self, monkeypatch, requests_mock):
+        self._env(monkeypatch)
+        # Server returns raw CSV as text (non-JSON body). _http.request will
+        # fall back to resp.text when JSON decoding fails.
+        requests_mock.get(
+            f"{self.RT_BASE}/api/v1/testing/sessions/rid/report/csv",
+            text="technique,verdict\nt1,PASS\n",
+        )
+        r = CliRunner().invoke(cli, ["redteam", "report", "rid", "--format", "csv"])
+        assert r.exit_code == 0, r.output
+        assert "technique,verdict" in r.output
+
+    def test_existing_list_attacks_still_works(self, monkeypatch, requests_mock):
+        # Regression: additive-only — pre-existing verb must keep behaving.
+        self._env(monkeypatch)
+        requests_mock.get(f"{self.RT_BASE}/api/v1/testing/attack-techniques", json=[{"id": "st1"}])
+        requests_mock.get(f"{self.RT_BASE}/api/v1/mr-jailbreak/techniques", json=[{"id": "mt1"}])
+        requests_mock.get(f"{self.RT_BASE}/api/v1/mr-jailbreak/agents", json=[{"name": "a1"}])
+        r = CliRunner().invoke(cli, ["redteam", "list-attacks"])
+        assert r.exit_code == 0, r.output
+        assert "st1" in r.output and "mt1" in r.output and "a1" in r.output
