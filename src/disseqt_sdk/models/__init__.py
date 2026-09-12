@@ -1,7 +1,7 @@
 """Models package for Disseqt SDK."""
 
 from .agentic_behaviour import AgenticBehaviourRequest
-from .base import SDKConfigInput
+from .base import Example, SDKConfigInput
 from .composite_score import CompositeScoreRequest
 from .input_validation import InputValidationRequest
 from .mcp_security import McpSecurityRequest
@@ -21,6 +21,7 @@ from .rag_grounding import RagGroundingRequest
 from .themes_classifier import ThemesClassifierRequest
 
 __all__ = [
+    "Example",
     "SDKConfigInput",
     "InputValidationRequest",
     "OutputValidationRequest",

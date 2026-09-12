@@ -27,7 +27,11 @@ dependencies = [
     "requests>=2.33.0",
     "typing-extensions>=4.8.0",
     "wrapt>=1.16.0",
+    "click>=8.1.0",
 ]
+
+[project.scripts]
+disseqt = "disseqt_sdk.cli:cli"
 
 # Optional extras — install only the LLM SDKs you actually call.
 #   pip install "disseqt-ai-sdk[openai]"          # one provider
@@ -57,6 +61,9 @@ dependencies = [
 # instrument_all() walks the canonical keys only, so each instrumentor
 # is applied exactly once regardless of which alias a caller uses.
 [project.optional-dependencies]
+# CLI extras: YAML config for `disseqt run`, rich progress bars for
+# long-running runs. The CLI degrades to JSON-only config without pyyaml.
+cli = ["pyyaml>=6.0", "rich>=13.0"]
 openai = ["openai>=1.50.0"]
 anthropic = ["anthropic>=0.40.0"]
 groq = ["groq>=0.11.0"]

@@ -14,6 +14,7 @@ from disseqt_logging import digest, get_logger
 from ._version import check_version_notice, sdk_identity_headers
 from .models.composite_score import CompositeScoreRequest
 from .models.themes_classifier import ThemesClassifierRequest
+from .policy import BlockedError, any_blocking, is_async
 from .registry import get_validator_metadata
 from .routes import build_validator_url
 from .validators.base import BaseValidator, ThemesClassifierValidator
@@ -389,6 +390,40 @@ class Client:
                 "evaluate this input against realtime policies"
             )
         return self._run_validator(request)
+
+    def validate_sync(
+        self,
+        request: (
+            BaseValidator | ThemesClassifierValidator | CompositeScoreEvaluator | SupportsInputData
+        ),
+        policies: list[str] | None = None,
+        raise_on_async: bool = False,
+    ) -> dict[str, Any]:
+        """Run :meth:`validate`, raise :class:`BlockedError` on BLOCK.
+
+        Thin CI/production-gate wrapper: delegates to :meth:`validate` and
+        then re-uses :func:`disseqt_sdk.policy.any_blocking` to decide
+        whether to raise. Returns the same envelope on PASS.
+
+        Args:
+            request: Same as :meth:`validate`.
+            policies: Same as :meth:`validate`.
+            raise_on_async: If True, also raise :class:`BlockedError` when
+                the response is async (verdict not final). Off by default —
+                async policies are usually record-and-move-on.
+
+        Raises:
+            BlockedError: When any policy verdict is BLOCK, or when
+                ``raise_on_async`` is set and the response is async.
+        """
+        result = self.validate(request, policies=policies)
+        if any_blocking(result):
+            raise BlockedError(result)
+        if raise_on_async and isinstance(result, dict):
+            envelopes = result.get("policies") if isinstance(result.get("policies"), list) else []
+            if envelopes and any(is_async(p) for p in envelopes if isinstance(p, dict)):
+                raise BlockedError(result, "policy evaluation still async")
+        return result
 
     def _validate_with_policies(
         self,
