@@ -208,7 +208,10 @@ def _load_yaml(path: str) -> dict[str, Any]:
         import yaml  # type: ignore[import-untyped]
     except ImportError:  # pragma: no cover — optional dep
         with open(path, encoding="utf-8") as f:
-            return json.load(f)
+            loaded = json.load(f)
+        if not isinstance(loaded, dict):
+            raise click.ClickException(f"{path}: top-level must be a mapping")
+        return loaded
     with open(path, encoding="utf-8") as f:
         loaded = yaml.safe_load(f) or {}
     if not isinstance(loaded, dict):

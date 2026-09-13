@@ -144,8 +144,6 @@ class Guardrails:
         merged: list[dict[str, Any]] = []
         blocked = False
         for env in envelopes:
-            if not isinstance(env, dict):
-                continue
             pols = env.get("policies") or []
             for p in pols:
                 if isinstance(p, dict):
