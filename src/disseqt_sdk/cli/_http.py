@@ -18,6 +18,14 @@ from ._common import ENV_API_KEY, ENV_PROJECT_ID, _fail
 
 DEFAULT_TIMEOUT_SECS = 60
 
+# Service-key identity headers the dataset-backend + policy-management
+# services read via populateServiceKeyIdentity (see disseqt-dataset-backend
+# PR #794). Without these, CLI-created rows land with user_id = uuid.Nil
+# server-side. Env-var driven so a CI/CD runner can pass its own identity.
+ENV_USER_ID = "DISSEQT_USER_ID"
+ENV_USER_EMAIL = "DISSEQT_USER_EMAIL"
+ENV_ORG_ID = "DISSEQT_ORGANIZATION_ID"
+
 
 def _base_from(env_key: str, default: str) -> str:
     return (os.environ.get(env_key) or default).rstrip("/")
@@ -28,22 +36,35 @@ def _headers() -> dict[str, str]:
     api_key = os.environ.get(ENV_API_KEY)
     if not project_id or not api_key:
         _fail(f"set {ENV_PROJECT_ID} and {ENV_API_KEY} in the environment")
-    return {
+    hdrs = {
         "X-Service-API-Key": api_key,
         "X-API-Key": api_key,
         "X-Project-Id": project_id,
+        # Newer server middleware prefers X-Internal-Project-Id; older path
+        # still reads X-Project-Id. Send both for forward-compat.
+        "X-Internal-Project-Id": project_id,
         "Content-Type": "application/json",
         **sdk_identity_headers(),
     }
+    user_id = os.environ.get(ENV_USER_ID)
+    if user_id:
+        hdrs["X-User-Id"] = user_id
+    user_email = os.environ.get(ENV_USER_EMAIL)
+    if user_email:
+        hdrs["X-User-Email"] = user_email
+    return hdrs
 
 
 def _org_project_headers() -> dict[str, str]:
     """Extra headers the policy-management BFF injects downstream."""
     hdrs: dict[str, str] = {}
-    org = os.environ.get("DISSEQT_ORGANIZATION_ID")
-    proj = os.environ.get("DISSEQT_PROJECT_ID")
+    org = os.environ.get(ENV_ORG_ID)
+    proj = os.environ.get(ENV_PROJECT_ID)
     if org:
+        # Both spellings — dataset-backend reads X-Org-Id, policy-management
+        # reads X-Organization-ID.
         hdrs["X-Organization-ID"] = org
+        hdrs["X-Org-Id"] = org
     if proj:
         hdrs["X-Project-ID"] = proj
     return hdrs

@@ -297,18 +297,41 @@ def run(config_path: str | None, as_json: bool) -> None:
 
 
 @redteam.command("validate")
-@click.option("--input", "input_text", required=True, help="Prompt to test.")
-@click.option("--technique", required=True, help="Attack technique id or name.")
-@click.option("--vulnerability", required=True, help="Vulnerability id or name.")
-@click.option("--target", default="default", help="Target model / integration id.")
-def validate(input_text: str, technique: str, vulnerability: str, target: str) -> None:
-    """Fire a single red-team-flavored validation (one attack + one judge)."""
-    body = {
-        "prompt": input_text,
-        "technique": technique,
-        "vulnerability": vulnerability,
-        "target": target,
+@click.option("--input", "input_text", required=True, help="Prompt / LLM input to score.")
+@click.option("--output", "output_text", default="", help="LLM output to score (may be empty).")
+@click.option(
+    "--validator",
+    "validators",
+    multiple=True,
+    required=True,
+    help="Validator name (repeatable). At least one required; up to 32.",
+)
+@click.option("--input-context", default="", help="Optional context passed to the validator.")
+@click.option(
+    "--threshold",
+    type=click.FloatRange(min=0.0, max=1.0, min_open=True),
+    help="Override per-validator threshold (0 < t <= 1). Absent = server default.",
+)
+def validate(
+    input_text: str,
+    output_text: str,
+    validators: tuple[str, ...],
+    input_context: str,
+    threshold: float | None,
+) -> None:
+    """POST /api/v1/testing/validate — one-shot single-turn validation.
+
+    Wire contract matches disseqt-dataset-backend-service PR #794:
+    {input, output, validators, input_context, threshold?}.
+    """
+    body: dict[str, Any] = {
+        "input": input_text,
+        "output": output_text,
+        "validators": list(validators),
+        "input_context": input_context,
     }
+    if threshold is not None:
+        body["threshold"] = threshold
     echo_json(
         _http.request("POST", BASE_ENV, DEFAULT_BASE, "/api/v1/testing/validate", json_body=body)
     )
