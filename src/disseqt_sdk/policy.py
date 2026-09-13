@@ -45,6 +45,24 @@ from typing import Any
 # decision values
 DECISION_BLOCK = "BLOCK"
 DECISION_PASS = "PASS"
+# Middle tier — score in the "close to threshold" margin. Currently NOT
+# treated as blocking by is_blocking/any_blocking (product decision — see
+# deepteam-parity-plan.md Phase 0c). Callers who want to gate on it must
+# check the decision string themselves.
+DECISION_BORDERLINE = "BORDERLINE"
+
+
+class BlockedError(Exception):
+    """Raised by :meth:`Client.validate_sync` when a policy verdict is BLOCK.
+
+    Carries the full result envelope so callers can inspect which policies
+    fired, per-rule breakdowns, etc.
+    """
+
+    def __init__(self, result: Any, message: str = "policy evaluation blocked") -> None:
+        super().__init__(message)
+        self.result = result
+
 
 # enforcement values — these mirror the policy's strategy.executionMode
 ENFORCEMENT_SYNC = "sync"

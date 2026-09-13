@@ -5,6 +5,11 @@ on:
     types: [published]
   workflow_dispatch:  # Allows manual trigger from GitHub Actions UI
 
+# Default least-privilege — jobs that need more (id-token: write for trusted
+# publish) override at the job level.
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build distribution
