@@ -512,7 +512,9 @@ class TestCliRedteamBatch2:
         curl_file.write_text("curl -X POST https://api.example.com/x -d 'a=1'")
         r = CliRunner().invoke(cli, ["redteam", "parse-curl", str(curl_file)])
         assert r.exit_code == 0, r.output
-        assert "api.example.com" in r.output
+        # Full URL substring — CodeQL py/incomplete-url-substring-sanitization
+        # false-positives on bare-host membership checks even inside tests.
+        assert "https://api.example.com/x" in r.output
 
     def test_parse_curl_stdin(self, monkeypatch, requests_mock):
         self._env(monkeypatch)
