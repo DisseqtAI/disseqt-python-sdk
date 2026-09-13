@@ -251,6 +251,7 @@ class TestCliValidate:
     # _resolve_bin / DISSEQT_SCAN_BIN path was replaced in 4a1310a with pure-Python
     # HTTP dispatch to disseqt-go; transport behavior is covered by tests/unit/test_scan.py.
 
+
 class TestCliRedteamExpansion:
     """Follow-up: verify each new redteam verb wires up correctly."""
 
