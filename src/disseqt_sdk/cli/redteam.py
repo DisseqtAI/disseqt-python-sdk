@@ -210,7 +210,7 @@ def _load_yaml(path: str) -> dict[str, Any]:
         with open(path, encoding="utf-8") as f:
             loaded = json.load(f)
         if not isinstance(loaded, dict):
-            raise click.ClickException(f"{path}: top-level must be a mapping")
+            raise click.ClickException(f"{path}: top-level must be a mapping") from None
         return loaded
     with open(path, encoding="utf-8") as f:
         loaded = yaml.safe_load(f) or {}
