@@ -452,3 +452,76 @@ class TestRequestAbs:
         headers = requests_mock.request_history[0].headers
         assert headers["X-API-Key"] == "test_key_xyz"
         assert headers["X-Project-Id"] == "test_project_123"
+
+
+# ---------------------------------------------------------------------------
+# JailbreakResource (technique + prompt CRUD, generated-prompt success)
+# ---------------------------------------------------------------------------
+
+
+class TestJailbreakResource:
+    PATH = f"{BASE_URL}/api/v1/jailbreak"
+
+    def test_create_technique(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.post(f"{self.PATH}/techniques", json={"id": "tech-1"})
+        assert client.jailbreak.create_technique({"category": "role-play"}) == {"id": "tech-1"}
+        sent = requests_mock.request_history[0].json()
+        assert sent == {"category": "role-play"}
+
+    def test_update_technique(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.patch(f"{self.PATH}/techniques/tech-1", json={"id": "tech-1"})
+        assert client.jailbreak.update_technique("tech-1", {"description": "d"}) == {"id": "tech-1"}
+
+    def test_delete_technique(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.delete(f"{self.PATH}/techniques/tech-1", status_code=204)
+        assert client.jailbreak.delete_technique("tech-1") == {"status": "ok"}
+
+    def test_create_prompt(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.post(f"{self.PATH}/prompts", json={"id": "p-1"})
+        assert client.jailbreak.create_prompt({"content": "..."}) == {"id": "p-1"}
+
+    def test_get_prompt(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.get(f"{self.PATH}/prompts/p-1", json={"id": "p-1"})
+        assert client.jailbreak.get_prompt("p-1") == {"id": "p-1"}
+
+    def test_update_prompt(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.patch(f"{self.PATH}/prompts/p-1", json={"id": "p-1"})
+        assert client.jailbreak.update_prompt("p-1", {"content": "new"}) == {"id": "p-1"}
+
+    def test_delete_prompt(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.delete(f"{self.PATH}/prompts/p-1", status_code=204)
+        assert client.jailbreak.delete_prompt("p-1") == {"status": "ok"}
+
+    def test_mark_generated_prompt_successful(
+        self, requests_mock, client: DisseqtAPIClient
+    ) -> None:
+        requests_mock.patch(f"{self.PATH}/generated-prompts/gp-1/success", json={"ok": True})
+        assert client.jailbreak.mark_generated_prompt_successful("gp-1") == {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# SessionsResource.get_breach — client-side filter
+# ---------------------------------------------------------------------------
+
+
+class TestSessionsGetBreach:
+    BREACHES_URL = f"{BASE_URL}/api/v1/testing/runs/run-1/results/breaches"
+
+    def test_get_breach_from_list_payload(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.get(
+            self.BREACHES_URL,
+            json=[{"id": "b1", "detail": "one"}, {"id": "b2", "detail": "two"}],
+        )
+        assert client.sessions.get_breach("run-1", "b2") == {"id": "b2", "detail": "two"}
+
+    def test_get_breach_from_dict_payload(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.get(
+            self.BREACHES_URL,
+            json={"data": [{"breach_id": "b1"}, {"breach_id": "b2", "note": "hit"}]},
+        )
+        assert client.sessions.get_breach("run-1", "b2") == {"breach_id": "b2", "note": "hit"}
+
+    def test_get_breach_missing_raises(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.get(self.BREACHES_URL, json=[{"id": "b1"}])
+        with pytest.raises(KeyError):
+            client.sessions.get_breach("run-1", "nope")
