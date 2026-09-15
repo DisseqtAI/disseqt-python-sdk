@@ -103,5 +103,3 @@ class TestAgenticLogging:
     def test_set_log_level_invalid_falls_back_to_info(self, cap):
         set_log_level(object())  # type: ignore[arg-type]
         assert disseqt_logging.current_level() == "info"
-
-

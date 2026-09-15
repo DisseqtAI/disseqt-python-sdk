@@ -13,9 +13,7 @@ class TestDisseqtTrace:
 
     def test_trace_creation(self):
         """Test basic trace creation."""
-        trace = DisseqtTrace(
-            name="test_trace", org_id="org_1", service_name="test_service"
-        )
+        trace = DisseqtTrace(name="test_trace", org_id="org_1", service_name="test_service")
 
         assert trace.name == "test_trace"
         assert trace.org_id == "org_1"

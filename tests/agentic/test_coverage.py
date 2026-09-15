@@ -181,9 +181,7 @@ class TestBufferCoverage:
 
     def test_buffer_add_span(self):
         """Test add_span method."""
-        span = EnrichedSpan(
-            trace_id="t1", span_id="s1", name="test", org_id="o", service_name="s"
-        )
+        span = EnrichedSpan(trace_id="t1", span_id="s1", name="test", org_id="o", service_name="s")
 
         self.buffer.add_span(span)
         assert len(self.buffer.buffer) == 1
@@ -238,9 +236,7 @@ class TestBufferCoverage:
         assert self.buffer.should_flush() is False
 
         # Add span
-        span = EnrichedSpan(
-            trace_id="t1", span_id="s1", name="test", org_id="o", service_name="s"
-        )
+        span = EnrichedSpan(trace_id="t1", span_id="s1", name="test", org_id="o", service_name="s")
         # Reset last_flush_time to ensure proper timing
         import time
 
@@ -370,9 +366,7 @@ class TestTransportAuthFailures:
         import requests as _requests
 
         transport = HTTPTransport("http://localhost:8080/v1/traces", api_key="k")
-        span = EnrichedSpan(
-            trace_id="t1", span_id="s1", name="test", org_id="o", service_name="s"
-        )
+        span = EnrichedSpan(trace_id="t1", span_id="s1", name="test", org_id="o", service_name="s")
         with patch("disseqt_agentic_sdk.transport.http.requests.Session.post") as mock_post:
             fake = Mock()
             fake.status_code = 401
@@ -413,9 +407,7 @@ class TestTransportAuthFailures:
         import requests as _requests
 
         transport = HTTPTransport("http://prod.example/v1/traces", api_key="k")
-        span = EnrichedSpan(
-            trace_id="t1", span_id="s1", name="test", org_id="o", service_name="s"
-        )
+        span = EnrichedSpan(trace_id="t1", span_id="s1", name="test", org_id="o", service_name="s")
         with patch("disseqt_agentic_sdk.transport.http.requests.Session.post") as mock_post:
             fake = Mock()
             fake.status_code = 403
@@ -513,9 +505,7 @@ class TestTransportCoverage:
         """Test error handling in send_spans."""
         transport = HTTPTransport("http://localhost:8080/v1/traces")
 
-        span = EnrichedSpan(
-            trace_id="t1", span_id="s1", name="test", org_id="o", service_name="s"
-        )
+        span = EnrichedSpan(trace_id="t1", span_id="s1", name="test", org_id="o", service_name="s")
 
         with patch("disseqt_agentic_sdk.transport.http.requests.Session.post") as mock_post:
             from requests.exceptions import RequestException
@@ -529,9 +519,7 @@ class TestTransportCoverage:
         """Test send_trace alias method."""
         transport = HTTPTransport("http://localhost:8080/v1/traces")
 
-        span = EnrichedSpan(
-            trace_id="t1", span_id="s1", name="test", org_id="o", service_name="s"
-        )
+        span = EnrichedSpan(trace_id="t1", span_id="s1", name="test", org_id="o", service_name="s")
 
         with patch("disseqt_agentic_sdk.transport.http.requests.Session.post") as mock_post:
             mock_response = Mock()
