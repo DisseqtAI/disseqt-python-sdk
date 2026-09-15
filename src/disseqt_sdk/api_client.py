@@ -81,6 +81,7 @@ class DisseqtAPIClient:
         # module load time (resources.py depends on this file's exports).
         from .resources import (
             ByovValidatorsResource,
+            JailbreakResource,
             McpTargetsResource,
             OutputValidationsResource,
             PacksResource,
@@ -106,6 +107,7 @@ class DisseqtAPIClient:
         self.vulnerabilities = VulnerabilitiesResource(self)
         self.test_plans = TestPlansResource(self)
         self.test_plan_runs = TestPlanRunsResource(self)
+        self.jailbreak = JailbreakResource(self)
 
     # ------------------------------------------------------------------
     # Internal helpers

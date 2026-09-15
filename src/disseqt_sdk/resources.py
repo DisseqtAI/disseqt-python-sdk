@@ -356,8 +356,79 @@ class SessionsResource(_Base):
     def run_breaches(self, run_id: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         return self._req("GET", f"{self._BASE}/runs/{run_id}/results/breaches", params=params)
 
+    def get_breach(self, run_id: str, breach_id: str) -> dict[str, Any]:
+        """Fetch one breach ("finding") from a run.
+
+        The dataset-backend has no standalone ``/findings/:id`` endpoint —
+        it returns the whole breach list on ``/runs/:id/results/breaches``.
+        We client-side filter by id (matching the field the backend uses:
+        one of ``id`` / ``breach_id`` / ``finding_id``).
+        """
+        payload: Any = self.run_breaches(run_id)
+        if isinstance(payload, builtins.list):
+            rows: builtins.list[Any] = payload
+        elif isinstance(payload, dict):
+            data = payload.get("data") or payload.get("breaches") or []
+            rows = data if isinstance(data, builtins.list) else []
+        else:
+            rows = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            for key in ("id", "breach_id", "finding_id"):
+                if str(row.get(key, "")) == breach_id:
+                    return row
+        raise KeyError(f"breach {breach_id} not found in run {run_id}")
+
     def cancel_run(self, run_id: str) -> dict[str, Any]:
         return self._req("POST", f"{self._BASE}/runs/{run_id}/cancel")
+
+
+class JailbreakResource(_Base):
+    """Jailbreak technique + prompt CRUD and generated-prompt controls.
+
+    Routes registered under ``/api/v1/jailbreak/*`` — see
+    ``dataset-backend api/jailbreak_routes.go`` on stage.
+    """
+
+    _BASE = "/api/v1/jailbreak"
+
+    # Techniques
+    def create_technique(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._req("POST", f"{self._BASE}/techniques", json_payload=payload)
+
+    def get_technique(self, technique_id: str) -> dict[str, Any]:
+        return self._req("GET", f"{self._BASE}/techniques/{technique_id}")
+
+    def list_techniques(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._req("GET", f"{self._BASE}/techniques", params=params)
+
+    def update_technique(self, technique_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._req("PATCH", f"{self._BASE}/techniques/{technique_id}", json_payload=payload)
+
+    def delete_technique(self, technique_id: str) -> dict[str, Any]:
+        return self._req("DELETE", f"{self._BASE}/techniques/{technique_id}")
+
+    # Prompts
+    def create_prompt(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._req("POST", f"{self._BASE}/prompts", json_payload=payload)
+
+    def get_prompt(self, prompt_id: str) -> dict[str, Any]:
+        return self._req("GET", f"{self._BASE}/prompts/{prompt_id}")
+
+    def list_prompts(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._req("GET", f"{self._BASE}/prompts", params=params)
+
+    def update_prompt(self, prompt_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._req("PATCH", f"{self._BASE}/prompts/{prompt_id}", json_payload=payload)
+
+    def delete_prompt(self, prompt_id: str) -> dict[str, Any]:
+        return self._req("DELETE", f"{self._BASE}/prompts/{prompt_id}")
+
+    # Generated prompts
+    def mark_generated_prompt_successful(self, generated_prompt_id: str) -> dict[str, Any]:
+        """PATCH /generated-prompts/:id/success — mark a generated prompt successful."""
+        return self._req("PATCH", f"{self._BASE}/generated-prompts/{generated_prompt_id}/success")
 
 
 class ByovValidatorsResource(_Base):
@@ -514,6 +585,7 @@ class TestPlanRunsResource(_Base):
 
 __all__ = [
     "ByovValidatorsResource",
+    "JailbreakResource",
     "McpTargetsResource",
     "OutputValidationsResource",
     "PacksResource",
