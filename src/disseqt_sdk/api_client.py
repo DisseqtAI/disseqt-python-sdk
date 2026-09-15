@@ -277,6 +277,54 @@ class DisseqtAPIClient:
                 response_body="",
             ) from e
 
+    def _request_abs_bytes(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+    ) -> bytes:
+        """Same as :meth:`_request_abs` but returns raw response bytes.
+
+        Used by resource endpoints that return non-JSON payloads (CSV, files).
+        Auth headers + 426 handling stay identical to the JSON variant.
+        """
+        url = f"{self.base_url}{path}"
+        headers = dict(self._build_headers())
+        # Non-JSON GETs shouldn't advertise a JSON content-type.
+        headers.pop("Content-Type", None)
+        query_params: dict[str, str] | None = None
+        if params:
+            query_params = {k: str(v) for k, v in params.items() if v is not None}
+        try:
+            response = requests.request(
+                method,
+                url,
+                params=query_params,
+                headers=headers,
+                timeout=self.timeout,
+            )
+            check_version_notice(response.headers)
+            if not response.ok:
+                body = response.text[:512] if response.text else ""
+                blocked = _version_blocked_error(
+                    response.status_code, response.headers, response.text
+                )
+                if blocked is not None:
+                    raise blocked
+                raise HTTPError(
+                    status_code=response.status_code,
+                    message="API request failed",
+                    response_body=body,
+                )
+            return response.content
+        except requests.RequestException as e:
+            raise HTTPError(
+                status_code=0,
+                message=f"Network error: {e}",
+                response_body="",
+            ) from e
+
     # ------------------------------------------------------------------
     # Generation
     # ------------------------------------------------------------------

@@ -16,6 +16,7 @@ from .redteam import redteam as redteam_group
 from .run import run as run_cmd
 from .scan import scan as scan_cmd
 from .validate import validate as validate_cmd
+from .whoami import whoami as whoami_cmd
 
 byov_group = _resources.byov
 mcp_target_group = _resources.mcp_target
@@ -55,6 +56,7 @@ cli.add_command(rag_validation_group)
 cli.add_command(session_group)
 cli.add_command(byov_group)
 cli.add_command(vulnerability_group)
+cli.add_command(whoami_cmd)
 
 
 if __name__ == "__main__":  # pragma: no cover

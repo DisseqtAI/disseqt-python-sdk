@@ -246,3 +246,75 @@ def test_dataset_base_env_override(runner: CliRunner, requests_mock, monkeypatch
     requests_mock.get("https://custom.example/api/v1/prompt-packs", json={"data": []})
     result = runner.invoke(cli, ["pack", "list"])
     assert result.exit_code == 0
+
+
+def test_pack_export_delegates_to_sdk(runner: CliRunner, requests_mock) -> None:
+    """`pack export` delegates to PacksResource.download and prints CSV text."""
+    csv_body = b"id,prompt\n1,hello\n"
+    requests_mock.get(
+        f"{DATASET_BASE}/api/v1/prompt-packs/p1/download",
+        content=csv_body,
+        headers={"Content-Type": "text/csv"},
+    )
+    result = runner.invoke(cli, ["pack", "export", "p1"])
+    assert result.exit_code == 0, result.output
+    assert "id,prompt" in result.output
+
+
+def test_pp_run_reveal(runner: CliRunner, requests_mock) -> None:
+    requests_mock.post(
+        f"{DATASET_BASE}/api/v1/prompt-packs/runs/r1/results/o1/reveal",
+        json={"revealed": True},
+    )
+    result = runner.invoke(cli, ["pp-run", "reveal", "r1", "o1"])
+    assert result.exit_code == 0, result.output
+    assert "revealed" in result.output
+
+
+def test_pp_run_add_to_pack(runner: CliRunner, requests_mock) -> None:
+    requests_mock.post(f"{DATASET_BASE}/api/v1/prompt-packs/p1/prompts/add", json={"added": 2})
+    result = runner.invoke(
+        cli,
+        [
+            "pp-run",
+            "add-to-pack",
+            "r1",
+            "--output-id",
+            "o1",
+            "--output-id",
+            "o2",
+            "--pack-id",
+            "p1",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    sent = requests_mock.request_history[0].json()
+    assert sent == {"run_id": "r1", "output_ids": ["o1", "o2"]}
+
+
+def test_whoami_text_output(runner: CliRunner, monkeypatch) -> None:
+    monkeypatch.setenv("DISSEQT_PROJECT_ID", "proj_123")
+    monkeypatch.setenv("DISSEQT_API_KEY", "sk_test_abcdef")
+    monkeypatch.setenv("DISSEQT_USER_EMAIL", "u@example.com")
+    monkeypatch.delenv("DISSEQT_ORGANIZATION_ID", raising=False)
+    result = runner.invoke(cli, ["whoami"])
+    assert result.exit_code == 0, result.output
+    assert "proj_123" in result.output
+    assert "u@example.com" in result.output
+    # API key is masked — never the full value.
+    assert "sk_test_abcdef" not in result.output
+    assert "sk_...def" in result.output
+    assert "(unset)" in result.output  # organization_id
+
+
+def test_whoami_json_output(runner: CliRunner, monkeypatch) -> None:
+    monkeypatch.setenv("DISSEQT_PROJECT_ID", "proj_x")
+    monkeypatch.setenv("DISSEQT_API_KEY", "sk_test_xyz")
+    monkeypatch.delenv("DISSEQT_USER_EMAIL", raising=False)
+    monkeypatch.delenv("DISSEQT_ORGANIZATION_ID", raising=False)
+    result = runner.invoke(cli, ["whoami", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["project_id"] == "proj_x"
+    assert payload["api_key"].startswith("sk_") and "..." in payload["api_key"]
+    assert payload["user_email"] is None

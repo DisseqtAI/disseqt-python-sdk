@@ -10,13 +10,15 @@ No new deps, no new env vars beyond the shared ``DISSEQT_DATASET_BASE_URL``
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable
 from typing import Any
 
 import click
 
+from ..api_client import DisseqtAPIClient
 from . import _http
-from ._common import _fail, echo_json
+from ._common import ENV_API_KEY, ENV_PROJECT_ID, _fail, echo_json
 
 BASE_ENV = "DISSEQT_DATASET_BASE_URL"
 DEFAULT_BASE = "https://api.disseqt.ai/dataset"
@@ -60,6 +62,16 @@ def _patch(path: str, body: dict[str, Any]) -> None:
 
 def _delete(path: str) -> None:
     echo_json(_http.request("DELETE", BASE_ENV, DEFAULT_BASE, path))
+
+
+def _api_client() -> DisseqtAPIClient:
+    """Construct a :class:`DisseqtAPIClient` from the CLI env vars."""
+    project_id = os.environ.get(ENV_PROJECT_ID)
+    api_key = os.environ.get(ENV_API_KEY)
+    if not project_id or not api_key:
+        _fail(f"set {ENV_PROJECT_ID} and {ENV_API_KEY} in the environment")
+    base_url = os.environ.get(BASE_ENV) or DEFAULT_BASE
+    return DisseqtAPIClient(project_id=project_id, api_key=api_key, base_url=base_url)
 
 
 # ---------------------------------------------------------------------------
@@ -274,7 +286,9 @@ def pack_import_status(pack_id: str) -> None:
 @click.argument("pack_id")
 def pack_export(pack_id: str) -> None:
     """Export pack contents (backend returns CSV or a download URL)."""
-    _get(f"/api/v1/prompt-packs/{pack_id}/download")
+    # Delegates to PacksResource.download() so the SDK stays the source of truth.
+    raw = _api_client().packs.download(pack_id)
+    echo_json(raw.decode("utf-8", errors="replace"))
 
 
 @pack.command("rate")
@@ -368,6 +382,32 @@ def pp_run_trace(run_id: str) -> None:
 @click.argument("run_id")
 def pp_run_report(run_id: str) -> None:
     _get(f"/api/v1/prompt-packs/runs/{run_id}/report")
+
+
+@pp_run.command("reveal")
+@click.argument("run_id")
+@click.argument("output_id")
+def pp_run_reveal(run_id: str, output_id: str) -> None:
+    """Reveal a masked run output."""
+    _post(f"/api/v1/prompt-packs/runs/{run_id}/results/{output_id}/reveal")
+
+
+@pp_run.command("add-to-pack")
+@click.argument("run_id")
+@click.option(
+    "--output-id",
+    "output_ids",
+    multiple=True,
+    required=True,
+    help="Output ID to add. Repeat --output-id for multiple.",
+)
+@click.option("--pack-id", required=True, help="Destination prompt pack ID.")
+def pp_run_add_to_pack(run_id: str, output_ids: tuple[str, ...], pack_id: str) -> None:
+    """Add selected run outputs to a prompt pack."""
+    _post(
+        f"/api/v1/prompt-packs/{pack_id}/prompts/add",
+        {"run_id": run_id, "output_ids": list(output_ids)},
+    )
 
 
 # ---------------------------------------------------------------------------

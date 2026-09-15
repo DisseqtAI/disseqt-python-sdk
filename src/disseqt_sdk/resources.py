@@ -38,6 +38,15 @@ class _Base:
     ) -> dict[str, Any]:
         return self._client._request_abs(method, path, json_payload=json_payload, params=params)
 
+    def _req_bytes(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+    ) -> bytes:
+        return self._client._request_abs_bytes(method, path, params=params)
+
 
 class TargetsResource(_Base):
     """LLM targets — ``app_integrations`` table.
@@ -170,6 +179,10 @@ class PacksResource(_Base):
     def import_status(self, pack_id: str) -> dict[str, Any]:
         return self._req("GET", f"{self._BASE}/{pack_id}/import-status")
 
+    def download(self, pack_id: str) -> bytes:
+        """Download pack as CSV. Returns raw bytes (CSV content)."""
+        return self._req_bytes("GET", f"{self._BASE}/{pack_id}/download")
+
     def rate(self, pack_id: str, rating: dict[str, Any]) -> dict[str, Any]:
         return self._req("POST", f"{self._BASE}/{pack_id}/ratings", json_payload=rating)
 
@@ -230,6 +243,27 @@ class RunsResource(_Base):
 
     def report(self, run_id: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         return self._req("GET", f"{self._BASE}/runs/{run_id}/report", params=params)
+
+    def reveal_output(self, run_id: str, output_id: str) -> dict[str, Any]:
+        """Reveal a masked run output (POST /runs/{run_id}/results/{output_id}/reveal)."""
+        return self._req("POST", f"{self._BASE}/runs/{run_id}/results/{output_id}/reveal")
+
+    def add_to_pack(
+        self,
+        run_id: str,
+        output_ids: builtins.list[str],
+        pack_id: str,
+    ) -> dict[str, Any]:
+        """Add selected run outputs to a prompt pack.
+
+        POST /prompt-packs/{pack_id}/prompts/add with body
+        {"run_id": ..., "output_ids": [...]}.
+        """
+        return self._req(
+            "POST",
+            f"{self._BASE}/{pack_id}/prompts/add",
+            json_payload={"run_id": run_id, "output_ids": output_ids},
+        )
 
 
 class OutputValidationsResource(_Base):

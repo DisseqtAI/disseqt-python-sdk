@@ -140,6 +140,17 @@ class TestPacksResource:
         requests_mock.post(f"{self.PATH}/p1/publish", json={"published": True})
         assert client.packs.publish("p1") == {"published": True}
 
+    def test_download_returns_csv_bytes(self, requests_mock, client: DisseqtAPIClient) -> None:
+        csv_body = b"id,prompt\n1,hello\n2,world\n"
+        requests_mock.get(
+            f"{self.PATH}/p1/download",
+            content=csv_body,
+            headers={"Content-Type": "text/csv"},
+        )
+        result = client.packs.download("p1")
+        assert isinstance(result, bytes)
+        assert result == csv_body
+
 
 class TestRunsResource:
     PATH = f"{BASE_URL}/api/v1/prompt-packs"
@@ -163,6 +174,24 @@ class TestRunsResource:
     def test_cancel(self, requests_mock, client: DisseqtAPIClient) -> None:
         requests_mock.post(f"{self.PATH}/runs/r1/cancel", json={"cancelled": True})
         assert client.runs.cancel("r1") == {"cancelled": True}
+
+    def test_reveal_output(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.post(
+            f"{self.PATH}/runs/r1/results/o1/reveal",
+            json={"revealed": True, "output_id": "o1"},
+        )
+        assert client.runs.reveal_output("r1", "o1") == {
+            "revealed": True,
+            "output_id": "o1",
+        }
+
+    def test_add_to_pack(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.post(f"{self.PATH}/p1/prompts/add", json={"added": 2})
+        result = client.runs.add_to_pack("r1", ["o1", "o2"], "p1")
+        assert result == {"added": 2}
+        # Body shape: {"run_id": ..., "output_ids": [...]}
+        sent = requests_mock.request_history[0].json()
+        assert sent == {"run_id": "r1", "output_ids": ["o1", "o2"]}
 
 
 class TestOutputValidationsResource:
