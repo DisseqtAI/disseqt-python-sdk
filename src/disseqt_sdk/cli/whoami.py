@@ -28,11 +28,27 @@ def _mask_api_key(api_key: str | None) -> str | None:
 
 
 def _collect() -> dict[str, str | None]:
+    project_id = os.environ.get(ENV_PROJECT_ID)
+    api_key = os.environ.get(ENV_API_KEY)
+    source = "env"
+    if not project_id and not api_key:
+        # Fall through to ``~/.disseqt/config.json`` when env is empty.
+        try:
+            from ..auth import load as _load
+
+            stored = _load()
+        except Exception:
+            stored = None
+        if stored is not None:
+            project_id = stored.get("project_id")
+            api_key = stored.get("api_key")
+            source = "config"
     return {
-        "project_id": os.environ.get(ENV_PROJECT_ID),
-        "api_key": _mask_api_key(os.environ.get(ENV_API_KEY)),
+        "project_id": project_id,
+        "api_key": _mask_api_key(api_key),
         "user_email": os.environ.get(ENV_USER_EMAIL),
         "organization_id": os.environ.get(ENV_ORGANIZATION_ID),
+        "source": source,
     }
 
 

@@ -11,6 +11,8 @@ import click
 
 from .._version import SDK_VERSION
 from . import resources as _resources
+from .login import login as login_cmd
+from .login import logout as logout_cmd
 from .policy import policy as policy_group
 from .redteam import redteam as redteam_group
 from .run import run as run_cmd
@@ -61,6 +63,8 @@ cli.add_command(vulnerability_group)
 cli.add_command(whoami_cmd)
 cli.add_command(plan_group)
 cli.add_command(plan_run_group)
+cli.add_command(login_cmd)
+cli.add_command(logout_cmd)
 
 
 if __name__ == "__main__":  # pragma: no cover
