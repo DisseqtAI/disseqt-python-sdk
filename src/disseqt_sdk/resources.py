@@ -403,6 +403,115 @@ class VulnerabilitiesResource(_Base):
         return self._req("POST", f"{self._BASE}/{vuln_id}/test", json_payload=payload)
 
 
+class TestPlansResource(_Base):
+    """Test Plans (T3) — versioned, shareable red-team plan templates.
+
+    Gated by ``ff_test-plans_enabled_global`` server-side; a caller without
+    the flag will receive the same rejection any other flag-gated route
+    returns. Endpoint surface tracked verbatim against
+    ``api/test_plans_routes.go`` on stage.
+    """
+
+    _BASE = "/api/v1/test-plans"
+
+    def create(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._req("POST", self._BASE, json_payload=payload)
+
+    def list(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._req("GET", self._BASE, params=params)
+
+    def gallery(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._req("GET", f"{self._BASE}/gallery", params=params)
+
+    def list_deleted(self) -> dict[str, Any]:
+        return self._req("GET", f"{self._BASE}/deleted")
+
+    def options(self, ref: str) -> dict[str, Any]:
+        return self._req("GET", f"{self._BASE}/options/{ref}")
+
+    def get(self, plan_id: str) -> dict[str, Any]:
+        return self._req("GET", f"{self._BASE}/{plan_id}")
+
+    def summary(self, plan_id: str) -> dict[str, Any]:
+        return self._req("GET", f"{self._BASE}/{plan_id}/summary")
+
+    def update(self, plan_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._req("PATCH", f"{self._BASE}/{plan_id}", json_payload=payload)
+
+    def delete(self, plan_id: str) -> dict[str, Any]:
+        return self._req("DELETE", f"{self._BASE}/{plan_id}")
+
+    def restore(self, plan_id: str) -> dict[str, Any]:
+        return self._req("POST", f"{self._BASE}/{plan_id}/restore")
+
+    def copy(self, plan_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._req("POST", f"{self._BASE}/{plan_id}/copy", json_payload=payload or {})
+
+    def list_versions(self, plan_id: str) -> dict[str, Any]:
+        return self._req("GET", f"{self._BASE}/{plan_id}/versions")
+
+    def create_version(self, plan_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._req("POST", f"{self._BASE}/{plan_id}/versions", json_payload=payload)
+
+    def publish(self, plan_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._req("POST", f"{self._BASE}/{plan_id}/publish", json_payload=payload)
+
+    def generate_inputs(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Kick off description-based prompt generation (TP-2244)."""
+        return self._req("POST", f"{self._BASE}/generate-inputs", json_payload=payload)
+
+    def get_generate_inputs_job(self, job_id: str) -> dict[str, Any]:
+        return self._req("GET", f"{self._BASE}/generate-inputs/{job_id}")
+
+
+class TestPlanRunsResource(_Base):
+    """Test Plan Runs (T6) — execution + report/trace/prompts.
+
+    Creation is addressed by PLAN id (``POST /test-plans/{plan_id}/runs``);
+    every other operation lives under ``/test-plan-runs/{run_id}``. Gated
+    by ``ff_test-plans_enabled_global`` server-side.
+    """
+
+    _BASE = "/api/v1/test-plan-runs"
+    _PLAN_BASE = "/api/v1/test-plans"
+
+    def create(self, plan_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._req("POST", f"{self._PLAN_BASE}/{plan_id}/runs", json_payload=payload)
+
+    def list_for_plan(self, plan_id: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._req("GET", f"{self._PLAN_BASE}/{plan_id}/runs", params=params)
+
+    def list_deleted(self) -> dict[str, Any]:
+        return self._req("GET", f"{self._BASE}/deleted")
+
+    def get(self, run_id: str) -> dict[str, Any]:
+        return self._req("GET", f"{self._BASE}/{run_id}")
+
+    def get_stage(self, run_id: str, stage_key: str) -> dict[str, Any]:
+        return self._req("GET", f"{self._BASE}/{run_id}/stages/{stage_key}")
+
+    def trace(self, run_id: str, prompt_ref: str) -> dict[str, Any]:
+        return self._req("GET", f"{self._BASE}/{run_id}/trace", params={"prompt_ref": prompt_ref})
+
+    def report(self, run_id: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._req("GET", f"{self._BASE}/{run_id}/report", params=params)
+
+    def prompts(self, run_id: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._req("GET", f"{self._BASE}/{run_id}/prompts", params=params)
+
+    def cancel(self, run_id: str) -> dict[str, Any]:
+        return self._req("POST", f"{self._BASE}/{run_id}/cancel")
+
+    def delete(self, run_id: str) -> dict[str, Any]:
+        return self._req("DELETE", f"{self._BASE}/{run_id}")
+
+    def restore(self, run_id: str) -> dict[str, Any]:
+        return self._req("POST", f"{self._BASE}/{run_id}/restore")
+
+    def reveal(self, run_id: str, result_id: str) -> dict[str, Any]:
+        return self._req("POST", f"{self._BASE}/{run_id}/results/{result_id}/reveal")
+
+
 __all__ = [
     "ByovValidatorsResource",
     "McpTargetsResource",
@@ -413,5 +522,7 @@ __all__ = [
     "RunsResource",
     "SessionsResource",
     "TargetsResource",
+    "TestPlanRunsResource",
+    "TestPlansResource",
     "VulnerabilitiesResource",
 ]

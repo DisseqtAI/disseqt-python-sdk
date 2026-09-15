@@ -89,6 +89,8 @@ class DisseqtAPIClient:
             RunsResource,
             SessionsResource,
             TargetsResource,
+            TestPlanRunsResource,
+            TestPlansResource,
             VulnerabilitiesResource,
         )
 
@@ -102,6 +104,8 @@ class DisseqtAPIClient:
         self.sessions = SessionsResource(self)
         self.byov_validators = ByovValidatorsResource(self)
         self.vulnerabilities = VulnerabilitiesResource(self)
+        self.test_plans = TestPlansResource(self)
+        self.test_plan_runs = TestPlanRunsResource(self)
 
     # ------------------------------------------------------------------
     # Internal helpers
