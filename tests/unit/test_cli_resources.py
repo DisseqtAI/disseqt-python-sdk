@@ -49,6 +49,8 @@ def runner() -> CliRunner:
         "session",
         "byov",
         "vulnerability",
+        "plan",
+        "plan-run",
     ],
 )
 def test_group_help_renders(runner: CliRunner, group: str) -> None:
@@ -318,3 +320,86 @@ def test_whoami_json_output(runner: CliRunner, monkeypatch) -> None:
     assert payload["project_id"] == "proj_x"
     assert payload["api_key"].startswith("sk_") and "..." in payload["api_key"]
     assert payload["user_email"] is None
+
+
+# ---------------------------------------------------------------------------
+# Test Plans + Test Plan Runs — one live call per group
+# ---------------------------------------------------------------------------
+
+
+def test_plan_list_hits_correct_url(runner: CliRunner, requests_mock) -> None:
+    requests_mock.get(f"{DATASET_BASE}/api/v1/test-plans", json={"data": []})
+    result = runner.invoke(cli, ["plan", "list"])
+    assert result.exit_code == 0, result.output
+
+
+def test_plan_get(runner: CliRunner, requests_mock) -> None:
+    requests_mock.get(f"{DATASET_BASE}/api/v1/test-plans/p1", json={"id": "p1"})
+    result = runner.invoke(cli, ["plan", "get", "p1"])
+    assert result.exit_code == 0
+    assert '"id": "p1"' in result.output
+
+
+def test_plan_publish_sends_body(runner: CliRunner, requests_mock) -> None:
+    requests_mock.post(f"{DATASET_BASE}/api/v1/test-plans/p1/publish", json={"id": "p1"})
+    body = '{"sharing_scope": "PROJECT", "expected_sharing_scope": "PRIVATE"}'
+    result = runner.invoke(cli, ["plan", "publish", "p1", "--json", body])
+    assert result.exit_code == 0
+    sent = json.loads(requests_mock.request_history[0].text)
+    assert sent["sharing_scope"] == "PROJECT"
+
+
+def test_plan_run_create_no_wait(runner: CliRunner, requests_mock) -> None:
+    requests_mock.post(
+        f"{DATASET_BASE}/api/v1/test-plans/p1/runs",
+        json={"run_id": "r1", "status": "queued"},
+    )
+    body = '{"target": {"execution_mode": "app_integration", "app_integration_id": "a1"}}'
+    result = runner.invoke(cli, ["plan-run", "create", "p1", "--json", body])
+    assert result.exit_code == 0
+    assert '"run_id": "r1"' in result.output
+
+
+def test_plan_run_create_with_wait_polls_to_terminal(
+    runner: CliRunner, requests_mock, monkeypatch
+) -> None:
+    """--wait polls plan-run get until a terminal status appears."""
+    # Zero-sleep polling so the test stays fast.
+    monkeypatch.setattr("disseqt_sdk.cli.resources.time.sleep", lambda _s: None)
+    requests_mock.post(
+        f"{DATASET_BASE}/api/v1/test-plans/p1/runs",
+        json={"run_id": "r1", "status": "queued"},
+    )
+    requests_mock.get(
+        f"{DATASET_BASE}/api/v1/test-plan-runs/r1",
+        [
+            {"json": {"run_id": "r1", "status": "running"}},
+            {"json": {"run_id": "r1", "status": "completed"}},
+        ],
+    )
+    body = '{"target": {"execution_mode": "app_integration", "app_integration_id": "a1"}}'
+    result = runner.invoke(
+        cli, ["plan-run", "create", "p1", "--json", body, "--wait", "--interval", "0"]
+    )
+    assert result.exit_code == 0, result.output
+    assert '"status": "completed"' in result.output
+
+
+def test_plan_run_cancel(runner: CliRunner, requests_mock) -> None:
+    requests_mock.post(
+        f"{DATASET_BASE}/api/v1/test-plan-runs/r1/cancel",
+        json={"run_id": "r1", "status": "cancelled"},
+    )
+    result = runner.invoke(cli, ["plan-run", "cancel", "r1"])
+    assert result.exit_code == 0
+    assert '"status": "cancelled"' in result.output
+
+
+def test_plan_run_trace_requires_prompt_ref(runner: CliRunner, requests_mock) -> None:
+    requests_mock.get(
+        f"{DATASET_BASE}/api/v1/test-plan-runs/r1/trace",
+        json={"prompt_ref": "pr1"},
+    )
+    result = runner.invoke(cli, ["plan-run", "trace", "r1", "--prompt-ref", "pr1"])
+    assert result.exit_code == 0
+    assert requests_mock.request_history[0].qs["prompt_ref"] == ["pr1"]

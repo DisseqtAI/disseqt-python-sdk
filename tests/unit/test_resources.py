@@ -294,6 +294,138 @@ class TestVulnerabilitiesResource:
         assert client.vulnerabilities.test("v1", {"target": "t1"}) == {"job_id": "j1"}
 
 
+class TestTestPlansResource:
+    """Test Plans T3 (/api/v1/test-plans). Endpoint list mirrors api/test_plans_routes.go."""
+
+    PATH = f"{BASE_URL}/api/v1/test-plans"
+
+    def test_create(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.post(self.PATH, json={"id": "p1"})
+        assert client.test_plans.create({"name": "n", "recipe": {}}) == {"id": "p1"}
+
+    def test_list(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.get(self.PATH, json={"data": []})
+        assert client.test_plans.list() == {"data": []}
+
+    def test_gallery(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.get(f"{self.PATH}/gallery", json={"data": []})
+        assert client.test_plans.gallery() == {"data": []}
+
+    def test_list_deleted(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.get(f"{self.PATH}/deleted", json={"data": []})
+        assert client.test_plans.list_deleted() == {"data": []}
+
+    def test_options(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.get(f"{self.PATH}/options/categories", json={"data": []})
+        assert client.test_plans.options("categories") == {"data": []}
+
+    def test_get(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.get(f"{self.PATH}/p1", json={"id": "p1"})
+        assert client.test_plans.get("p1") == {"id": "p1"}
+
+    def test_summary(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.get(f"{self.PATH}/p1/summary", json={"id": "p1"})
+        assert client.test_plans.summary("p1") == {"id": "p1"}
+
+    def test_update(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.patch(f"{self.PATH}/p1", json={"id": "p1", "name": "n2"})
+        assert client.test_plans.update("p1", {"name": "n2"})["name"] == "n2"
+
+    def test_delete(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.delete(f"{self.PATH}/p1", status_code=204)
+        assert client.test_plans.delete("p1") == {"status": "ok"}
+
+    def test_restore(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.post(f"{self.PATH}/p1/restore", json={"id": "p1"})
+        assert client.test_plans.restore("p1") == {"id": "p1"}
+
+    def test_copy(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.post(f"{self.PATH}/p1/copy", json={"id": "p2"})
+        assert client.test_plans.copy("p1") == {"id": "p2"}
+
+    def test_list_versions(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.get(f"{self.PATH}/p1/versions", json={"data": []})
+        assert client.test_plans.list_versions("p1") == {"data": []}
+
+    def test_create_version(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.post(f"{self.PATH}/p1/versions", json={"version": 2})
+        assert client.test_plans.create_version("p1", {"recipe": {}}) == {"version": 2}
+
+    def test_publish(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.post(f"{self.PATH}/p1/publish", json={"id": "p1"})
+        body = {"sharing_scope": "PROJECT", "expected_sharing_scope": "PRIVATE"}
+        assert client.test_plans.publish("p1", body) == {"id": "p1"}
+
+    def test_generate_inputs(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.post(
+            f"{self.PATH}/generate-inputs", json={"job_id": "j1", "status": "queued"}
+        )
+        body = {"app_description": "x" * 20, "subcategories": ["a"], "organization_id": "o"}
+        assert client.test_plans.generate_inputs(body) == {"job_id": "j1", "status": "queued"}
+
+    def test_get_generate_inputs_job(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.get(
+            f"{self.PATH}/generate-inputs/j1", json={"job_id": "j1", "status": "succeeded"}
+        )
+        assert client.test_plans.get_generate_inputs_job("j1")["status"] == "succeeded"
+
+
+class TestTestPlanRunsResource:
+    """Test Plan Runs T6 (/api/v1/test-plan-runs + /api/v1/test-plans/{id}/runs)."""
+
+    RUNS = f"{BASE_URL}/api/v1/test-plan-runs"
+    PLANS = f"{BASE_URL}/api/v1/test-plans"
+
+    def test_create(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.post(f"{self.PLANS}/p1/runs", json={"run_id": "r1"})
+        body = {"target": {"execution_mode": "app_integration", "app_integration_id": "a1"}}
+        assert client.test_plan_runs.create("p1", body) == {"run_id": "r1"}
+
+    def test_list_for_plan(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.get(f"{self.PLANS}/p1/runs", json={"data": []})
+        assert client.test_plan_runs.list_for_plan("p1") == {"data": []}
+
+    def test_list_deleted(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.get(f"{self.RUNS}/deleted", json={"data": []})
+        assert client.test_plan_runs.list_deleted() == {"data": []}
+
+    def test_get(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.get(f"{self.RUNS}/r1", json={"run_id": "r1"})
+        assert client.test_plan_runs.get("r1") == {"run_id": "r1"}
+
+    def test_get_stage(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.get(f"{self.RUNS}/r1/stages/baseline", json={"key": "baseline"})
+        assert client.test_plan_runs.get_stage("r1", "baseline") == {"key": "baseline"}
+
+    def test_trace(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.get(f"{self.RUNS}/r1/trace", json={"prompt_ref": "pr1"})
+        assert client.test_plan_runs.trace("r1", "pr1") == {"prompt_ref": "pr1"}
+
+    def test_report(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.get(f"{self.RUNS}/r1/report", json={"header": {}})
+        assert client.test_plan_runs.report("r1", {"stage_key": "baseline"}) == {"header": {}}
+
+    def test_prompts(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.get(f"{self.RUNS}/r1/prompts", json={"items": []})
+        assert client.test_plan_runs.prompts("r1") == {"items": []}
+
+    def test_cancel(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.post(f"{self.RUNS}/r1/cancel", json={"run_id": "r1", "status": "cancelled"})
+        assert client.test_plan_runs.cancel("r1")["status"] == "cancelled"
+
+    def test_delete(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.delete(f"{self.RUNS}/r1", status_code=204)
+        assert client.test_plan_runs.delete("r1") == {"status": "ok"}
+
+    def test_restore(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.post(f"{self.RUNS}/r1/restore", json={"run_id": "r1"})
+        assert client.test_plan_runs.restore("r1") == {"run_id": "r1"}
+
+    def test_reveal(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.post(f"{self.RUNS}/r1/results/res1/reveal", json={"result_id": "res1"})
+        assert client.test_plan_runs.reveal("r1", "res1") == {"result_id": "res1"}
+
+
 class TestRequestAbs:
     """Cross-cutting behavior of the shared ``_request_abs`` helper."""
 
