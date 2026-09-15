@@ -731,3 +731,189 @@ def eval_single_turn(
             click.echo(f"reason: {reason}")
     else:
         echo_json(payload)
+
+
+# ---------------------------------------------------------------------------
+# Jailbreak technique / prompt CRUD + generated-prompt mark-successful +
+# breach get. Wire contract: dataset-backend api/jailbreak_routes.go on stage.
+# ---------------------------------------------------------------------------
+
+
+def _load_json_body(json_body: str | None) -> dict[str, Any]:
+    """Parse a --json value: literal JSON, or @file for a JSON file.
+
+    Mirrors :func:`cli.resources._load_json_body` — kept local to avoid
+    a cross-module import cycle (resources.py imports from _http, this
+    module already owns its _http import).
+    """
+    if not json_body:
+        return {}
+    if json_body.startswith("@"):
+        with open(json_body[1:], encoding="utf-8") as f:
+            data = json.load(f)
+    else:
+        try:
+            data = json.loads(json_body)
+        except json.JSONDecodeError as e:
+            raise click.ClickException(f"invalid --json: {e}") from None
+    if not isinstance(data, dict):
+        raise click.ClickException("--json body must be a JSON object")
+    return data
+
+
+@redteam.group("technique")
+def technique() -> None:
+    """Jailbreak techniques CRUD (/api/v1/jailbreak/techniques)."""
+
+
+@technique.command("create")
+@click.option("--json", "json_body", help="Technique payload as JSON literal or @file.")
+def technique_create(json_body: str | None) -> None:
+    echo_json(
+        _http.request(
+            "POST",
+            BASE_ENV,
+            DEFAULT_BASE,
+            f"{_JAILBREAK_BASE}/techniques",
+            json_body=_load_json_body(json_body),
+        )
+    )
+
+
+@technique.command("update")
+@click.argument("technique_id")
+@click.option("--json", "json_body", help="Patch payload as JSON literal or @file.")
+def technique_update(technique_id: str, json_body: str | None) -> None:
+    echo_json(
+        _http.request(
+            "PATCH",
+            BASE_ENV,
+            DEFAULT_BASE,
+            f"{_JAILBREAK_BASE}/techniques/{technique_id}",
+            json_body=_load_json_body(json_body),
+        )
+    )
+
+
+@technique.command("delete")
+@click.argument("technique_id")
+def technique_delete(technique_id: str) -> None:
+    echo_json(
+        _http.request(
+            "DELETE",
+            BASE_ENV,
+            DEFAULT_BASE,
+            f"{_JAILBREAK_BASE}/techniques/{technique_id}",
+        )
+    )
+
+
+@redteam.group("prompt")
+def prompt() -> None:
+    """Jailbreak prompts CRUD (/api/v1/jailbreak/prompts)."""
+
+
+@prompt.command("create")
+@click.option("--json", "json_body", help="Prompt payload as JSON literal or @file.")
+def prompt_create(json_body: str | None) -> None:
+    echo_json(
+        _http.request(
+            "POST",
+            BASE_ENV,
+            DEFAULT_BASE,
+            f"{_JAILBREAK_BASE}/prompts",
+            json_body=_load_json_body(json_body),
+        )
+    )
+
+
+@prompt.command("get")
+@click.argument("prompt_id")
+def prompt_get(prompt_id: str) -> None:
+    echo_json(
+        _http.request("GET", BASE_ENV, DEFAULT_BASE, f"{_JAILBREAK_BASE}/prompts/{prompt_id}")
+    )
+
+
+@prompt.command("update")
+@click.argument("prompt_id")
+@click.option("--json", "json_body", help="Patch payload as JSON literal or @file.")
+def prompt_update(prompt_id: str, json_body: str | None) -> None:
+    echo_json(
+        _http.request(
+            "PATCH",
+            BASE_ENV,
+            DEFAULT_BASE,
+            f"{_JAILBREAK_BASE}/prompts/{prompt_id}",
+            json_body=_load_json_body(json_body),
+        )
+    )
+
+
+@prompt.command("delete")
+@click.argument("prompt_id")
+def prompt_delete(prompt_id: str) -> None:
+    echo_json(
+        _http.request("DELETE", BASE_ENV, DEFAULT_BASE, f"{_JAILBREAK_BASE}/prompts/{prompt_id}")
+    )
+
+
+@redteam.group("generated-prompt")
+def generated_prompt() -> None:
+    """Generated jailbreak prompts."""
+
+
+@generated_prompt.command("mark-successful")
+@click.argument("generated_prompt_id")
+def generated_prompt_mark_successful(generated_prompt_id: str) -> None:
+    """PATCH /generated-prompts/:id/success — flag a generated prompt as successful."""
+    echo_json(
+        _http.request(
+            "PATCH",
+            BASE_ENV,
+            DEFAULT_BASE,
+            f"{_JAILBREAK_BASE}/generated-prompts/{generated_prompt_id}/success",
+        )
+    )
+
+
+@redteam.group("breach")
+def breach() -> None:
+    """Breach ("finding") lookup on a red-team run."""
+
+
+@breach.command("list")
+@click.argument("run_id")
+def breach_list(run_id: str) -> None:
+    """List breaches for a run (GET /testing/runs/:id/results/breaches)."""
+    echo_json(
+        _http.request(
+            "GET", BASE_ENV, DEFAULT_BASE, f"/api/v1/testing/runs/{run_id}/results/breaches"
+        )
+    )
+
+
+@breach.command("get")
+@click.argument("run_id")
+@click.argument("breach_id")
+def breach_get(run_id: str, breach_id: str) -> None:
+    """Get one breach by id — client-side filter (no /findings/:id server route)."""
+    payload = _http.request(
+        "GET", BASE_ENV, DEFAULT_BASE, f"/api/v1/testing/runs/{run_id}/results/breaches"
+    )
+    rows: list[Any]
+    if isinstance(payload, list):
+        rows = payload
+    elif isinstance(payload, dict):
+        data = payload.get("data") or payload.get("breaches") or []
+        rows = data if isinstance(data, list) else []
+    else:
+        rows = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for key in ("id", "breach_id", "finding_id"):
+            if str(row.get(key, "")) == breach_id:
+                echo_json(row)
+                return
+    raise click.ClickException(f"breach {breach_id} not found in run {run_id}")
