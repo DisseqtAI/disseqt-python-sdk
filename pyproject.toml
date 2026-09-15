@@ -64,6 +64,23 @@ disseqt = "disseqt_sdk.cli:cli"
 # CLI extras: YAML config for `disseqt run`, rich progress bars for
 # long-running runs. The CLI degrades to JSON-only config without pyyaml.
 cli = ["pyyaml>=6.0", "rich>=13.0"]
+# Dev extra mirrors [dependency-groups].dev so `pip install -e ".[dev]"`
+# works on pip <25.1 (which doesn't yet consume PEP 735 groups).
+dev = [
+    "pytest>=9.0.3",
+    "pytest-cov>=7.0.0",
+    "pytest-mock>=3.15.1",
+    "requests-mock>=1.12.1",
+    "responses>=0.25.0",
+    "black>=26.3.1",
+    "ruff>=0.14.2",
+    "mypy>=1.18.2",
+    "types-requests>=2.32.4.20250913",
+    "packaging>=24.0",
+    "tomli>=2.0.0; python_version < '3.11'",
+    "pyyaml>=6.0",
+    "rich>=13.0",
+]
 openai = ["openai>=1.50.0"]
 anthropic = ["anthropic>=0.40.0"]
 groq = ["groq>=0.11.0"]
@@ -196,6 +213,7 @@ dev = [
     "pytest-cov>=7.0.0",
     "pytest-mock>=3.15.1",
     "requests-mock>=1.12.1",
+    "responses>=0.25.0",
     "ruff>=0.14.2",
     "types-requests>=2.32.4.20250913",
     # packaging + tomli are used by test_pyproject_min_versions to
