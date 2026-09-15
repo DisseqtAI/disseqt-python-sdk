@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (breaking, agentic SDK only)
+- **`DisseqtAgenticClient` no longer accepts `project_id`.** Kong resolves
+  the owning project (plus org + user) server-side from `api_key` alone
+  via auth-svc's `validate-api-key` endpoint (`user_api_keys` has a
+  `UNIQUE (api_key_hash)` index — the api_key is a deterministic pointer
+  to exactly one project). Passing `project_id=` now raises
+  `TypeError: unexpected keyword argument 'project_id'`.
+  - Removed the `project.id` resource attribute from the OTLP payload.
+  - `DisseqtTrace`, `DisseqtSpan`, and `EnrichedSpan` no longer carry a
+    `project_id` field.
+  - Migration: delete the `project_id=` line from your
+    `DisseqtAgenticClient(...)` call site. No other change needed —
+    `application_id`, `api_key`, `service_name`, `realtime_policy_id`
+    still work exactly as before. Old span data in the backend is
+    unaffected; new spans arrive with project_id stamped by Kong at
+    ingest.
+
 ### Fixed
 - **``CreateRunRequest.run_name`` now actually reaches the server.** Since
   this SDK's first release, ``to_payload()`` sent the run name under the

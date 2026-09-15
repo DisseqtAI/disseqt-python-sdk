@@ -18,7 +18,6 @@ class TestEnrichedSpan:
             name="test_span",
             kind="INTERNAL",
             org_id="org_1",
-            project_id="proj_1",
             service_name="test_service",
         )
 
@@ -27,7 +26,6 @@ class TestEnrichedSpan:
         assert span.name == "test_span"
         assert span.kind == "INTERNAL"
         assert span.org_id == "org_1"
-        assert span.project_id == "proj_1"
         assert span.service_name == "test_service"
 
     def test_enriched_span_uuid_conversion(self):
@@ -41,7 +39,6 @@ class TestEnrichedSpan:
             name="test",
             kind="INTERNAL",
             org_id="org_1",
-            project_id="proj_1",
             service_name="test",
         )
 
@@ -62,7 +59,6 @@ class TestEnrichedSpan:
             name="test",
             kind="INTERNAL",
             org_id="org_1",
-            project_id="proj_1",
             service_name="test",
         )
 
@@ -82,7 +78,6 @@ class TestEnrichedSpan:
             name="test",
             kind="INTERNAL",
             org_id="org_1",
-            project_id="proj_1",
             service_name="test",
         )
 
@@ -99,7 +94,6 @@ class TestEnrichedSpan:
             "name": "test",
             "kind": "INTERNAL",
             "org_id": "org_1",
-            "project_id": "proj_1",
             "service_name": "test",
             "status_code": "OK",
             "attributes_json": '{"key": "value"}',

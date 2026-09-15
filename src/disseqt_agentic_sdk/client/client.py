@@ -49,7 +49,6 @@ class _MissingSentinel:
 # One sentinel per required argument. Do NOT share instances — see
 # ``_MissingSentinel`` for the reason.
 _MISSING_API_KEY: object = _MissingSentinel()
-_MISSING_PROJECT_ID: object = _MissingSentinel()
 _MISSING_SERVICE_NAME: object = _MissingSentinel()
 _MISSING_APPLICATION_ID: object = _MissingSentinel()
 
@@ -130,7 +129,7 @@ class DisseqtAgenticClient:
     Main SDK client - manages configuration, transport, and buffering.
 
     Responsibilities:
-    - Store SDK configuration (project_id, endpoint, etc.)
+    - Store SDK configuration (api_key, endpoint, etc.)
     - Initialize transport layer
     - Manage buffering for efficient ingestion
     - Provide resource metadata
@@ -165,7 +164,6 @@ class DisseqtAgenticClient:
     def __init__(
         self,
         api_key: str = _MISSING_API_KEY,  # type: ignore[assignment]
-        project_id: str = _MISSING_PROJECT_ID,  # type: ignore[assignment]
         service_name: str = _MISSING_SERVICE_NAME,  # type: ignore[assignment]
         endpoint: str = "https://api.disseqt.ai/agentic-monitoring/api/v1/traces",
         service_version: str = "1.0.0",
@@ -181,8 +179,10 @@ class DisseqtAgenticClient:
         Initialize SDK client.
 
         Args:
-            api_key: API key for authentication (required)
-            project_id: Project ID (required)
+            api_key: API key for authentication (required). Kong resolves
+                the owning project + org + user from this alone via
+                auth-svc's validate-api-key endpoint (user_api_keys has
+                UNIQUE (api_key_hash)); no project_id needs to be passed.
             service_name: Service name (required)
             endpoint: Backend API endpoint URL (required, default: https://api.disseqt.ai/agentic-monitoring/api/v1/traces)
             service_version: Service version
@@ -234,7 +234,6 @@ class DisseqtAgenticClient:
         # service_name too — same rule as disseqt_sdk.Client's
         # (realtime_policy_id ⇒ application_name) check.
         _reject_missing_or_empty(api_key, "api_key")
-        _reject_missing_or_empty(project_id, "project_id")
         _reject_missing_or_empty(
             service_name,
             "service_name",
@@ -256,7 +255,6 @@ class DisseqtAgenticClient:
 
         # Configuration
         self.api_key = api_key
-        self.project_id = project_id
         self.service_name = service_name
         self.service_version = service_version
         self.environment = environment
@@ -299,8 +297,8 @@ class DisseqtAgenticClient:
 
         set_client(self)
 
-        # Defense-in-depth: never log the project_id (a sensitive identifier),
-        # even though the logger would redact it. Only non-sensitive fields here.
+        # Non-sensitive fields only. api_key/application_id are secrets or
+        # opaque identifiers and don't belong in structured logs.
         logger.info(
             "DisseqtAgenticClient initialized",
             extra={

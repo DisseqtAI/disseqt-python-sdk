@@ -28,7 +28,7 @@ class TestTraceCoverage:
 
     def test_trace_set_intent_id(self):
         """Test set_intent_id method."""
-        trace = DisseqtTrace(name="test", org_id="o", project_id="p", service_name="s")
+        trace = DisseqtTrace(name="test", org_id="o", service_name="s")
         span = trace.start_span("span1", SpanKind.INTERNAL)
 
         trace.set_intent_id("intent_123")
@@ -37,7 +37,7 @@ class TestTraceCoverage:
 
     def test_trace_set_workflow_id(self):
         """Test set_workflow_id method."""
-        trace = DisseqtTrace(name="test", org_id="o", project_id="p", service_name="s")
+        trace = DisseqtTrace(name="test", org_id="o", service_name="s")
         span = trace.start_span("span1", SpanKind.INTERNAL)
 
         trace.set_workflow_id("workflow_456")
@@ -46,7 +46,7 @@ class TestTraceCoverage:
 
     def test_trace_end_already_ended(self):
         """Test end() when trace is already ended."""
-        trace = DisseqtTrace(name="test", org_id="o", project_id="p", service_name="s")
+        trace = DisseqtTrace(name="test", org_id="o", service_name="s")
         trace.end()
         end_time_1 = trace.end_time_ns
 
@@ -56,7 +56,7 @@ class TestTraceCoverage:
 
     def test_trace_get_spans(self):
         """Test get_spans() method."""
-        trace = DisseqtTrace(name="test", org_id="o", project_id="p", service_name="s")
+        trace = DisseqtTrace(name="test", org_id="o", service_name="s")
         span1 = trace.start_span("span1", SpanKind.INTERNAL)
         span2 = trace.start_span("span2", SpanKind.INTERNAL)
 
@@ -69,7 +69,7 @@ class TestTraceCoverage:
 
     def test_trace_exit(self):
         """Test trace __exit__ method."""
-        trace = DisseqtTrace(name="test", org_id="o", project_id="p", service_name="s")
+        trace = DisseqtTrace(name="test", org_id="o", service_name="s")
         span = trace.start_span("span1", SpanKind.INTERNAL)
 
         # Simulate context manager exit
@@ -83,7 +83,6 @@ class TestTraceCoverage:
             name="test_trace",
             trace_id="custom_id",
             org_id="o",
-            project_id="p",
             service_name="s",
             service_version="1.0",
             environment="dev",
@@ -97,7 +96,6 @@ class TestTraceCoverage:
         assert trace_dict["trace_id"] == "custom_id"
         assert trace_dict["name"] == "test_trace"
         assert trace_dict["org_id"] == "o"
-        assert trace_dict["project_id"] == "p"
         assert trace_dict["service_name"] == "s"
         assert trace_dict["service_version"] == "1.0"
         assert trace_dict["environment"] == "dev"
@@ -120,7 +118,6 @@ class TestTraceWrapperCoverage:
         ):
             self.client = DisseqtAgenticClient(
                 api_key="k",
-                project_id="p",
                 service_name="s",
                 application_id="test-app-id",
             )
@@ -133,18 +130,17 @@ class TestTraceWrapperCoverage:
 
     def test_trace_wrapper_getattr(self):
         """Test TraceWrapper __getattr__ delegation."""
-        trace = DisseqtTrace(name="test", org_id="o", project_id="p", service_name="s")
+        trace = DisseqtTrace(name="test", org_id="o", service_name="s")
         wrapper = TraceWrapper(trace, self.client)
 
         # Access trace attributes through wrapper using __getattr__
         assert wrapper.name == "test"
         assert wrapper.trace_id is not None
         assert wrapper.org_id == "o"
-        assert wrapper.project_id == "p"
 
     def test_trace_wrapper_enter(self):
         """Test TraceWrapper __enter__ method."""
-        trace = DisseqtTrace(name="test", org_id="o", project_id="p", service_name="s")
+        trace = DisseqtTrace(name="test", org_id="o", service_name="s")
         wrapper = TraceWrapper(trace, self.client)
 
         # Test __enter__ returns the trace itself
@@ -155,7 +151,7 @@ class TestTraceWrapperCoverage:
     def test_trace_wrapper_no_client_exit(self):
         """Test TraceWrapper when client is None in __exit__."""
         # Create wrapper with valid client first
-        trace = DisseqtTrace(name="test", org_id="o", project_id="p", service_name="s")
+        trace = DisseqtTrace(name="test", org_id="o", service_name="s")
         wrapper = TraceWrapper(trace, self.client)
 
         # Manually set client to None to test the warning path
@@ -185,9 +181,7 @@ class TestBufferCoverage:
 
     def test_buffer_add_span(self):
         """Test add_span method."""
-        span = EnrichedSpan(
-            trace_id="t1", span_id="s1", name="test", org_id="o", project_id="p", service_name="s"
-        )
+        span = EnrichedSpan(trace_id="t1", span_id="s1", name="test", org_id="o", service_name="s")
 
         self.buffer.add_span(span)
         assert len(self.buffer.buffer) == 1
@@ -205,7 +199,6 @@ class TestBufferCoverage:
                 span_id=f"s{i}",
                 name="test",
                 org_id="o",
-                project_id="p",
                 service_name="s",
             )
             self.buffer.add_span(span)
@@ -224,7 +217,6 @@ class TestBufferCoverage:
                 span_id=f"s{i}",
                 name="test",
                 org_id="o",
-                project_id="p",
                 service_name="s",
             )
             for i in range(3)
@@ -244,9 +236,7 @@ class TestBufferCoverage:
         assert self.buffer.should_flush() is False
 
         # Add span
-        span = EnrichedSpan(
-            trace_id="t1", span_id="s1", name="test", org_id="o", project_id="p", service_name="s"
-        )
+        span = EnrichedSpan(trace_id="t1", span_id="s1", name="test", org_id="o", service_name="s")
         # Reset last_flush_time to ensure proper timing
         import time
 
@@ -287,7 +277,6 @@ class TestBufferFailurePolicy:
             span_id=f"s{i}",
             name="test",
             org_id="o",
-            project_id="p",
             service_name="s",
         )
 
@@ -377,9 +366,7 @@ class TestTransportAuthFailures:
         import requests as _requests
 
         transport = HTTPTransport("http://localhost:8080/v1/traces", api_key="k")
-        span = EnrichedSpan(
-            trace_id="t1", span_id="s1", name="test", org_id="o", project_id="p", service_name="s"
-        )
+        span = EnrichedSpan(trace_id="t1", span_id="s1", name="test", org_id="o", service_name="s")
         with patch("disseqt_agentic_sdk.transport.http.requests.Session.post") as mock_post:
             fake = Mock()
             fake.status_code = 401
@@ -420,9 +407,7 @@ class TestTransportAuthFailures:
         import requests as _requests
 
         transport = HTTPTransport("http://prod.example/v1/traces", api_key="k")
-        span = EnrichedSpan(
-            trace_id="t1", span_id="s1", name="test", org_id="o", project_id="p", service_name="s"
-        )
+        span = EnrichedSpan(trace_id="t1", span_id="s1", name="test", org_id="o", service_name="s")
         with patch("disseqt_agentic_sdk.transport.http.requests.Session.post") as mock_post:
             fake = Mock()
             fake.status_code = 403
@@ -457,7 +442,6 @@ class TestTransportAuthFailures:
                 span_id="s1",
                 name="test",
                 org_id="o",
-                project_id="p",
                 service_name="s",
             )
             with patch("disseqt_agentic_sdk.transport.http.requests.Session.post") as mock_post:
@@ -494,7 +478,6 @@ class TestTransportCoverage:
             span_id="s1",
             name="test",
             org_id="o",
-            project_id="p",
             service_name="s",
             attributes_json='{"gen_ai.test": "value", "agentic.test": "value2"}',
         )
@@ -522,9 +505,7 @@ class TestTransportCoverage:
         """Test error handling in send_spans."""
         transport = HTTPTransport("http://localhost:8080/v1/traces")
 
-        span = EnrichedSpan(
-            trace_id="t1", span_id="s1", name="test", org_id="o", project_id="p", service_name="s"
-        )
+        span = EnrichedSpan(trace_id="t1", span_id="s1", name="test", org_id="o", service_name="s")
 
         with patch("disseqt_agentic_sdk.transport.http.requests.Session.post") as mock_post:
             from requests.exceptions import RequestException
@@ -538,9 +519,7 @@ class TestTransportCoverage:
         """Test send_trace alias method."""
         transport = HTTPTransport("http://localhost:8080/v1/traces")
 
-        span = EnrichedSpan(
-            trace_id="t1", span_id="s1", name="test", org_id="o", project_id="p", service_name="s"
-        )
+        span = EnrichedSpan(trace_id="t1", span_id="s1", name="test", org_id="o", service_name="s")
 
         with patch("disseqt_agentic_sdk.transport.http.requests.Session.post") as mock_post:
             mock_response = Mock()
@@ -595,7 +574,6 @@ class TestModelsCoverage:
             "name": "test",
             "kind": "INTERNAL",
             "org_id": "o",
-            "project_id": "p",
             "service_name": "s",
             "dt": "2024-01-01T12:00:00Z",
             "ingestion_time": "2024-01-01T12:00:01Z",
@@ -614,7 +592,6 @@ class TestModelsCoverage:
             "name": "test",
             "kind": "INTERNAL",
             "org_id": "o",
-            "project_id": "p",
             "service_name": "s",
         }
 
@@ -632,7 +609,6 @@ class TestModelsCoverage:
             "name": "test",
             "kind": "INTERNAL",
             "org_id": "o",
-            "project_id": "p",
             "service_name": "s",
         }
 
