@@ -27,7 +27,6 @@ class TestClientPolicyIdPassthrough:
     def test_realtime_policy_id_forwarded_to_transport(self, _buf, mock_transport):
         DisseqtAgenticClient(
             api_key="k",
-            project_id="p",
             service_name="svc",
             endpoint="http://localhost/traces",
             realtime_policy_id="pol-123",
@@ -42,7 +41,6 @@ class TestClientPolicyIdPassthrough:
     def test_no_realtime_policy_id_passes_none(self, _buf, mock_transport):
         DisseqtAgenticClient(
             api_key="k",
-            project_id="p",
             service_name="svc",
             endpoint="http://localhost/traces",
             application_id="test-app-id",
@@ -77,7 +75,6 @@ class TestTransportEmitsPolicyId:
             "service_name": "svc",
             "service_version": "1.0",
             "environment": "test",
-            "project_id": "p",
         }
         return span
 
@@ -145,7 +142,6 @@ class TestPerTracePolicyOverride:
             "service_name": "my-app",
             "service_version": "1.0",
             "environment": "test",
-            "project_id": "p",
         }
         return span
 
@@ -267,7 +263,6 @@ class TestNoPolicyAnywhere:
             "service_name": "my-app",
             "service_version": "1.0",
             "environment": "test",
-            "project_id": "p",
         }
         return span
 
@@ -338,7 +333,6 @@ class TestPerSpanPolicyOverride:
         trace = DisseqtTrace(
             name="t",
             org_id="",
-            project_id="p",
             service_name="svc",
             environment="test",
             realtime_policy_id="TRACE-P",
@@ -374,7 +368,7 @@ class TestPerSpanPolicyOverride:
     def test_span_override_beats_client_default_via_transport(self):
         # No per-trace override, client default is CLIENT-P, span
         # overrides to SPAN-P. Transport should stamp SPAN-P.
-        trace = DisseqtTrace(name="t", project_id="p", service_name="svc")
+        trace = DisseqtTrace(name="t", service_name="svc")
         trace.start_span("s1", SpanKind.INTERNAL, realtime_policy_id="SPAN-P").end()
         trace.end()
 

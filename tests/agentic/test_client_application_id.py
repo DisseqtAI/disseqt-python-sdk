@@ -31,7 +31,6 @@ def _stub_transport(monkeypatch):
 def _make_client(**overrides):
     kwargs = {
         "api_key": "test_key",
-        "project_id": "test_proj",
         "service_name": "test_service",
         "endpoint": "http://localhost/v1/traces",
         "application_id": "7ce57144-9df6-4fa4-8aad-8cbc1ffdb558",
@@ -55,7 +54,6 @@ class TestApplicationIdRequired:
         with pytest.raises(ValueError, match="application_id is required") as exc_info:
             DisseqtAgenticClient(
                 api_key="k",
-                project_id="p",
                 service_name="s",
                 endpoint="http://localhost/v1/traces",
             )
@@ -82,11 +80,10 @@ class TestApplicationIdRequired:
         it. This test locks that in.
         """
         with pytest.raises(TypeError, match="positional"):
-            # Passing 11 positional args tries to fill application_id
+            # Passing 10 positional args tries to fill application_id
             # positionally — the kwonly barrier should refuse.
             DisseqtAgenticClient(
                 "k",  # api_key
-                "p",  # project_id
                 "s",  # service_name
                 "http://x/v1",  # endpoint
                 "1.0.0",  # service_version

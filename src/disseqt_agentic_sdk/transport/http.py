@@ -207,7 +207,6 @@ class HTTPTransport:
                     "service.name": span_dict.get("service_name", ""),
                     "service.version": span_dict.get("service_version", ""),
                     "deployment.environment": span_dict.get("environment", ""),
-                    "project.id": span_dict.get("project_id", ""),
                     "ingestion_url": self.endpoint,
                     "api.key": self.api_key,
                 }

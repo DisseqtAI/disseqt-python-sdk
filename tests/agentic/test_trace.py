@@ -14,12 +14,11 @@ class TestDisseqtTrace:
     def test_trace_creation(self):
         """Test basic trace creation."""
         trace = DisseqtTrace(
-            name="test_trace", org_id="org_1", project_id="proj_1", service_name="test_service"
+            name="test_trace", org_id="org_1", service_name="test_service"
         )
 
         assert trace.name == "test_trace"
         assert trace.org_id == "org_1"
-        assert trace.project_id == "proj_1"
         assert trace.service_name == "test_service"
         assert len(trace.trace_id) == 32  # Hex string
         assert len(trace.spans) == 0
@@ -36,7 +35,7 @@ class TestDisseqtTrace:
 
     def test_trace_start_span(self):
         """Test starting spans in trace."""
-        trace = DisseqtTrace(name="test_trace", org_id="org_1", project_id="proj_1")
+        trace = DisseqtTrace(name="test_trace", org_id="org_1")
 
         span1 = trace.start_span("span1", SpanKind.INTERNAL)
         span2 = trace.start_span("span2", SpanKind.INTERNAL)
@@ -106,7 +105,7 @@ class TestDisseqtTrace:
 
     def test_trace_to_enriched_spans(self):
         """Test converting trace to enriched spans."""
-        trace = DisseqtTrace(name="test_trace", org_id="org_1", project_id="proj_1")
+        trace = DisseqtTrace(name="test_trace", org_id="org_1")
 
         span1 = trace.start_span("span1", SpanKind.INTERNAL)
         span2 = trace.start_span("span2", SpanKind.INTERNAL)
