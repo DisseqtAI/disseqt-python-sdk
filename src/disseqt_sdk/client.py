@@ -23,6 +23,19 @@ from .validators.composite.evaluate import CompositeScoreEvaluator
 logger = get_logger(__name__)
 
 
+def _load_stored_auth() -> dict[str, Any] | None:
+    """Try the local config; swallow any error so import-time / construction
+    stays dependable. A wider-than-0600 config surfaces later via the CLI's
+    ``disseqt login`` path where we can print an actionable message.
+    """
+    try:
+        from .auth import load as _load
+
+        return _load()
+    except Exception:
+        return None
+
+
 @runtime_checkable
 class SupportsInputData(Protocol):
     """Anything that can serialize itself to the wire-shape ``input_data``
@@ -186,9 +199,9 @@ class Client:
 
     def __init__(
         self,
-        project_id: str,
-        api_key: str,
-        base_url: str = "https://api.disseqt.ai/realtime-validations",
+        project_id: str | None = None,
+        api_key: str | None = None,
+        base_url: str | None = None,
         timeout: int = 30,
         application_name: str | None = None,
         realtime_policy_base_url: str = "https://api.disseqt.ai/realtime-validations",
@@ -255,8 +268,23 @@ class Client:
                     "set — the Decisions ledger attributes each decision to "
                     "the calling application"
                 )
-        self.project_id = project_id
-        self.api_key = api_key
+        # Resolution order: explicit kwargs → ``~/.disseqt/config.json``
+        # (written by ``disseqt login``). Env-var fallback stays in the
+        # CLI's ``build_client``; the SDK constructor only reads the local
+        # config so library callers get a predictable single source of
+        # truth. Missing creds still surface at first API call as today.
+        if not (project_id and api_key):
+            stored = _load_stored_auth()
+            if stored is not None:
+                project_id = project_id or stored.get("project_id")
+                api_key = api_key or stored.get("api_key")
+                if base_url is None:
+                    base_url = stored.get("base_url")
+        if base_url is None:
+            base_url = "https://api.disseqt.ai/realtime-validations"
+
+        self.project_id = project_id or ""
+        self.api_key = api_key or ""
         self.base_url = base_url
         self.timeout = timeout
         self.application_name = application_name
