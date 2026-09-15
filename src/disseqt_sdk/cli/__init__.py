@@ -22,6 +22,8 @@ byov_group = _resources.byov
 mcp_target_group = _resources.mcp_target
 output_validation_group = _resources.output_validation
 pack_group = _resources.pack
+plan_group = _resources.plan
+plan_run_group = _resources.plan_run
 pp_run_group = _resources.pp_run
 rag_target_group = _resources.rag_target
 rag_validation_group = _resources.rag_validation
@@ -57,6 +59,8 @@ cli.add_command(session_group)
 cli.add_command(byov_group)
 cli.add_command(vulnerability_group)
 cli.add_command(whoami_cmd)
+cli.add_command(plan_group)
+cli.add_command(plan_run_group)
 
 
 if __name__ == "__main__":  # pragma: no cover

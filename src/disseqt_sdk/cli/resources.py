@@ -1,6 +1,6 @@
 """CLI resource groups: ``target``, ``rag-target``, ``mcp-target``,
 ``pack``, ``pp-run``, ``output-validation``, ``rag-validation``,
-``session``, ``byov``, ``vulnerability``.
+``session``, ``byov``, ``vulnerability``, ``plan``, ``plan-run``.
 
 Thin wrappers over :mod:`._http` — one command per backend endpoint.
 No new deps, no new env vars beyond the shared ``DISSEQT_DATASET_BASE_URL``
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -668,11 +669,242 @@ def vuln_test(vuln_id: str, json_body: str | None) -> None:
     _post(f"/api/v1/vulnerabilities/{vuln_id}/test", _load_json_body(json_body))
 
 
+# ---------------------------------------------------------------------------
+# Test Plans (T3)   /api/v1/test-plans
+# ---------------------------------------------------------------------------
+
+
+@click.group("plan")
+def plan() -> None:
+    """Test plans (T3) — versioned red-team plan templates."""
+
+
+@plan.command("create")
+@_json_option("Plan payload JSON (recipe, inputs, categories...).")
+def plan_create(json_body: str | None) -> None:
+    _post("/api/v1/test-plans", _load_json_body(json_body))
+
+
+@plan.command("list")
+def plan_list() -> None:
+    _get("/api/v1/test-plans")
+
+
+@plan.command("gallery")
+def plan_gallery() -> None:
+    _get("/api/v1/test-plans/gallery")
+
+
+@plan.command("list-deleted")
+def plan_list_deleted() -> None:
+    _get("/api/v1/test-plans/deleted")
+
+
+@plan.command("options")
+@click.argument("ref")
+def plan_options(ref: str) -> None:
+    _get(f"/api/v1/test-plans/options/{ref}")
+
+
+@plan.command("get")
+@click.argument("plan_id")
+def plan_get(plan_id: str) -> None:
+    _get(f"/api/v1/test-plans/{plan_id}")
+
+
+@plan.command("summary")
+@click.argument("plan_id")
+def plan_summary(plan_id: str) -> None:
+    _get(f"/api/v1/test-plans/{plan_id}/summary")
+
+
+@plan.command("update")
+@click.argument("plan_id")
+@_json_option("PATCH body (must include expected_recipe_revision or expected_metadata_revision).")
+def plan_update(plan_id: str, json_body: str | None) -> None:
+    _patch(f"/api/v1/test-plans/{plan_id}", _load_json_body(json_body))
+
+
+@plan.command("delete")
+@click.argument("plan_id")
+def plan_delete(plan_id: str) -> None:
+    _delete(f"/api/v1/test-plans/{plan_id}")
+
+
+@plan.command("restore")
+@click.argument("plan_id")
+def plan_restore(plan_id: str) -> None:
+    _post(f"/api/v1/test-plans/{plan_id}/restore")
+
+
+@plan.command("copy")
+@click.argument("plan_id")
+@_json_option('Optional copy payload (e.g. {"name": "..."}).')
+def plan_copy(plan_id: str, json_body: str | None) -> None:
+    _post(f"/api/v1/test-plans/{plan_id}/copy", _load_json_body(json_body))
+
+
+@plan.command("versions")
+@click.argument("plan_id")
+def plan_versions(plan_id: str) -> None:
+    _get(f"/api/v1/test-plans/{plan_id}/versions")
+
+
+@plan.command("create-version")
+@click.argument("plan_id")
+@_json_option("New version payload (recipe + optional copy_inputs_from_version).")
+def plan_create_version(plan_id: str, json_body: str | None) -> None:
+    _post(f"/api/v1/test-plans/{plan_id}/versions", _load_json_body(json_body))
+
+
+@plan.command("publish")
+@click.argument("plan_id")
+@_json_option("Publish payload with sharing_scope + expected_sharing_scope.")
+def plan_publish(plan_id: str, json_body: str | None) -> None:
+    _post(f"/api/v1/test-plans/{plan_id}/publish", _load_json_body(json_body))
+
+
+@plan.command("generate-inputs")
+@_json_option("Payload with app_description + subcategories + organization_id.")
+def plan_generate_inputs(json_body: str | None) -> None:
+    _post("/api/v1/test-plans/generate-inputs", _load_json_body(json_body))
+
+
+@plan.command("generate-inputs-status")
+@click.argument("job_id")
+def plan_generate_inputs_status(job_id: str) -> None:
+    _get(f"/api/v1/test-plans/generate-inputs/{job_id}")
+
+
+# ---------------------------------------------------------------------------
+# Test Plan Runs (T6)   /api/v1/test-plan-runs
+# ---------------------------------------------------------------------------
+
+# Terminal statuses per pkg/testplan/walk.go + stage.go.
+_PLAN_RUN_TERMINAL = frozenset({"completed", "completed_with_errors", "cancelled", "failed"})
+
+
+@click.group("plan-run")
+def plan_run() -> None:
+    """Test plan runs (T6) — execute a plan, poll status, fetch reports."""
+
+
+@plan_run.command("create")
+@click.argument("plan_id")
+@_json_option("Run payload (target + optional version_id).")
+@click.option("--wait", is_flag=True, help="Poll until the run reaches a terminal status.")
+@click.option(
+    "--interval",
+    type=float,
+    default=5.0,
+    show_default=True,
+    help="Polling interval in seconds when --wait is set.",
+)
+def plan_run_create(plan_id: str, json_body: str | None, wait: bool, interval: float) -> None:
+    resp = _http.request(
+        "POST",
+        BASE_ENV,
+        DEFAULT_BASE,
+        f"/api/v1/test-plans/{plan_id}/runs",
+        json_body=_load_json_body(json_body),
+    )
+    if not wait:
+        echo_json(resp)
+        return
+    run_id = resp.get("run_id") if isinstance(resp, dict) else None
+    if not isinstance(run_id, str) or not run_id:
+        _fail("--wait requires a run_id in the create response")
+    # ponytail: naive poll loop, no jitter/backoff; upgrade if runs commonly outlive 30-60 min.
+    while True:
+        latest = _http.request("GET", BASE_ENV, DEFAULT_BASE, f"/api/v1/test-plan-runs/{run_id}")
+        status = (latest.get("status") if isinstance(latest, dict) else None) or (
+            latest.get("header", {}).get("status")
+            if isinstance(latest, dict) and isinstance(latest.get("header"), dict)
+            else None
+        )
+        if status in _PLAN_RUN_TERMINAL:
+            echo_json(latest)
+            return
+        time.sleep(interval)
+
+
+@plan_run.command("list")
+@click.argument("plan_id")
+def plan_run_list(plan_id: str) -> None:
+    _get(f"/api/v1/test-plans/{plan_id}/runs")
+
+
+@plan_run.command("list-deleted")
+def plan_run_list_deleted() -> None:
+    _get("/api/v1/test-plan-runs/deleted")
+
+
+@plan_run.command("get")
+@click.argument("run_id")
+def plan_run_get(run_id: str) -> None:
+    _get(f"/api/v1/test-plan-runs/{run_id}")
+
+
+@plan_run.command("stage")
+@click.argument("run_id")
+@click.argument("stage_key")
+def plan_run_stage(run_id: str, stage_key: str) -> None:
+    _get(f"/api/v1/test-plan-runs/{run_id}/stages/{stage_key}")
+
+
+@plan_run.command("trace")
+@click.argument("run_id")
+@click.option("--prompt-ref", required=True, help="Prompt reference UUID.")
+def plan_run_trace(run_id: str, prompt_ref: str) -> None:
+    _get(f"/api/v1/test-plan-runs/{run_id}/trace", params={"prompt_ref": prompt_ref})
+
+
+@plan_run.command("report")
+@click.argument("run_id")
+@click.option("--stage-key", help="Stage key (required by backend for the results page).")
+def plan_run_report(run_id: str, stage_key: str | None) -> None:
+    params = {"stage_key": stage_key} if stage_key else None
+    _get(f"/api/v1/test-plan-runs/{run_id}/report", params=params)
+
+
+@plan_run.command("prompts")
+@click.argument("run_id")
+def plan_run_prompts(run_id: str) -> None:
+    _get(f"/api/v1/test-plan-runs/{run_id}/prompts")
+
+
+@plan_run.command("cancel")
+@click.argument("run_id")
+def plan_run_cancel(run_id: str) -> None:
+    _post(f"/api/v1/test-plan-runs/{run_id}/cancel")
+
+
+@plan_run.command("delete")
+@click.argument("run_id")
+def plan_run_delete(run_id: str) -> None:
+    _delete(f"/api/v1/test-plan-runs/{run_id}")
+
+
+@plan_run.command("restore")
+@click.argument("run_id")
+def plan_run_restore(run_id: str) -> None:
+    _post(f"/api/v1/test-plan-runs/{run_id}/restore")
+
+
+@plan_run.command("reveal")
+@click.argument("run_id")
+@click.argument("result_id")
+def plan_run_reveal(run_id: str, result_id: str) -> None:
+    _post(f"/api/v1/test-plan-runs/{run_id}/results/{result_id}/reveal")
+
+
 __all__ = [
     "byov",
     "mcp_target",
     "output_validation",
     "pack",
+    "plan",
+    "plan_run",
     "pp_run",
     "rag_target",
     "rag_validation",
