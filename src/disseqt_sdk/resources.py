@@ -88,7 +88,7 @@ class TargetsResource(_Base):
 class RagTargetsResource(_Base):
     """RAG targets — separate table + endpoints."""
 
-    _BASE = "/api/v1/rag-integrations"
+    _BASE = "/api/v1/llm/rag-integrations"
 
     def create(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._req("POST", self._BASE, json_payload=payload)
@@ -109,7 +109,7 @@ class RagTargetsResource(_Base):
 class McpTargetsResource(_Base):
     """MCP targets — separate table + endpoints."""
 
-    _BASE = "/api/v1/mcp-integrations"
+    _BASE = "/api/v1/llm/mcp-integrations"
 
     def create(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._req("POST", self._BASE, json_payload=payload)

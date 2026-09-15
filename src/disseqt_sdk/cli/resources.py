@@ -192,8 +192,8 @@ def _make_crud_group(name: str, base_path: str, help_text: str) -> click.Group:
     return group
 
 
-rag_target = _make_crud_group("rag-target", "/api/v1/rag-integrations", "RAG targets.")
-mcp_target = _make_crud_group("mcp-target", "/api/v1/mcp-integrations", "MCP targets.")
+rag_target = _make_crud_group("rag-target", "/api/v1/llm/rag-integrations", "RAG targets.")
+mcp_target = _make_crud_group("mcp-target", "/api/v1/llm/mcp-integrations", "MCP targets.")
 
 
 # ---------------------------------------------------------------------------

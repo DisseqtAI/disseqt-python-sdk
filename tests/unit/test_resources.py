@@ -68,7 +68,7 @@ class TestTargetsResource:
 
 
 class TestRagTargetsResource:
-    PATH = f"{BASE_URL}/api/v1/rag-integrations"
+    PATH = f"{BASE_URL}/api/v1/llm/rag-integrations"
 
     def test_create(self, requests_mock, client: DisseqtAPIClient) -> None:
         requests_mock.post(self.PATH, json={"id": "r1"})
@@ -88,7 +88,7 @@ class TestRagTargetsResource:
 
 
 class TestMcpTargetsResource:
-    PATH = f"{BASE_URL}/api/v1/mcp-integrations"
+    PATH = f"{BASE_URL}/api/v1/llm/mcp-integrations"
 
     def test_create(self, requests_mock, client: DisseqtAPIClient) -> None:
         requests_mock.post(self.PATH, json={"id": "m1"})

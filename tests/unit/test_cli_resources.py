@@ -122,13 +122,13 @@ def test_target_delete(runner: CliRunner, requests_mock) -> None:
 
 
 def test_rag_target_list(runner: CliRunner, requests_mock) -> None:
-    requests_mock.get(f"{DATASET_BASE}/api/v1/rag-integrations", json={"data": []})
+    requests_mock.get(f"{DATASET_BASE}/api/v1/llm/rag-integrations", json={"data": []})
     result = runner.invoke(cli, ["rag-target", "list"])
     assert result.exit_code == 0
 
 
 def test_mcp_target_list(runner: CliRunner, requests_mock) -> None:
-    requests_mock.get(f"{DATASET_BASE}/api/v1/mcp-integrations", json={"data": []})
+    requests_mock.get(f"{DATASET_BASE}/api/v1/llm/mcp-integrations", json={"data": []})
     result = runner.invoke(cli, ["mcp-target", "list"])
     assert result.exit_code == 0
 
