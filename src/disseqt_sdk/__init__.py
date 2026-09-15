@@ -37,6 +37,18 @@ from .policy import (
 )
 from .policy import parse as parse_policy
 from .red_team import RedTeamer, red_team
+from .resources import (
+    ByovValidatorsResource,
+    McpTargetsResource,
+    OutputValidationsResource,
+    PacksResource,
+    RagTargetsResource,
+    RagValidationsResource,
+    RunsResource,
+    SessionsResource,
+    TargetsResource,
+    VulnerabilitiesResource,
+)
 from .telemetry import cost_accumulator
 
 __all__ = [
@@ -48,6 +60,7 @@ __all__ = [
     "BaseSingleTurnAttack",
     "BaseVulnerability",
     "BlockedError",
+    "ByovValidatorsResource",
     "Client",
     "DECISION_BLOCK",
     "DECISION_BORDERLINE",
@@ -56,12 +69,21 @@ __all__ = [
     "GuardResult",
     "Guardrails",
     "HTTPError",
+    "McpTargetsResource",
+    "OutputValidationsResource",
+    "PacksResource",
     "PolicyDecision",
     "PolicyRule",
     "PolicyRuleset",
+    "RagTargetsResource",
+    "RagValidationsResource",
     "RedTeamer",
+    "RunsResource",
     "SDKConfigInput",
     "SDKVersionBlockedError",
+    "SessionsResource",
+    "TargetsResource",
+    "VulnerabilitiesResource",
     "any_blocking",
     "configure_logging",
     "cost_accumulator",

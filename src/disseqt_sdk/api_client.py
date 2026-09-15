@@ -77,6 +77,31 @@ class DisseqtAPIClient:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        # Resource clients — lazy imports to avoid a circular reference at
+        # module load time (resources.py depends on this file's exports).
+        from .resources import (
+            ByovValidatorsResource,
+            McpTargetsResource,
+            OutputValidationsResource,
+            PacksResource,
+            RagTargetsResource,
+            RagValidationsResource,
+            RunsResource,
+            SessionsResource,
+            TargetsResource,
+            VulnerabilitiesResource,
+        )
+
+        self.targets = TargetsResource(self)
+        self.rag_targets = RagTargetsResource(self)
+        self.mcp_targets = McpTargetsResource(self)
+        self.packs = PacksResource(self)
+        self.runs = RunsResource(self)
+        self.output_validations = OutputValidationsResource(self)
+        self.rag_validations = RagValidationsResource(self)
+        self.sessions = SessionsResource(self)
+        self.byov_validators = ByovValidatorsResource(self)
+        self.vulnerabilities = VulnerabilitiesResource(self)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -159,6 +184,68 @@ class DisseqtAPIClient:
                     f"Failed to decode JSON response: {e}. " f"Response text: {response.text[:200]}"
                 ) from e
 
+        except requests.RequestException as e:
+            raise HTTPError(
+                status_code=0,
+                message=f"Network error: {e}",
+                response_body="",
+            ) from e
+
+    def _request_abs(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_payload: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """HTTP request against ``base_url + path`` (skips the packs prefix).
+
+        Used by the resource clients (``client.targets``, ``client.packs``,
+        …) whose endpoints live at absolute ``/api/v1/*`` paths on the same
+        gateway. Same headers, same 426 handling, same error envelope as
+        :meth:`_request`.
+        """
+        url = f"{self.base_url}{path}"
+        headers = self._build_headers()
+        query_params: dict[str, str] | None = None
+        if params:
+            query_params = {k: str(v) for k, v in params.items() if v is not None}
+        try:
+            response = requests.request(
+                method,
+                url,
+                json=json_payload,
+                params=query_params,
+                headers=headers,
+                timeout=self.timeout,
+            )
+            check_version_notice(response.headers)
+            if not response.ok:
+                body = response.text[:512] if response.text else ""
+                blocked = _version_blocked_error(
+                    response.status_code, response.headers, response.text
+                )
+                if blocked is not None:
+                    raise blocked
+                raise HTTPError(
+                    status_code=response.status_code,
+                    message="API request failed",
+                    response_body=body,
+                )
+            if response.status_code == 204 or not response.text:
+                return {"status": "ok"}
+            try:
+                raw = response.json()
+                if raw is None:
+                    return {"status": "ok"}
+                if isinstance(raw, list):
+                    return {"data": raw}
+                return cast(dict[str, Any], raw)
+            except json.JSONDecodeError as e:
+                raise ValueError(
+                    f"Failed to decode JSON response: {e}. " f"Response text: {response.text[:200]}"
+                ) from e
         except requests.RequestException as e:
             raise HTTPError(
                 status_code=0,
