@@ -12,6 +12,7 @@ import requests
 from disseqt_logging import digest, get_logger
 
 from ._version import check_version_notice, sdk_identity_headers
+from .auth import AuthMissingError
 from .models.composite_score import CompositeScoreRequest
 from .models.themes_classifier import ThemesClassifierRequest
 from .policy import BlockedError, any_blocking, is_async
@@ -253,6 +254,9 @@ class Client:
             ValueError: When ``policies`` is set without an
                 ``application_name``, or contains a blank / non-string
                 entry.
+            AuthMissingError: No creds from kwargs or
+                ``~/.disseqt/config.json``. Fails at construction
+                instead of the first API call.
         """
         default_policies: list[str] | None = None
         if policies:
@@ -285,6 +289,13 @@ class Client:
 
         self.project_id = project_id or ""
         self.api_key = api_key or ""
+        if not self.project_id or not self.api_key:
+            raise AuthMissingError(
+                "Missing project_id and/or api_key. Provide them via:\n"
+                "  1. Client(project_id=..., api_key=...)\n"
+                "  2. `disseqt login` (writes ~/.disseqt/config.json)\n"
+                "  3. env vars DISSEQT_PROJECT_ID and DISSEQT_API_KEY"
+            )
         self.base_url = base_url
         self.timeout = timeout
         self.application_name = application_name

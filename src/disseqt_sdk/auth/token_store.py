@@ -38,6 +38,14 @@ class AuthConfigPermissionError(Exception):
     """Raised when the on-disk config is readable by anyone but the owner."""
 
 
+class AuthMissingError(Exception):
+    """Raised when a :class:`Client` is constructed with no resolvable creds.
+
+    Fails at construction rather than deferring to the first API call, so
+    misconfiguration surfaces where it is caused, not where it is used.
+    """
+
+
 def load() -> dict[str, Any] | None:
     """Return the stored auth dict, or ``None`` if no config exists.
 
