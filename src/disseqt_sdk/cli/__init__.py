@@ -15,9 +15,7 @@ from .login import login as login_cmd
 from .login import logout as logout_cmd
 from .policy import policy as policy_group
 from .redteam import redteam as redteam_group
-from .run import run as run_cmd
 from .scan import scan as scan_cmd
-from .validate import validate as validate_cmd
 from .whoami import whoami as whoami_cmd
 
 byov_group = _resources.byov
@@ -39,14 +37,12 @@ vulnerability_group = _resources.vulnerability
 def cli() -> None:
     """Disseqt AI SDK command-line interface.
 
-    Runtime validation, red-team, policy, and scan tools. Auth flows
-    from environment variables — see ``disseqt validate --help`` for
-    the required set.
+    Red-team, GRC policy, prompt-pack, and scan tools. Auth flows from
+    environment variables — see ``disseqt login --help`` for the
+    required set.
     """
 
 
-cli.add_command(validate_cmd)
-cli.add_command(run_cmd)
 cli.add_command(redteam_group)
 cli.add_command(policy_group)
 cli.add_command(scan_cmd)
