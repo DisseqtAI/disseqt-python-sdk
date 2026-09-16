@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Mapping
-from typing import Any, Protocol, cast, runtime_checkable
+from typing import Any, cast
 
 import requests
 
@@ -22,9 +22,6 @@ from .factories import (
     _RagFactory,
     _ThemesFactory,
 )
-from .models.composite_score import CompositeScoreRequest
-from .models.themes_classifier import ThemesClassifierRequest
-from .policy import BlockedError, any_blocking, is_async
 from .registry import get_validator_metadata
 from .routes import build_validator_url
 from .validators.base import BaseValidator, ThemesClassifierValidator
@@ -44,16 +41,6 @@ def _load_stored_auth() -> dict[str, Any] | None:
         return _load()
     except Exception:
         return None
-
-
-@runtime_checkable
-class SupportsInputData(Protocol):
-    """Anything that can serialize itself to the wire-shape ``input_data``
-    dict — every ``disseqt_sdk.models`` request object implements this, so
-    a bare model (e.g. ``InputValidationRequest``) can be passed straight
-    to :meth:`Client.validate` together with ``policies=[...]``."""
-
-    def to_input_data(self) -> dict[str, Any]: ...
 
 
 class HTTPError(Exception):
@@ -182,29 +169,10 @@ class Client:
        passed to :meth:`validate`. Hits
        ``/api/v1/sdk/validators/composite-score``. No policy involved.
 
-    3. **Run one or more published realtime policies** — pass
-       ``policies=[...]`` to :meth:`validate`, with or without a
-       validator::
-
-           from disseqt_sdk import any_blocking
-
-           result = client.validate(
-               InputValidationRequest(prompt="user prompt here"),
-               policies=["b1f8…"],
-           )
-           if any_blocking(result):
-               ...  # at least one policy said BLOCK
-
-       For each policy id, the server fetches the policy from
-       disseqt-realtime-policies-service, runs every validator the policy
-       specifies (with the policy's thresholds and decision strategy),
-       aggregates a BLOCK/PASS verdict, and publishes the result to
-       ``policy.validation.result.v1`` so it shows up on the Decisions
-       dashboard. The policy endpoints live on their own base URL
-       (``realtime_policy_base_url``) so they can be mocked or pointed at
-       a local server during tests without disturbing the validator base
-       URL. Requires ``application_name`` on the client.
-
+    The prior *policies=[...]* shape (server-side realtime-policy
+    evaluation) is not exposed in this release — the runtime evaluate
+    endpoint it targeted is not currently served by any in-scope backend.
+    Class-based validators are unaffected.
     """
 
     def __init__(
@@ -214,8 +182,6 @@ class Client:
         base_url: str | None = None,
         timeout: int = 30,
         application_name: str | None = None,
-        realtime_policy_base_url: str = "https://api.disseqt.ai/realtime-validations",
-        policies: list[str] | None = None,
     ) -> None:
         """Initialize the Disseqt SDK client.
 
@@ -226,66 +192,20 @@ class Client:
                 ``/sdk/validators/...`` endpoints).
             timeout: Request timeout in seconds
             application_name: Logical name of the calling application
-                (e.g. ``"checkout-bot"``). REQUIRED to evaluate policies
-                (a client-level ``policies`` default or per-call
-                ``validate(..., policies=[...])``) — the
-                ``policy.validation.result.v1`` ledger uses this to
-                show which application produced each decision. Mirrors
-                ``service_name`` on :class:`DisseqtAgenticClient`.
-            realtime_policy_base_url: Base URL of the realtime-policy
-                evaluate endpoint. Defaults to the
-                ``/realtime-validations`` gateway — the evaluate
-                endpoint is served by production-monitoring, the same
-                service that hosts the validators (the
-                ``/realtime-policies`` gateway is the policy CRUD
-                dashboard and has no SDK routes). Kept separate from
-                ``base_url`` so the two endpoints can be mocked /
-                routed independently — override for local testing
-                (e.g. ``http://localhost:9010``) without disturbing
-                ``base_url`` callers.
-            policies: Optional default list of published policy ids.
-                When set, EVERY ``validate()`` call evaluates these
-                policies unless the call passes its own ``policies=``
-                (per-call always wins; there is no per-call opt-out —
-                use a second Client for ungoverned paths). Composite-
-                score and themes-classifier requests are incompatible
-                with policies and run classically, without the default.
-                An empty list means "no default", so env-driven config
-                degrades naturally::
-
-                    ids = [p for p in os.environ.get("DISSEQT_POLICIES", "").split(",") if p]
-                    client = Client(..., application_name="checkout-bot", policies=ids)
-
-                The list is copied defensively; later mutation of the
-                caller's list does not affect the client.
+                (e.g. ``"checkout-bot"``). Recorded on outbound requests
+                for observability. Mirrors ``service_name`` on
+                :class:`DisseqtAgenticClient`.
 
         Raises:
-            ValueError: When ``policies`` is set without an
-                ``application_name``, or contains a blank / non-string
-                entry.
             AuthMissingError: No creds from kwargs or
                 ``~/.disseqt/config.json``. Fails at construction
                 instead of the first API call.
         """
-        default_policies: list[str] | None = None
-        if policies:
-            default_policies = list(policies)
-            if not all(isinstance(p, str) and p.strip() for p in default_policies):
-                raise ValueError(
-                    "Client(policies=...) must be a list of policy-id strings "
-                    f"(got {default_policies!r})"
-                )
-            if not (application_name and application_name.strip()):
-                raise ValueError(
-                    "application_name is required when Client(policies=...) is "
-                    "set — the Decisions ledger attributes each decision to "
-                    "the calling application"
-                )
         # Resolution order: explicit kwargs → ``~/.disseqt/config.json``
         # (written by ``disseqt login``). Env-var fallback stays in the
-        # CLI's ``build_client``; the SDK constructor only reads the local
-        # config so library callers get a predictable single source of
-        # truth. Missing creds still surface at first API call as today.
+        # CLI; the SDK constructor only reads the local config so library
+        # callers get a predictable single source of truth. Missing creds
+        # still surface at first API call as today.
         if not (project_id and api_key):
             stored = _load_stored_auth()
             if stored is not None:
@@ -308,8 +228,6 @@ class Client:
         self.base_url = base_url
         self.timeout = timeout
         self.application_name = application_name
-        self.realtime_policy_base_url = realtime_policy_base_url
-        self.policies = default_policies
 
         # Factory namespaces mirror the Node SDK's ``client.input.*`` /
         # ``client.rag.*`` / etc. ergonomics. Each method builds and returns
@@ -383,95 +301,6 @@ class Client:
         one-line delegator so existing callers keep working.
         """
         return self.validate(request)
-
-    def _validate_with_policies(
-        self,
-        request: (
-            BaseValidator | ThemesClassifierValidator | CompositeScoreEvaluator | SupportsInputData
-        ),
-        policies: list[str],
-    ) -> dict[str, Any]:
-        """Orchestrate shape 2/3 of :meth:`validate` (``policies=[...]``).
-
-        Every client-side rule is checked — and raises ``ValueError`` —
-        BEFORE any network call is made.
-        """
-        # Normalize first: a one-shot iterable (generator) would otherwise
-        # be exhausted by validation and silently evaluate zero policies.
-        try:
-            policy_ids = list(policies)
-        except TypeError:
-            raise ValueError(
-                f"policies must be a list of policy-id strings (got {policies!r})"
-            ) from None
-        if not policy_ids or not all(isinstance(p, str) and p.strip() for p in policy_ids):
-            raise ValueError(
-                "policies must be a non-empty list of policy-id strings " f"(got {policy_ids!r})"
-            )
-        if isinstance(
-            request,
-            (
-                ThemesClassifierValidator,
-                CompositeScoreEvaluator,
-                ThemesClassifierRequest,
-                CompositeScoreRequest,
-            ),
-        ):
-            raise ValueError(
-                "policies=[...] is not supported with composite-score or "
-                "themes-classifier requests — those endpoints have their own "
-                "aggregation and are never policy-evaluated"
-            )
-        application_name = self.application_name
-        if not (application_name and application_name.strip()):
-            raise ValueError(
-                "application_name is required to evaluate policies — set "
-                "Client(application_name=...) so the Decisions ledger can "
-                "attribute each decision to your application"
-            )
-
-        # Both shapes carry the input on an object that knows its wire
-        # form. A validator's payload already contains the renamed
-        # input_data; bare models serialize themselves. A validator's
-        # config_input (threshold, custom labels, llm_as_a_judge flag, …)
-        # is forwarded to the policy evaluation too, so per-validator
-        # config reaches the server-side policy engine; bare models carry
-        # no config.
-        config_input: dict[str, Any] | None = None
-        if isinstance(request, BaseValidator):
-            payload = request.to_payload()
-            input_data = dict(payload.get("input_data") or {})
-            config_input = dict(payload.get("config_input") or {}) or None
-        elif isinstance(request, SupportsInputData):
-            input_data = request.to_input_data()
-        else:
-            raise ValueError(
-                "request must be a validator instance or a disseqt_sdk.models "
-                f"request object, got {type(request).__name__}"
-            )
-        if not input_data:
-            raise ValueError(
-                "the request carries no input fields — set prompt/context/"
-                "response (or agentic fields) so the policies have something "
-                "to evaluate"
-            )
-
-        # All guards passed — now (and only now) touch the network.
-        validation: dict[str, Any] | None = (
-            self._run_validator(request) if isinstance(request, BaseValidator) else None
-        )
-        envelopes = [
-            self._post_policy_evaluate(
-                policy_id, input_data, application_name, config_input=config_input
-            )
-            for policy_id in policy_ids
-        ]
-        logger.info(
-            "validation.policies",
-            policy_count=len(envelopes),
-            with_validator=validation is not None,
-        )
-        return {"validation": validation, "policies": envelopes}
 
     def _run_validator(
         self, request: BaseValidator | ThemesClassifierValidator | CompositeScoreEvaluator
@@ -604,81 +433,3 @@ class Client:
             # Use default response handling (no forced normalization)
             return server_response
 
-    def _post_policy_evaluate(
-        self,
-        policy_id: str,
-        input_data: dict[str, Any],
-        application_name: str,
-        config_input: dict[str, Any] | None = None,
-        request_id: str | None = None,
-    ) -> dict[str, Any]:
-        """POST one policy-evaluation request and decode the envelope.
-
-        Transport for :meth:`validate` (``policies=[...]``).
-        Raises :class:`HTTPError` on any non-2xx
-        (unknown/unpublished policies answer 404 DSQ-4040) and
-        ``ValueError`` on an undecodable body.
-        """
-        url = (
-            f"{self.realtime_policy_base_url.rstrip('/')}"
-            f"/api/v1/sdk/policies/{policy_id}/evaluate"
-        )
-        payload: dict[str, Any] = {
-            "input_data": input_data,
-            "application_name": application_name,
-        }
-        if config_input is not None:
-            payload["config_input"] = config_input
-
-        headers = self._build_headers()
-        if request_id is not None:
-            headers["X-Request-Id"] = request_id
-
-        started = time.monotonic()
-        try:
-            http_resp = requests.post(url, json=payload, headers=headers, timeout=self.timeout)
-        except requests.RequestException as e:
-            logger.error(
-                "policy.network_error",
-                policy_id=policy_id,
-                latency_ms=round((time.monotonic() - started) * 1000, 1),
-                exc_info=True,
-            )
-            raise HTTPError(
-                status_code=0,
-                message=f"Network error: {e}",
-                response_body="",
-            ) from e
-
-        latency_ms = round((time.monotonic() - started) * 1000, 1)
-        check_version_notice(http_resp.headers)
-        if not http_resp.ok:
-            logger.error(
-                "policy.http_error",
-                policy_id=policy_id,
-                status=http_resp.status_code,
-                latency_ms=latency_ms,
-            )
-            blocked = _version_blocked_error(
-                http_resp.status_code, http_resp.headers, http_resp.text
-            )
-            if blocked is not None:
-                raise blocked
-            raise HTTPError(
-                status_code=http_resp.status_code,
-                message="Policy evaluation failed",
-                response_body=http_resp.text[:512] if http_resp.text else "",
-            )
-        try:
-            data = http_resp.json()
-        except json.JSONDecodeError as e:
-            raise ValueError(
-                f"Failed to decode policy response: {e}. Body: {http_resp.text[:200]}"
-            ) from e
-        logger.info(
-            "policy.response",
-            policy_id=policy_id,
-            status=http_resp.status_code,
-            latency_ms=latency_ms,
-        )
-        return cast(dict[str, Any], data)
