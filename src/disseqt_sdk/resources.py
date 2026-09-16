@@ -213,8 +213,11 @@ class PacksResource(_Base):
             "POST", f"{self._BASE}/upload/sessions/{session_id}/chunks", json_payload=payload
         )
 
-    def upload_session_finish(self, session_id: str) -> dict[str, Any]:
-        return self._req("POST", f"{self._BASE}/upload/sessions/{session_id}/finish")
+    def upload_session_complete(self, session_id: str) -> dict[str, Any]:
+        # Backend route: POST /api/v1/prompt-packs/upload/sessions/:sid/complete
+        # (server.go:2196, handler completeChunkedUpload). The prior /finish
+        # suffix was never registered.
+        return self._req("POST", f"{self._BASE}/upload/sessions/{session_id}/complete")
 
 
 class RunsResource(_Base):

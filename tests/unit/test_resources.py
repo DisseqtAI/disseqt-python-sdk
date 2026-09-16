@@ -157,6 +157,19 @@ class TestPacksResource:
         assert requests_mock.last_request.method == "PATCH"
         assert requests_mock.last_request.url.endswith("/p1/unpublish")
 
+    def test_upload_session_complete_route(
+        self, requests_mock, client: DisseqtAPIClient
+    ) -> None:
+        # G3 regression: backend finisher is /upload/sessions/:sid/complete
+        # (server.go:2196). Prior SDK method upload_session_finish hit the
+        # unregistered /finish suffix.
+        requests_mock.post(
+            f"{self.PATH}/upload/sessions/s1/complete", json={"pack_id": "p1"}
+        )
+        assert client.packs.upload_session_complete("s1") == {"pack_id": "p1"}
+        assert requests_mock.last_request.method == "POST"
+        assert requests_mock.last_request.url.endswith("/upload/sessions/s1/complete")
+
     def test_download_returns_csv_bytes(self, requests_mock, client: DisseqtAPIClient) -> None:
         csv_body = b"id,prompt\n1,hello\n2,world\n"
         requests_mock.get(
