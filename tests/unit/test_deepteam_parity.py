@@ -18,7 +18,6 @@ from disseqt_sdk import (
 )
 from disseqt_sdk.cli import cli
 from disseqt_sdk.models import Example, SDKConfigInput
-from disseqt_sdk.models.input_validation import InputValidationRequest
 
 # NOTE: TestPhase0bBlockedError, TestPhase0cBorderline, TestPhase2aGuardrails,
 # and TestCliValidate were removed alongside the server-side policy-evaluate

@@ -182,9 +182,7 @@ def test_breach_get_missing_errors(runner: CliRunner, requests_mock) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_analytics_prompts_stats_hits_bare_route(
-    runner: CliRunner, requests_mock
-) -> None:
+def test_analytics_prompts_stats_hits_bare_route(runner: CliRunner, requests_mock) -> None:
     # G3 regression (Node parity): backend registers /prompts-stats at
     # jailbreak_routes.go:57. The prior /analytics/prompts-stats path is a 404.
     requests_mock.get(f"{_JAILBREAK}/prompts-stats", json={"total": 0})
@@ -221,8 +219,6 @@ def test_eval_csv_polls_evaluate_csv_status_endpoint(
         ],
     )
     assert result.exit_code == 0, result.output
-    poll_reqs = [
-        r for r in requests_mock.request_history if r.url.endswith("/evaluate-csv/j1")
-    ]
+    poll_reqs = [r for r in requests_mock.request_history if r.url.endswith("/evaluate-csv/j1")]
     assert poll_reqs, "poll never fired against /evaluate-csv/{job_id}"
     assert poll_reqs[-1].method == "GET"

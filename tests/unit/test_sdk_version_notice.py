@@ -12,7 +12,7 @@ import pytest
 from requests_mock import ANY
 
 import disseqt_sdk._version as _version
-from disseqt_sdk import Client, DisseqtAPIClient, HTTPError, SDKVersionBlockedError
+from disseqt_sdk import DisseqtAPIClient, HTTPError, SDKVersionBlockedError
 from disseqt_sdk._version import SDK_VERSION
 from disseqt_sdk.validators.input.safety import ToxicityValidator
 

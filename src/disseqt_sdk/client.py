@@ -256,9 +256,7 @@ class Client:
 
     def validate(
         self,
-        request: (
-            BaseValidator | ThemesClassifierValidator | CompositeScoreEvaluator
-        ),
+        request: BaseValidator | ThemesClassifierValidator | CompositeScoreEvaluator,
     ) -> dict[str, Any]:
         """Run a single validator (or composite/themes) and return its response.
 
@@ -289,9 +287,7 @@ class Client:
 
     def validate_sync(
         self,
-        request: (
-            BaseValidator | ThemesClassifierValidator | CompositeScoreEvaluator
-        ),
+        request: BaseValidator | ThemesClassifierValidator | CompositeScoreEvaluator,
     ) -> dict[str, Any]:
         """Alias for :meth:`validate` retained for API stability.
 
@@ -431,4 +427,3 @@ class Client:
         else:
             # Use default response handling (no forced normalization)
             return server_response
-
