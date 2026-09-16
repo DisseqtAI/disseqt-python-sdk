@@ -295,9 +295,8 @@ class Client:
     ) -> dict[str, Any]:
         """Alias for :meth:`validate` retained for API stability.
 
-        Prior versions layered BlockedError-on-policy-verdict semantics on
-        top of ``validate``; that behaviour was tied to the removed
-        server-side policy-evaluate path and no longer applies. Now a
+        Historical block-on-verdict semantics were tied to the removed
+        server-side policy-evaluate path and no longer apply. Now a
         one-line delegator so existing callers keep working.
         """
         return self.validate(request)
