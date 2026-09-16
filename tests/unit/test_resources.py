@@ -157,15 +157,11 @@ class TestPacksResource:
         assert requests_mock.last_request.method == "PATCH"
         assert requests_mock.last_request.url.endswith("/p1/unpublish")
 
-    def test_upload_session_complete_route(
-        self, requests_mock, client: DisseqtAPIClient
-    ) -> None:
+    def test_upload_session_complete_route(self, requests_mock, client: DisseqtAPIClient) -> None:
         # G3 regression: backend finisher is /upload/sessions/:sid/complete
         # (server.go:2196). Prior SDK method upload_session_finish hit the
         # unregistered /finish suffix.
-        requests_mock.post(
-            f"{self.PATH}/upload/sessions/s1/complete", json={"pack_id": "p1"}
-        )
+        requests_mock.post(f"{self.PATH}/upload/sessions/s1/complete", json={"pack_id": "p1"})
         assert client.packs.upload_session_complete("s1") == {"pack_id": "p1"}
         assert requests_mock.last_request.method == "POST"
         assert requests_mock.last_request.url.endswith("/upload/sessions/s1/complete")
@@ -551,3 +547,127 @@ class TestSessionsGetBreach:
         requests_mock.get(self.BREACHES_URL, json=[{"id": "b1"}])
         with pytest.raises(KeyError):
             client.sessions.get_breach("run-1", "nope")
+
+
+# ---------------------------------------------------------------------------
+# MrResource — /api/v1/mr-jailbreak/*
+# ---------------------------------------------------------------------------
+
+
+class TestMrResourceTechniques:
+    PATH = f"{BASE_URL}/api/v1/mr-jailbreak/techniques"
+
+    def test_create(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.post(self.PATH, json={"id": "mt1"})
+        assert client.mr.create_technique({"name": "goat"}) == {"id": "mt1"}
+        assert requests_mock.request_history[0].json() == {"name": "goat"}
+
+    def test_list(self, requests_mock, client: DisseqtAPIClient) -> None:
+        # HTTP layer wraps list bodies in {"data": [...]}
+        requests_mock.get(self.PATH, json=[{"id": "mt1"}])
+        assert client.mr.list_techniques() == {"data": [{"id": "mt1"}]}
+
+    def test_get(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.get(f"{self.PATH}/mt1", json={"id": "mt1"})
+        assert client.mr.get_technique("mt1") == {"id": "mt1"}
+
+    def test_update(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.patch(f"{self.PATH}/mt1", json={"id": "mt1", "name": "renamed"})
+        assert client.mr.update_technique("mt1", {"name": "renamed"})["name"] == "renamed"
+
+    def test_delete(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.delete(f"{self.PATH}/mt1", status_code=204)
+        assert client.mr.delete_technique("mt1") == {"status": "ok"}
+
+    def test_register(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.post(f"{self.PATH}/crescendo/register", json={"registered": True})
+        assert client.mr.register_technique("crescendo", {"impl": "..."}) == {"registered": True}
+        assert requests_mock.last_request.url.endswith("/techniques/crescendo/register")
+
+
+class TestMrResourceAgents:
+    PATH = f"{BASE_URL}/api/v1/mr-jailbreak/agents"
+
+    def test_create(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.post(self.PATH, json={"id": "a1"})
+        assert client.mr.create_agent({"name": "dan"}) == {"id": "a1"}
+
+    def test_list(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.get(self.PATH, json=[{"name": "dan"}])
+        assert client.mr.list_agents() == {"data": [{"name": "dan"}]}
+
+    def test_get(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.get(f"{self.PATH}/a1", json={"id": "a1"})
+        assert client.mr.get_agent("a1") == {"id": "a1"}
+
+    def test_update(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.patch(f"{self.PATH}/a1", json={"id": "a1"})
+        assert client.mr.update_agent("a1", {"description": "d"}) == {"id": "a1"}
+
+    def test_delete(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.delete(f"{self.PATH}/a1", status_code=204)
+        assert client.mr.delete_agent("a1") == {"status": "ok"}
+
+
+class TestMrResourceJobs:
+    PATH = f"{BASE_URL}/api/v1/mr-jailbreak/jobs"
+
+    def test_create(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.post(self.PATH, json={"id": "j1"})
+        assert client.mr.create_job({"target_id": "t1"}) == {"id": "j1"}
+
+    def test_list(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.get(self.PATH, json={"data": []})
+        assert client.mr.list_jobs() == {"data": []}
+
+    def test_get(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.get(f"{self.PATH}/j1", json={"id": "j1"})
+        assert client.mr.get_job("j1") == {"id": "j1"}
+
+    def test_update_status(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.patch(f"{self.PATH}/j1/status", json={"id": "j1", "status": "paused"})
+        assert client.mr.update_job_status("j1", "paused") == {"id": "j1", "status": "paused"}
+        assert requests_mock.request_history[0].json() == {"status": "paused"}
+
+    def test_interactions(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.get(f"{self.PATH}/j1/interactions", json=[{"id": "i1"}])
+        assert client.mr.get_job_interactions("j1") == {"data": [{"id": "i1"}]}
+
+    def test_available_states(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.get(f"{self.PATH}/j1/available-states", json=["running", "paused"])
+        assert client.mr.get_job_available_states("j1") == {"data": ["running", "paused"]}
+
+
+class TestMrResourceInteractionsAndBatch:
+    BASE = f"{BASE_URL}/api/v1/mr-jailbreak"
+
+    def test_analyze(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.post(f"{self.BASE}/interactions/analyze", json={"score": 0.9})
+        assert client.mr.analyze_interaction({"messages": []}) == {"score": 0.9}
+
+    def test_generate_next(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.post(f"{self.BASE}/interactions/generate-next", json={"prompt": "..."})
+        assert client.mr.generate_next_interaction({"session_id": "s1"}) == {"prompt": "..."}
+
+    def test_batch_automate(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.post(f"{self.BASE}/batch-automate", json={"job_id": "j1"})
+        assert client.mr.batch_automate({"target_id": "t1"}) == {"job_id": "j1"}
+
+
+class TestMrResourceStrategies:
+    BASE = f"{BASE_URL}/api/v1/mr-jailbreak/strategies"
+
+    def test_successful_paths(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.get(f"{self.BASE}/successful-paths", json=[{"path": "p1"}])
+        assert client.mr.strategy_successful_paths({"limit": 10}) == {"data": [{"path": "p1"}]}
+
+    def test_agents_in_phase(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.get(f"{self.BASE}/phase/agents", json=[{"name": "a1"}])
+        assert client.mr.strategy_agents_in_phase("exploit") == {"data": [{"name": "a1"}]}
+        # Confirm phase went as a query param.
+        assert requests_mock.last_request.qs.get("phase") == ["exploit"]
+
+    def test_techniques_in_phase(self, requests_mock, client: DisseqtAPIClient) -> None:
+        requests_mock.get(f"{self.BASE}/phase/techniques", json=[{"id": "t1"}])
+        assert client.mr.strategy_techniques_in_phase("recon") == {"data": [{"id": "t1"}]}
+        assert requests_mock.last_request.qs.get("phase") == ["recon"]

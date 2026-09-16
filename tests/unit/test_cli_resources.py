@@ -105,9 +105,7 @@ def test_target_probe(runner: CliRunner, requests_mock) -> None:
     assert '"ok": true' in result.output
 
 
-def test_target_test_hits_id_test_connection_route(
-    runner: CliRunner, requests_mock
-) -> None:
+def test_target_test_hits_id_test_connection_route(runner: CliRunner, requests_mock) -> None:
     # G3 regression: `target test` must POST /:id/test-connection, not /:id/test.
     requests_mock.post(
         f"{DATASET_BASE}/api/v1/llm/app-integrations/t1/test-connection",
@@ -298,6 +296,31 @@ def test_pp_run_reveal_command_removed(runner: CliRunner) -> None:
     result = runner.invoke(cli, ["pp-run", "reveal", "r1", "o1"])
     assert result.exit_code != 0
     assert "No such command" in result.output or "Usage" in result.output
+
+
+def test_pp_run_validate_hits_correct_url(runner: CliRunner, requests_mock) -> None:
+    requests_mock.post(
+        f"{DATASET_BASE}/api/v1/prompt-packs/runs/r1/validate-outputs",
+        json={"id": "v1"},
+    )
+    result = runner.invoke(
+        cli, ["pp-run", "validate", "r1", "--json", '{"validators": ["toxicity"]}']
+    )
+    assert result.exit_code == 0, result.output
+    assert '"id": "v1"' in result.output
+    sent = requests_mock.request_history[0].json()
+    assert sent == {"validators": ["toxicity"]}
+
+
+def test_pp_run_validate_no_body(runner: CliRunner, requests_mock) -> None:
+    # Without --json the CLI sends {} — same shape as `output-validation create`.
+    requests_mock.post(
+        f"{DATASET_BASE}/api/v1/prompt-packs/runs/r2/validate-outputs",
+        json={"id": "v2"},
+    )
+    result = runner.invoke(cli, ["pp-run", "validate", "r2"])
+    assert result.exit_code == 0, result.output
+    assert requests_mock.request_history[0].json() == {}
 
 
 def test_pp_run_add_to_pack(runner: CliRunner, requests_mock) -> None:
