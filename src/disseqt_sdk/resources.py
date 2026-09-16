@@ -259,9 +259,11 @@ class RunsResource(_Base):
     def report(self, run_id: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         return self._req("GET", f"{self._BASE}/runs/{run_id}/report", params=params)
 
-    def reveal_output(self, run_id: str, output_id: str) -> dict[str, Any]:
-        """Reveal a masked run output (POST /runs/{run_id}/results/{output_id}/reveal)."""
-        return self._req("POST", f"{self._BASE}/runs/{run_id}/results/{output_id}/reveal")
+    # NOTE: reveal_output removed — no backend route exists for prompt-pack
+    # runs. The only reveal endpoint is on test-plan runs
+    # (test_plan_runs_routes.go:80), already exposed via
+    # TestPlanRunsResource.reveal(). If prompt-pack run outputs also need a
+    # reveal path, a new backend endpoint must land first.
 
     def add_to_pack(
         self,

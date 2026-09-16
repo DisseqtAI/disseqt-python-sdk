@@ -292,14 +292,12 @@ def test_pack_export_delegates_to_sdk(runner: CliRunner, requests_mock) -> None:
     assert "id,prompt" in result.output
 
 
-def test_pp_run_reveal(runner: CliRunner, requests_mock) -> None:
-    requests_mock.post(
-        f"{DATASET_BASE}/api/v1/prompt-packs/runs/r1/results/o1/reveal",
-        json={"revealed": True},
-    )
+def test_pp_run_reveal_command_removed(runner: CliRunner) -> None:
+    # G3 refusal: no backend route registered for prompt-pack run reveal.
+    # The command was removed — plan-run reveal remains the only reveal path.
     result = runner.invoke(cli, ["pp-run", "reveal", "r1", "o1"])
-    assert result.exit_code == 0, result.output
-    assert "revealed" in result.output
+    assert result.exit_code != 0
+    assert "No such command" in result.output or "Usage" in result.output
 
 
 def test_pp_run_add_to_pack(runner: CliRunner, requests_mock) -> None:

@@ -205,15 +205,11 @@ class TestRunsResource:
         requests_mock.post(f"{self.PATH}/runs/r1/cancel", json={"cancelled": True})
         assert client.runs.cancel("r1") == {"cancelled": True}
 
-    def test_reveal_output(self, requests_mock, client: DisseqtAPIClient) -> None:
-        requests_mock.post(
-            f"{self.PATH}/runs/r1/results/o1/reveal",
-            json={"revealed": True, "output_id": "o1"},
-        )
-        assert client.runs.reveal_output("r1", "o1") == {
-            "revealed": True,
-            "output_id": "o1",
-        }
+    def test_reveal_output_removed(self, client: DisseqtAPIClient) -> None:
+        # G3 refusal: no backend route registered for prompt-pack run reveal.
+        # The method was removed rather than papered over — reveal exists
+        # only on test-plan runs (TestPlanRunsResource.reveal).
+        assert not hasattr(client.runs, "reveal_output")
 
     def test_add_to_pack(self, requests_mock, client: DisseqtAPIClient) -> None:
         requests_mock.post(f"{self.PATH}/p1/prompts/add", json={"added": 2})

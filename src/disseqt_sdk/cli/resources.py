@@ -391,12 +391,10 @@ def pp_run_report(run_id: str) -> None:
     _get(f"/api/v1/prompt-packs/runs/{run_id}/report")
 
 
-@pp_run.command("reveal")
-@click.argument("run_id")
-@click.argument("output_id")
-def pp_run_reveal(run_id: str, output_id: str) -> None:
-    """Reveal a masked run output."""
-    _post(f"/api/v1/prompt-packs/runs/{run_id}/results/{output_id}/reveal")
+# NOTE: `pp-run reveal` removed — no backend route exists for prompt-pack run
+# reveal. Only /test-plan-runs/*/results/*/reveal exists (see the `plan-run
+# reveal` command). If prompt-pack outputs also need to be revealed, a new
+# backend endpoint must land first.
 
 
 @pp_run.command("add-to-pack")
