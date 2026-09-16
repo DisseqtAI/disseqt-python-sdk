@@ -391,10 +391,23 @@ def pp_run_report(run_id: str) -> None:
     _get(f"/api/v1/prompt-packs/runs/{run_id}/report")
 
 
-# NOTE: `pp-run reveal` removed — no backend route exists for prompt-pack run
-# reveal. Only /test-plan-runs/*/results/*/reveal exists (see the `plan-run
-# reveal` command). If prompt-pack outputs also need to be revealed, a new
-# backend endpoint must land first.
+@pp_run.command("validate")
+@click.argument("run_id")
+@_json_option("Validation payload JSON (validators, output_ids, etc.).")
+def pp_run_validate(run_id: str, json_body: str | None) -> None:
+    """Re-validate outputs of a run.
+
+    Alias for ``output-validation create`` — POSTs to
+    /api/v1/prompt-packs/runs/:run_id/validate-outputs. Kept on the pp-run
+    group for discoverability alongside outputs / trace / report.
+    """
+    _post(f"/api/v1/prompt-packs/runs/{run_id}/validate-outputs", _load_json_body(json_body))
+
+
+# NOTE: `pp-run reveal` intentionally NOT added — no backend route exists for
+# prompt-pack run reveal. Only /test-plan-runs/*/results/*/reveal is
+# registered (see the `plan-run reveal` command). If prompt-pack outputs also
+# need to be revealed, a new backend endpoint must land first.
 
 
 @pp_run.command("add-to-pack")
