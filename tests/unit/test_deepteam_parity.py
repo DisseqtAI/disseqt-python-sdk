@@ -10,14 +10,8 @@ import pytest
 from click.testing import CliRunner
 
 from disseqt_sdk import (
-    DECISION_BORDERLINE,
-    BaseGuard,
     BaseSingleTurnAttack,
     BaseVulnerability,
-    BlockedError,
-    Client,
-    Guardrails,
-    GuardResult,
     RedTeamer,
     cost_accumulator,
     red_team,
@@ -26,74 +20,10 @@ from disseqt_sdk.cli import cli
 from disseqt_sdk.models import Example, SDKConfigInput
 from disseqt_sdk.models.input_validation import InputValidationRequest
 
-BASE = "https://policies.test"
-P_BLOCK = "11111111-1111-4111-8111-111111111111"
-P_PASS = "22222222-2222-4222-8222-222222222222"
-TOX_URL = f"{BASE}/api/v1/sdk/validators/input-validation/toxicity"
-P_BLOCK_URL = f"{BASE}/api/v1/sdk/policies/{P_BLOCK}/evaluate"
-P_PASS_URL = f"{BASE}/api/v1/sdk/policies/{P_PASS}/evaluate"
-
-BLOCK_ENV = {
-    "status": "success",
-    "code": "DSQ-2000",
-    "data": {"policy_id": P_BLOCK, "decision": "BLOCK", "enforcement": "sync"},
-}
-PASS_ENV = {
-    "status": "success",
-    "code": "DSQ-2000",
-    "data": {"policy_id": P_PASS, "decision": "PASS", "enforcement": "sync"},
-}
-ASYNC_ENV = {
-    "status": "success",
-    "code": "DSQ-2000",
-    "data": {"policy_id": P_PASS, "decision": "PASS", "enforcement": "async"},
-}
-
-
-def make_client() -> Client:
-    return Client(
-        project_id="proj",
-        api_key="key",
-        base_url=BASE,
-        realtime_policy_base_url=BASE,
-        application_name="parity-tests",
-    )
-
-
-class TestPhase0bBlockedError:
-    def test_validate_sync_returns_result_on_pass(self, requests_mock):
-        requests_mock.post(P_PASS_URL, json=PASS_ENV)
-        result = make_client().validate_sync(InputValidationRequest(prompt="hi"), policies=[P_PASS])
-        assert isinstance(result, dict) and result.get("policies")
-
-    def test_validate_sync_raises_on_block(self, requests_mock):
-        requests_mock.post(P_BLOCK_URL, json=BLOCK_ENV)
-        with pytest.raises(BlockedError) as ei:
-            make_client().validate_sync(InputValidationRequest(prompt="hi"), policies=[P_BLOCK])
-        # Envelope is attached for downstream inspection.
-        assert isinstance(ei.value.result, dict)
-        assert ei.value.result["policies"][0]["data"]["decision"] == "BLOCK"
-
-    def test_raise_on_async_flag(self, requests_mock):
-        requests_mock.post(P_PASS_URL, json=ASYNC_ENV)
-        with pytest.raises(BlockedError, match="async"):
-            make_client().validate_sync(
-                InputValidationRequest(prompt="hi"),
-                policies=[P_PASS],
-                raise_on_async=True,
-            )
-
-
-class TestPhase0cBorderline:
-    def test_borderline_constant_exposed(self):
-        assert DECISION_BORDERLINE == "BORDERLINE"
-
-    def test_borderline_is_not_blocking_by_default(self):
-        from disseqt_sdk import is_blocking
-
-        env = {"decision": DECISION_BORDERLINE, "enforcement": "sync"}
-        # Explicit product decision — BORDERLINE doesn't gate.
-        assert is_blocking(env) is False
+# NOTE: TestPhase0bBlockedError, TestPhase0cBorderline, TestPhase2aGuardrails,
+# and TestCliValidate were removed alongside the server-side policy-evaluate
+# path (Guardrails, BlockedError, DECISION_BORDERLINE, BaseGuard,
+# `disseqt validate`, `disseqt run`). See CHANGELOG for details.
 
 
 class TestPhase1dEvaluationExamples:
@@ -116,32 +46,6 @@ class TestPhase1dEvaluationExamples:
     def test_empty_examples_omitted(self):
         cfg = SDKConfigInput(threshold=0.5)
         assert "judge" not in cfg.to_dict()
-
-
-class TestPhase2aGuardrails:
-    def test_guard_input_pass(self, requests_mock):
-        requests_mock.post(P_PASS_URL, json=PASS_ENV)
-        g = Guardrails(make_client(), input_guards=[P_PASS])
-        result = g.guard_input(InputValidationRequest(prompt="hi"))
-        assert isinstance(result, GuardResult)
-        assert result.blocked is False
-        assert len(result.policy_envelopes) == 1
-
-    def test_guard_input_block(self, requests_mock):
-        requests_mock.post(P_BLOCK_URL, json=BLOCK_ENV)
-        g = Guardrails(make_client(), input_guards=[P_BLOCK])
-        result = g.guard_input(InputValidationRequest(prompt="hi"))
-        assert result.blocked is True
-
-    def test_guard_input_no_guards_is_noop(self):
-        g = Guardrails(make_client())
-        assert g.guard_input(InputValidationRequest(prompt="hi")).blocked is False
-
-    def test_guard_accepts_base_guard_object(self, requests_mock):
-        requests_mock.post(P_PASS_URL, json=PASS_ENV)
-        guard = BaseGuard(policy_id=P_PASS, name="allow-toxic")
-        g = Guardrails(make_client(), input_guards=[guard])
-        assert g.guard_input(InputValidationRequest(prompt="hi")).blocked is False
 
 
 class TestPhase5aExtensions:
@@ -203,53 +107,10 @@ class TestPhase6Telemetry:
         assert len(bucket.entries) == 2
 
 
-class TestCliValidate:
-    """click CliRunner smoke tests — real HTTP intercepted by requests_mock."""
-
-    def _env(self, monkeypatch):
-        monkeypatch.setenv("DISSEQT_PROJECT_ID", "proj")
-        monkeypatch.setenv("DISSEQT_API_KEY", "key")
-        monkeypatch.setenv("DISSEQT_BASE_URL", BASE)
-        monkeypatch.setenv("DISSEQT_POLICY_BASE_URL", BASE)
-        monkeypatch.setenv("DISSEQT_APPLICATION_NAME", "cli-tests")
-
-    def test_validate_pass_exit_0(self, monkeypatch, requests_mock):
-        self._env(monkeypatch)
-        requests_mock.post(P_PASS_URL, json=PASS_ENV)
-        r = CliRunner().invoke(cli, ["validate", "--input", "hi", "--policy", P_PASS])
-        assert r.exit_code == 0, r.output
-
-    def test_validate_block_exit_1(self, monkeypatch, requests_mock):
-        self._env(monkeypatch)
-        requests_mock.post(P_BLOCK_URL, json=BLOCK_ENV)
-        r = CliRunner().invoke(cli, ["validate", "--input", "hi", "--policy", P_BLOCK])
-        assert r.exit_code == 1, r.output
-
-    def test_validate_missing_creds_exit_2(self, monkeypatch):
-        # No env set
-        monkeypatch.delenv("DISSEQT_PROJECT_ID", raising=False)
-        monkeypatch.delenv("DISSEQT_API_KEY", raising=False)
-        r = CliRunner().invoke(cli, ["validate", "--input", "hi", "--policy", P_PASS])
-        assert r.exit_code == 2, r.output
-
-    def test_run_yaml_fail_on_block(self, monkeypatch, requests_mock, tmp_path):
-        pytest.importorskip("yaml")
-        self._env(monkeypatch)
-        requests_mock.post(P_BLOCK_URL, json=BLOCK_ENV)
-        cfg = tmp_path / "cfg.yaml"
-        cfg.write_text(
-            "default_policies:\n"
-            f"  - {P_BLOCK}\n"
-            "cases:\n"
-            "  - name: c1\n"
-            "    input: hello\n"
-        )
-        r = CliRunner().invoke(cli, ["run", str(cfg), "--fail-on-block"])
-        assert r.exit_code == 1, r.output
-
-    # Removed: `disseqt scan` no longer shells out to a binary. The skeleton's
-    # _resolve_bin / DISSEQT_SCAN_BIN path was replaced in 4a1310a with pure-Python
-    # HTTP dispatch to disseqt-go; transport behavior is covered by tests/unit/test_scan.py.
+# NOTE: TestCliValidate (policies-based `disseqt validate` and
+# `disseqt run` smoke tests) removed alongside those commands. The
+# surviving CLI groups (redteam, resource groups, policy [GRC], scan)
+# are covered in their own test modules.
 
 
 class TestCliRedteamExpansion:

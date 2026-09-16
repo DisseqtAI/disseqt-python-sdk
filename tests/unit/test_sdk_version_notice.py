@@ -68,20 +68,10 @@ class TestIdentityHeaders:
         assert sent["X-SDK-Version"] == SDK_VERSION
         assert sent["User-Agent"] == f"disseqt-ai-sdk/{SDK_VERSION}"
 
-    def test_policy_evaluate_sends_version_headers(self, requests_mock, input_validation_request):
-        client = Client(
-            project_id="p",
-            api_key="k",
-            base_url="https://test-api.disseqt.ai",
-            realtime_policy_base_url="https://test-api.disseqt.ai",
-            application_name="test-app",
-        )
-        requests_mock.post(ANY, json={"decision": "PASS"})
-        client.validate(input_validation_request, policies=["policy-1"])
-
-        sent = requests_mock.request_history[0].headers
-        assert sent["X-SDK-Version"] == SDK_VERSION
-        assert sent["User-Agent"] == f"disseqt-ai-sdk/{SDK_VERSION}"
+    # NOTE: test_policy_evaluate_sends_version_headers removed with the
+    # policy-evaluate transport. Version-notice coverage on the validator
+    # path (above) and on DisseqtAPIClient (below) still exercises the
+    # same header-emission code path.
 
     def test_prompt_packs_client_sends_version_headers(self, requests_mock):
         api = DisseqtAPIClient(project_id="p", api_key="k", base_url="https://pp.example")
@@ -158,21 +148,8 @@ class TestVersionNotice:
         assert len(records) == 1
         assert records[0].getMessage().endswith(notice)
 
-    def test_policy_evaluate_path_also_warns(self, requests_mock, input_validation_request, caplog):
-        caplog.set_level(logging.WARNING, logger="disseqt_sdk")
-        client = Client(
-            project_id="p",
-            api_key="k",
-            base_url="https://test-api.disseqt.ai",
-            realtime_policy_base_url="https://test-api.disseqt.ai",
-            application_name="test-app",
-        )
-        requests_mock.post(
-            ANY, json={"decision": "PASS"}, headers={"X-SDK-Latest-Version": "9.9.9"}
-        )
-        client.validate(input_validation_request, policies=["policy-1"])
-
-        assert len(_notice_records(caplog)) == 1
+    # NOTE: test_policy_evaluate_path_also_warns removed with the policy
+    # transport. warn-once is still exercised on validator + prompt-packs.
 
     def test_prompt_packs_client_also_warns(self, requests_mock, caplog):
         caplog.set_level(logging.WARNING, logger="disseqt_sdk")
@@ -295,18 +272,9 @@ class TestSDKVersionBlockedError:
         assert "pip install -U disseqt-ai-sdk" in str(exc_info.value)
         assert exc_info.value.latest is None
 
-    def test_policy_evaluate_path_raises_typed_error(self, requests_mock, input_validation_request):
-        client = Client(
-            project_id="p",
-            api_key="k",
-            base_url="https://test-api.disseqt.ai",
-            realtime_policy_base_url="https://test-api.disseqt.ai",
-            application_name="test-app",
-        )
-        requests_mock.post(ANY, status_code=426, json=_BLOCK_BODY, headers=_BLOCK_HEADERS)
-
-        with pytest.raises(SDKVersionBlockedError):
-            client.validate(input_validation_request, policies=["policy-1"])
+    # NOTE: test_policy_evaluate_path_raises_typed_error removed with the
+    # policy transport. 426 handling is still verified on the validator
+    # path (above) and on DisseqtAPIClient (below).
 
     def test_prompt_packs_request_raises_typed_error(self, requests_mock):
         api = DisseqtAPIClient(project_id="p", api_key="k", base_url="https://pp.example")
