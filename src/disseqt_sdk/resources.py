@@ -699,9 +699,7 @@ class MrResource(_Base):
         return self._req("GET", f"{self._BASE}/strategies/successful-paths", params=params)
 
     def strategy_agents_in_phase(self, phase: str) -> dict[str, Any]:
-        return self._req(
-            "GET", f"{self._BASE}/strategies/phase/agents", params={"phase": phase}
-        )
+        return self._req("GET", f"{self._BASE}/strategies/phase/agents", params={"phase": phase})
 
     def strategy_techniques_in_phase(self, phase: str) -> dict[str, Any]:
         return self._req(
