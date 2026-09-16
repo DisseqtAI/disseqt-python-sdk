@@ -120,7 +120,11 @@ def target_delete(target_id: str) -> None:
 @_json_option("Optional test-payload JSON.")
 def target_test(target_id: str, json_body: str | None) -> None:
     """Test a saved integration by id."""
-    _post(f"/api/v1/llm/app-integrations/{target_id}/test", _load_json_body(json_body))
+    # Backend registers /:id/test-connection, not /:id/test (server.go:811).
+    _post(
+        f"/api/v1/llm/app-integrations/{target_id}/test-connection",
+        _load_json_body(json_body),
+    )
 
 
 @target.command("probe")

@@ -73,8 +73,17 @@ class TargetsResource(_Base):
         return self._req("DELETE", f"{self._BASE}/{target_id}")
 
     def test(self, target_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Test a saved integration by id."""
-        return self._req("POST", f"{self._BASE}/{target_id}/test", json_payload=payload or {})
+        """Test a saved integration by id.
+
+        Backend route: POST /api/v1/llm/app-integrations/:id/test-connection
+        (dataset-backend api/server.go:811). The bare ``/:id/test`` suffix is
+        not registered.
+        """
+        return self._req(
+            "POST",
+            f"{self._BASE}/{target_id}/test-connection",
+            json_payload=payload or {},
+        )
 
     def probe(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Test connection without saving (dry run)."""

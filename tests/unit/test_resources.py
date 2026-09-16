@@ -54,9 +54,15 @@ class TestTargetsResource:
         requests_mock.delete(f"{self.PATH}/t1", status_code=204)
         assert client.targets.delete("t1") == {"status": "ok"}
 
-    def test_test(self, requests_mock, client: DisseqtAPIClient) -> None:
-        requests_mock.post(f"{self.PATH}/t1/test", json={"ok": True})
+    def test_test_hits_id_test_connection_route(
+        self, requests_mock, client: DisseqtAPIClient
+    ) -> None:
+        # G3 regression: backend registers POST /:id/test-connection
+        # (dataset-backend api/server.go:811). Bare /:id/test is a 404.
+        requests_mock.post(f"{self.PATH}/t1/test-connection", json={"ok": True})
         assert client.targets.test("t1") == {"ok": True}
+        assert requests_mock.last_request.url.endswith("/t1/test-connection")
+        assert requests_mock.last_request.method == "POST"
 
     def test_probe(self, requests_mock, client: DisseqtAPIClient) -> None:
         requests_mock.post(f"{self.PATH}/test-connection", json={"ok": True})

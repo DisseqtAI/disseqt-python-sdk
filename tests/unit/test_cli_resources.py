@@ -105,6 +105,20 @@ def test_target_probe(runner: CliRunner, requests_mock) -> None:
     assert '"ok": true' in result.output
 
 
+def test_target_test_hits_id_test_connection_route(
+    runner: CliRunner, requests_mock
+) -> None:
+    # G3 regression: `target test` must POST /:id/test-connection, not /:id/test.
+    requests_mock.post(
+        f"{DATASET_BASE}/api/v1/llm/app-integrations/t1/test-connection",
+        json={"ok": True},
+    )
+    result = runner.invoke(cli, ["target", "test", "t1", "--json", "{}"])
+    assert result.exit_code == 0, result.output
+    assert requests_mock.last_request.url.endswith("/t1/test-connection")
+    assert requests_mock.last_request.method == "POST"
+
+
 def test_target_parse_curl(runner: CliRunner, requests_mock) -> None:
     requests_mock.post(
         f"{DATASET_BASE}/api/v1/llm/app-integrations/parse-curl", json={"preview": {}}
