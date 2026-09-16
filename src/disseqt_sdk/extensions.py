@@ -93,22 +93,11 @@ class BaseMultiTurnAttack(BaseAttack):
         return min(1.0, len(self.turns) / self.max_turns)
 
 
-@dataclass
-class BaseGuard:
-    """Custom guard — thin wrapper over a policy id.
-
-    Composes with :class:`~disseqt_sdk.guardrails.Guardrails` — subclass
-    only if you need to add local scoring or transform the response
-    before returning it.
-    """
-
-    policy_id: str
-    name: str = ""
-
-    def evaluate(self, client: Client, input_data: Any) -> dict[str, Any]:
-        """Evaluate ``input_data`` against this guard's policy."""
-        result = client.validate(input_data, policies=[self.policy_id])
-        return result if isinstance(result, dict) else {}
+# NOTE: BaseGuard removed alongside Guardrails. It wrapped a policy id and
+# delegated to Client.validate(..., policies=[...]) — the same removed
+# server-side policy-evaluate path. If a client-side guard concept needs to
+# come back, it should compose class-based validators locally rather than
+# take a dependency on a runtime endpoint we do not currently serve.
 
 
 @dataclass

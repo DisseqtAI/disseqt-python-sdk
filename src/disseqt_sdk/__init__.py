@@ -14,14 +14,12 @@ from .api_client import DisseqtAPIClient
 from .client import Client, HTTPError, SDKVersionBlockedError
 from .extensions import (
     BaseAttack,
-    BaseGuard,
     BaseLLM,
     BaseMetric,
     BaseMultiTurnAttack,
     BaseSingleTurnAttack,
     BaseVulnerability,
 )
-from .guardrails import Guardrails, GuardResult
 from .models.base import SDKConfigInput
 from .policy import (
     DECISION_BLOCK,
@@ -53,7 +51,6 @@ from .telemetry import cost_accumulator
 
 __all__ = [
     "BaseAttack",
-    "BaseGuard",
     "BaseLLM",
     "BaseMetric",
     "BaseMultiTurnAttack",
@@ -66,8 +63,6 @@ __all__ = [
     "DECISION_BORDERLINE",
     "DECISION_PASS",
     "DisseqtAPIClient",
-    "GuardResult",
-    "Guardrails",
     "HTTPError",
     "McpTargetsResource",
     "OutputValidationsResource",
