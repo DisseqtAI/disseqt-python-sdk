@@ -339,151 +339,50 @@ class Client:
     def validate(
         self,
         request: (
-            BaseValidator | ThemesClassifierValidator | CompositeScoreEvaluator | SupportsInputData
+            BaseValidator | ThemesClassifierValidator | CompositeScoreEvaluator
         ),
-        policies: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Run a validator, one or more realtime policies, or both.
+        """Run a single validator (or composite/themes) and return its response.
 
-        Three call shapes, chosen by what you pass:
-
-        1. **Validator only** (unchanged classic behavior)::
-
-               client.validate(ToxicityValidator(data=..., config=...))
-
-           Runs that one validator; returns its validation response.
-
-        2. **Validator + policies** — the validator runs as usual AND the
-           same input is evaluated against each policy id, server-side,
-           with each policy's own rulesets, thresholds, and decision
-           strategy::
-
-               result = client.validate(
-                   ToxicityValidator(data=InputValidationRequest(prompt=p)),
-                   policies=["994ad00e-…", "1268faa4-…"],
-               )
-
-        3. **Policies only** — pass a bare request object (any
-           ``disseqt_sdk.models`` request, no validator, no config); the
-           policies decide everything::
-
-               result = client.validate(
-                   InputValidationRequest(prompt=p, response=r),
-                   policies=["994ad00e-…"],
-               )
-
-        When ``policies`` is passed the return value is a stable envelope::
-
-            {
-              "validation": {...} | None,   # per-validator result, None in shape 3
-              "policies":  [{...}, ...],    # one policy envelope per id, in order
-            }
-
-        Use :func:`disseqt_sdk.any_blocking` to gate on it. Each policy is
-        one server-side evaluation (billed per executed validator, one
-        Decisions-ledger entry each); policies are evaluated sequentially
-        in the order given. Inputs a policy's validator doesn't receive
-        skip neutrally with ``missing_input:<fields>`` — supply the union
-        of fields the policies need (see the policy detail endpoint's
-        ``required_input_fields``).
-
-        **Client-level default.** A client constructed with
-        ``Client(policies=[...])`` applies that list to every ``validate()``
-        call that doesn't pass its own ``policies=`` — the per-call value
-        always overrides the client default. Composite-score and
-        themes-classifier requests are incompatible with policies; they run
-        classically and the client default steps aside (logged). Passing
-        ``policies=[]`` explicitly is always an error — an accidentally
-        empty list must fail loudly rather than silently ungate the call.
-
-        Without ``policies`` anywhere, behavior is exactly as before.
+        The historical ``policies=[...]`` shape targeted an aspirational
+        server-side policy-evaluate endpoint that no in-scope backend
+        registers, so it was removed. This method now only runs the
+        validator classes exposed under :mod:`disseqt_sdk.validators`.
 
         Args:
-            request: Validator instance, or a bare request object when
-                policies apply (per-call or client default).
-            policies: Optional list of published policy ids to evaluate
-                the input against; overrides the client-level default.
-                Composite-score and themes-classifier requests cannot be
-                combined with ``policies``.
+            request: A validator instance from :mod:`disseqt_sdk.validators`
+                (or a themes-classifier / composite-score evaluator).
 
         Returns:
-            The validation response — or the ``{"validation", "policies"}``
-            envelope when policies apply.
+            The validator's raw response envelope.
 
         Raises:
-            HTTPError: If any API request fails (unknown/unpublished
-                policy answers 404 DSQ-4040).
-            ValueError: On invalid combinations (bare request without
-                policies anywhere, empty ``policies`` list, missing
-                ``application_name``, explicit ``policies`` with
-                composite/themes) or an undecodable response body.
+            HTTPError: If the API request fails.
+            ValueError: If ``request`` is not a validator instance.
         """
-        if policies is not None:
-            return self._validate_with_policies(request, policies)
-        if self.policies is not None:
-            # Composite/themes can't be policy-evaluated. An explicit
-            # per-call combination raises (caller error), but a client-wide
-            # default must not make those endpoints unusable — it steps
-            # aside for them, visibly in the logs.
-            if isinstance(
-                request,
-                (
-                    ThemesClassifierValidator,
-                    CompositeScoreEvaluator,
-                    ThemesClassifierRequest,
-                    CompositeScoreRequest,
-                ),
-            ):
-                logger.info(
-                    "validation.policies.default_skipped",
-                    reason="composite/themes requests are never policy-evaluated",
-                    request_type=type(request).__name__,
-                )
-            else:
-                return self._validate_with_policies(request, self.policies)
         if not isinstance(
             request, (BaseValidator, ThemesClassifierValidator, CompositeScoreEvaluator)
         ):
             raise ValueError(
-                "A bare request object needs policies=[...] — pass a validator "
-                "instance to run a single validator, or add policies=[...] to "
-                "evaluate this input against realtime policies"
+                "request must be a validator instance from disseqt_sdk.validators "
+                f"(got {type(request).__name__})"
             )
         return self._run_validator(request)
 
     def validate_sync(
         self,
         request: (
-            BaseValidator | ThemesClassifierValidator | CompositeScoreEvaluator | SupportsInputData
+            BaseValidator | ThemesClassifierValidator | CompositeScoreEvaluator
         ),
-        policies: list[str] | None = None,
-        raise_on_async: bool = False,
     ) -> dict[str, Any]:
-        """Run :meth:`validate`, raise :class:`BlockedError` on BLOCK.
+        """Alias for :meth:`validate` retained for API stability.
 
-        Thin CI/production-gate wrapper: delegates to :meth:`validate` and
-        then re-uses :func:`disseqt_sdk.policy.any_blocking` to decide
-        whether to raise. Returns the same envelope on PASS.
-
-        Args:
-            request: Same as :meth:`validate`.
-            policies: Same as :meth:`validate`.
-            raise_on_async: If True, also raise :class:`BlockedError` when
-                the response is async (verdict not final). Off by default —
-                async policies are usually record-and-move-on.
-
-        Raises:
-            BlockedError: When any policy verdict is BLOCK, or when
-                ``raise_on_async`` is set and the response is async.
+        Prior versions layered BlockedError-on-policy-verdict semantics on
+        top of ``validate``; that behaviour was tied to the removed
+        server-side policy-evaluate path and no longer applies. Now a
+        one-line delegator so existing callers keep working.
         """
-        result = self.validate(request, policies=policies)
-        if any_blocking(result):
-            raise BlockedError(result)
-        if raise_on_async and isinstance(result, dict):
-            envelopes = result.get("policies") if isinstance(result.get("policies"), list) else []
-            if envelopes and any(is_async(p) for p in envelopes if isinstance(p, dict)):
-                raise BlockedError(result, "policy evaluation still async")
-        return result
+        return self.validate(request)
 
     def _validate_with_policies(
         self,
