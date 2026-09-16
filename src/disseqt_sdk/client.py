@@ -13,6 +13,15 @@ from disseqt_logging import digest, get_logger
 
 from ._version import check_version_notice, sdk_identity_headers
 from .auth import AuthMissingError
+from .factories import (
+    _AgenticFactory,
+    _CompositeFactory,
+    _InputValidatorFactory,
+    _McpFactory,
+    _OutputValidatorFactory,
+    _RagFactory,
+    _ThemesFactory,
+)
 from .models.composite_score import CompositeScoreRequest
 from .models.themes_classifier import ThemesClassifierRequest
 from .policy import BlockedError, any_blocking, is_async
@@ -301,6 +310,18 @@ class Client:
         self.application_name = application_name
         self.realtime_policy_base_url = realtime_policy_base_url
         self.policies = default_policies
+
+        # Factory namespaces mirror the Node SDK's ``client.input.*`` /
+        # ``client.rag.*`` / etc. ergonomics. Each method builds and returns
+        # the appropriate validator instance; the caller then passes it to
+        # ``validate()`` — additive over the class-based API.
+        self.input = _InputValidatorFactory()
+        self.output = _OutputValidatorFactory()
+        self.rag = _RagFactory()
+        self.agentic = _AgenticFactory()
+        self.mcp = _McpFactory()
+        self.themes = _ThemesFactory()
+        self.composite = _CompositeFactory()
 
     def _build_headers(self) -> dict[str, str]:
         """Build HTTP headers for API requests.
