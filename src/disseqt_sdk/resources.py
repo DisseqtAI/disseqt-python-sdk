@@ -180,10 +180,13 @@ class PacksResource(_Base):
         return self._req("POST", f"{self._BASE}/{pack_id}/duplicate", json_payload=payload or {})
 
     def publish(self, pack_id: str) -> dict[str, Any]:
-        return self._req("POST", f"{self._BASE}/{pack_id}/publish")
+        # Backend PATCHes at /api/v1/prompt-packs/:id/publish (server.go:2237)
+        # and /api/v1/sdk/prompt-packs/:id/publish (server.go:2460).
+        return self._req("PATCH", f"{self._BASE}/{pack_id}/publish")
 
     def unpublish(self, pack_id: str) -> dict[str, Any]:
-        return self._req("POST", f"{self._BASE}/{pack_id}/unpublish")
+        # See publish(); PATCH at server.go:2238 and :2461.
+        return self._req("PATCH", f"{self._BASE}/{pack_id}/unpublish")
 
     def import_status(self, pack_id: str) -> dict[str, Any]:
         return self._req("GET", f"{self._BASE}/{pack_id}/import-status")

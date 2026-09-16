@@ -153,11 +153,26 @@ def test_pack_list(runner: CliRunner, requests_mock) -> None:
     assert result.exit_code == 0
 
 
-def test_pack_publish(runner: CliRunner, requests_mock) -> None:
-    requests_mock.post(f"{DATASET_BASE}/api/v1/prompt-packs/p1/publish", json={"published": True})
+def test_pack_publish_uses_patch(runner: CliRunner, requests_mock) -> None:
+    # G3 regression: backend registers PATCH at
+    # /api/v1/prompt-packs/:id/publish (server.go:2237); POST is a 404.
+    requests_mock.patch(f"{DATASET_BASE}/api/v1/prompt-packs/p1/publish", json={"published": True})
     result = runner.invoke(cli, ["pack", "publish", "p1"])
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
     assert '"published": true' in result.output
+    assert requests_mock.last_request.method == "PATCH"
+    assert requests_mock.last_request.url.endswith("/p1/publish")
+
+
+def test_pack_unpublish_uses_patch(runner: CliRunner, requests_mock) -> None:
+    # G3 regression: PATCH at server.go:2238.
+    requests_mock.patch(
+        f"{DATASET_BASE}/api/v1/prompt-packs/p1/unpublish", json={"published": False}
+    )
+    result = runner.invoke(cli, ["pack", "unpublish", "p1"])
+    assert result.exit_code == 0, result.output
+    assert requests_mock.last_request.method == "PATCH"
+    assert requests_mock.last_request.url.endswith("/p1/unpublish")
 
 
 def test_pack_add_prompts_requires_prompts_key(runner: CliRunner) -> None:

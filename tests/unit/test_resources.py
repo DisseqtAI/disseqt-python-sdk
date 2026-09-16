@@ -142,9 +142,20 @@ class TestPacksResource:
         result = client.packs.add_prompts("p1", [{"text": "a"}, {"text": "b"}])
         assert result == {"added": 2}
 
-    def test_publish(self, requests_mock, client: DisseqtAPIClient) -> None:
-        requests_mock.post(f"{self.PATH}/p1/publish", json={"published": True})
+    def test_publish_uses_patch(self, requests_mock, client: DisseqtAPIClient) -> None:
+        # G3 regression: backend registers PATCH at
+        # /api/v1/prompt-packs/:id/publish (server.go:2237, 2460); POST is a 404.
+        requests_mock.patch(f"{self.PATH}/p1/publish", json={"published": True})
         assert client.packs.publish("p1") == {"published": True}
+        assert requests_mock.last_request.method == "PATCH"
+        assert requests_mock.last_request.url.endswith("/p1/publish")
+
+    def test_unpublish_uses_patch(self, requests_mock, client: DisseqtAPIClient) -> None:
+        # G3 regression: PATCH at server.go:2238, 2461.
+        requests_mock.patch(f"{self.PATH}/p1/unpublish", json={"published": False})
+        assert client.packs.unpublish("p1") == {"published": False}
+        assert requests_mock.last_request.method == "PATCH"
+        assert requests_mock.last_request.url.endswith("/p1/unpublish")
 
     def test_download_returns_csv_bytes(self, requests_mock, client: DisseqtAPIClient) -> None:
         csv_body = b"id,prompt\n1,hello\n2,world\n"

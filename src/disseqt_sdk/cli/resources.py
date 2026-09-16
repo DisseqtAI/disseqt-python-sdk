@@ -272,13 +272,15 @@ def pack_duplicate(pack_id: str, json_body: str | None) -> None:
 @pack.command("publish")
 @click.argument("pack_id")
 def pack_publish(pack_id: str) -> None:
-    _post(f"/api/v1/prompt-packs/{pack_id}/publish")
+    # Backend PATCHes /api/v1/prompt-packs/:id/publish (server.go:2237).
+    _patch(f"/api/v1/prompt-packs/{pack_id}/publish", {})
 
 
 @pack.command("unpublish")
 @click.argument("pack_id")
 def pack_unpublish(pack_id: str) -> None:
-    _post(f"/api/v1/prompt-packs/{pack_id}/unpublish")
+    # See pack_publish; PATCH at server.go:2238.
+    _patch(f"/api/v1/prompt-packs/{pack_id}/unpublish", {})
 
 
 @pack.command("import-status")
