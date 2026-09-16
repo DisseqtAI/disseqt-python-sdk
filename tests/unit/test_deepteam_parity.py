@@ -517,7 +517,7 @@ class TestCliRedteamBatch2:
     def test_analytics_default_hits_both(self, monkeypatch, requests_mock):
         self._env(monkeypatch)
         requests_mock.get(f"{self.RT_BASE}{self.JB}/analytics/summary", json={"total_runs": 42})
-        requests_mock.get(f"{self.RT_BASE}{self.JB}/analytics/prompts-stats", json={"prompts": 100})
+        requests_mock.get(f"{self.RT_BASE}{self.JB}/prompts-stats", json={"prompts": 100})
         r = CliRunner().invoke(cli, ["redteam", "analytics", "--format", "json"])
         assert r.exit_code == 0, r.output
         # Both endpoints wired through — JSON output contains both keys.
@@ -536,7 +536,7 @@ class TestCliRedteamBatch2:
     def test_analytics_prompts_only_table(self, monkeypatch, requests_mock):
         self._env(monkeypatch)
         requests_mock.get(
-            f"{self.RT_BASE}{self.JB}/analytics/prompts-stats", json={"prompts": 3, "blocked": 1}
+            f"{self.RT_BASE}{self.JB}/prompts-stats", json={"prompts": 3, "blocked": 1}
         )
         r = CliRunner().invoke(cli, ["redteam", "analytics", "--prompts-stats"])
         assert r.exit_code == 0, r.output
@@ -665,7 +665,7 @@ class TestCliRedteamBatch2:
         requests_mock.post(f"{self.RT_BASE}{self.JB}/evaluate-csv", json={"job_id": "j-2"})
         # First poll: running. Second: completed.
         requests_mock.get(
-            f"{self.RT_BASE}{self.JB}/jobs/j-2/process",
+            f"{self.RT_BASE}{self.JB}/evaluate-csv/j-2",
             [
                 {"json": {"status": "running"}},
                 {"json": {"status": "completed", "results": [{"row": 1}]}},
@@ -684,7 +684,7 @@ class TestCliRedteamBatch2:
         self._env(monkeypatch)
         requests_mock.post(f"{self.RT_BASE}{self.JB}/evaluate-csv", json={"job_id": "j-3"})
         requests_mock.get(
-            f"{self.RT_BASE}{self.JB}/jobs/j-3/process",
+            f"{self.RT_BASE}{self.JB}/evaluate-csv/j-3",
             json={"status": "completed", "verdict": "PASS"},
         )
         csv_file = tmp_path / "p.csv"
