@@ -86,7 +86,12 @@ class TargetsResource(_Base):
         )
 
     def probe(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Test connection without saving (dry run)."""
+        """Test connection without saving (dry run).
+
+        Node-SDK parity: same request as ``TargetsClient.testConnection`` in
+        disseqt-node-sdk. Names diverge historically — kept as-is to avoid
+        a breaking rename with no correctness upside.
+        """
         return self._req("POST", f"{self._BASE}/test-connection", json_payload=payload)
 
     def parse_curl(self, curl_text: str) -> dict[str, Any]:
