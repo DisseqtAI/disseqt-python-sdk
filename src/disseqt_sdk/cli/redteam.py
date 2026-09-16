@@ -540,8 +540,10 @@ def analytics(summary_only: bool, prompts_only: bool, fmt: str) -> None:
             "GET", BASE_ENV, DEFAULT_BASE, f"{_JAILBREAK_BASE}/analytics/summary"
         )
     if want_prompts:
+        # Backend registers /prompts-stats (not /analytics/prompts-stats) at
+        # jailbreak_routes.go:57. /analytics/ only prefixes /analytics/summary.
         out["prompts_stats"] = _http.request(
-            "GET", BASE_ENV, DEFAULT_BASE, f"{_JAILBREAK_BASE}/analytics/prompts-stats"
+            "GET", BASE_ENV, DEFAULT_BASE, f"{_JAILBREAK_BASE}/prompts-stats"
         )
 
     if fmt == "json":
@@ -686,8 +688,11 @@ def eval_csv(
     deadline = time.monotonic() + max_wait
     last: Any = None
     while time.monotonic() < deadline:
+        # Poll the CSV-eval job status via jailbreak_routes.go:55:
+        # GET /api/v1/jailbreak/evaluate-csv/:generation_job_id.
+        # /jobs/:id/process is a POST trigger, not a GET status probe.
         last = _http.request(
-            "GET", BASE_ENV, DEFAULT_BASE, f"{_JAILBREAK_BASE}/jobs/{job_id}/process"
+            "GET", BASE_ENV, DEFAULT_BASE, f"{_JAILBREAK_BASE}/evaluate-csv/{job_id}"
         )
         state = (last or {}).get("status") or (last or {}).get("state") or ""
         if str(state).lower() in _TERMINAL_STATES:
