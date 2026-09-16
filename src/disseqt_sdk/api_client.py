@@ -83,6 +83,7 @@ class DisseqtAPIClient:
             ByovValidatorsResource,
             JailbreakResource,
             McpTargetsResource,
+            MrResource,
             OutputValidationsResource,
             PacksResource,
             RagTargetsResource,
@@ -108,6 +109,7 @@ class DisseqtAPIClient:
         self.test_plans = TestPlansResource(self)
         self.test_plan_runs = TestPlanRunsResource(self)
         self.jailbreak = JailbreakResource(self)
+        self.mr = MrResource(self)
 
     # ------------------------------------------------------------------
     # Internal helpers

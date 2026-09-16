@@ -605,10 +605,115 @@ class TestPlanRunsResource(_Base):
         return self._req("POST", f"{self._BASE}/{run_id}/results/{result_id}/reveal")
 
 
+class MrResource(_Base):
+    """Multi-round (MR) jailbreak techniques, agents, jobs, and strategies.
+
+    Mirrors Node's ``RedteamClient`` MR surface. All routes live under
+    ``/api/v1/mr-jailbreak/*`` on the redteam service. Existing usages —
+    the CLI (:mod:`disseqt_sdk.cli.redteam`) and the parity test suite —
+    already exercise the ``techniques``, ``agents``, ``jobs/:id``,
+    ``jobs/:id/interactions``, and ``batch-automate`` paths; the CRUD +
+    strategy verbs added here mirror the Node SDK method set.
+    """
+
+    _BASE = "/api/v1/mr-jailbreak"
+
+    # ---- Techniques -----------------------------------------------------
+    def create_technique(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._req("POST", f"{self._BASE}/techniques", json_payload=payload)
+
+    def list_techniques(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._req("GET", f"{self._BASE}/techniques", params=params)
+
+    def get_technique(self, technique_id: str) -> dict[str, Any]:
+        return self._req("GET", f"{self._BASE}/techniques/{technique_id}")
+
+    def update_technique(self, technique_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._req("PATCH", f"{self._BASE}/techniques/{technique_id}", json_payload=payload)
+
+    def delete_technique(self, technique_id: str) -> dict[str, Any]:
+        return self._req("DELETE", f"{self._BASE}/techniques/{technique_id}")
+
+    def register_technique(self, framework: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Register a technique implementation under a framework.
+
+        ``framework`` ∈ {race, goat, crescendo, badlikertjudge, asja, agent}.
+        """
+        return self._req(
+            "POST",
+            f"{self._BASE}/techniques/{framework}/register",
+            json_payload=payload,
+        )
+
+    # ---- Agents ---------------------------------------------------------
+    def create_agent(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._req("POST", f"{self._BASE}/agents", json_payload=payload)
+
+    def list_agents(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._req("GET", f"{self._BASE}/agents", params=params)
+
+    def get_agent(self, agent_id: str) -> dict[str, Any]:
+        return self._req("GET", f"{self._BASE}/agents/{agent_id}")
+
+    def update_agent(self, agent_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._req("PATCH", f"{self._BASE}/agents/{agent_id}", json_payload=payload)
+
+    def delete_agent(self, agent_id: str) -> dict[str, Any]:
+        return self._req("DELETE", f"{self._BASE}/agents/{agent_id}")
+
+    # ---- Jobs -----------------------------------------------------------
+    def create_job(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._req("POST", f"{self._BASE}/jobs", json_payload=payload)
+
+    def list_jobs(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._req("GET", f"{self._BASE}/jobs", params=params)
+
+    def get_job(self, job_id: str) -> dict[str, Any]:
+        return self._req("GET", f"{self._BASE}/jobs/{job_id}")
+
+    def update_job_status(self, job_id: str, status: str) -> dict[str, Any]:
+        return self._req(
+            "PATCH", f"{self._BASE}/jobs/{job_id}/status", json_payload={"status": status}
+        )
+
+    def get_job_interactions(
+        self, job_id: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        return self._req("GET", f"{self._BASE}/jobs/{job_id}/interactions", params=params)
+
+    def get_job_available_states(self, job_id: str) -> dict[str, Any]:
+        return self._req("GET", f"{self._BASE}/jobs/{job_id}/available-states")
+
+    # ---- Interactions + batch ------------------------------------------
+    def analyze_interaction(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._req("POST", f"{self._BASE}/interactions/analyze", json_payload=payload)
+
+    def generate_next_interaction(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._req("POST", f"{self._BASE}/interactions/generate-next", json_payload=payload)
+
+    def batch_automate(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._req("POST", f"{self._BASE}/batch-automate", json_payload=payload)
+
+    # ---- Strategies -----------------------------------------------------
+    def strategy_successful_paths(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._req("GET", f"{self._BASE}/strategies/successful-paths", params=params)
+
+    def strategy_agents_in_phase(self, phase: str) -> dict[str, Any]:
+        return self._req(
+            "GET", f"{self._BASE}/strategies/phase/agents", params={"phase": phase}
+        )
+
+    def strategy_techniques_in_phase(self, phase: str) -> dict[str, Any]:
+        return self._req(
+            "GET", f"{self._BASE}/strategies/phase/techniques", params={"phase": phase}
+        )
+
+
 __all__ = [
     "ByovValidatorsResource",
     "JailbreakResource",
     "McpTargetsResource",
+    "MrResource",
     "OutputValidationsResource",
     "PacksResource",
     "RagTargetsResource",
