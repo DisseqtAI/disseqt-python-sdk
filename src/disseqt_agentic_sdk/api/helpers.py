@@ -352,6 +352,7 @@ def disseqt_trace(
     capture_io: bool = True,
     model: str | None = None,
     provider: str | None = None,
+    operation: str | None = None,
     **span_attrs,
 ):
     """
@@ -445,6 +446,22 @@ def disseqt_trace(
             ``model`` — writes ``agentic.provider.name``. Required
             when ``model`` is set for consistency with the
             auto-instrumented span shape. Ignored otherwise.
+        operation: Optional operation identifier for MODEL_EXEC spans
+            (e.g. ``"embeddings"``, ``"image_generation"``, ``"audio"``,
+            ``"chat"``). Stamps ``agentic.operation.name`` — the key the
+            backend enricher classifies to pick the pricing mode
+            (embedding / image / audio / chat). Without it, a MODEL_EXEC
+            span defaults to ``"chat"`` when ``capture_io=True`` (and
+            has no operation stamp at all when ``capture_io=False``),
+            which means a self-hosted embedding / image / audio model
+            silently prices at $0.00 because the registered rate never
+            matches. Ignored for non-MODEL_EXEC kinds. Recognised values
+            the backend classifier maps today:
+            ``embeddings`` | ``image_generation`` / ``image`` |
+            ``audio_transcription`` / ``audio_generation`` / ``audio`` |
+            ``chat`` / ``text_completion`` / ``generate_content``. Any
+            other string is stamped but the backend falls back to chat
+            pricing.
         **span_attrs: Additional span attributes stamped once at span open.
 
     Example:
@@ -524,8 +541,29 @@ def disseqt_trace(
             # (TP-2128 round-2 P0 #0.2).
             for key, value in span_attrs.items():
                 safe_set(span, key, value)
+            # Operation stamp for MODEL_EXEC spans. Precedence (highest first):
+            #   1. explicit ``operation=`` kwarg,
+            #   2. value stamped via ``**span_attrs`` (which was applied above,
+            #      so we're overwriting our own no-op),
+            #   3. ``"chat"`` default — only when ``capture_io=True`` so the
+            #      pre-``operation``-kwarg behaviour stays byte-identical for
+            #      existing chat-shaped decorations.
+            # Operation is identity (drives the pricing classifier), not
+            # content, so it's stamped independent of ``capture_io`` whenever
+            # the caller passes something explicit — same rationale as the
+            # ``model`` kwarg (TP-2209 review, "third guardrail"). Without
+            # this, a self-hosted embedding / image / audio model prices at
+            # $0.00 silently because the enricher's default branch treats
+            # empty as ``chat`` (see internal/enrichment/enricher.go:235-248).
+            if is_llm_kind:
+                resolved_operation = (
+                    operation
+                    or span_attrs.get(AgenticAttributes.OPERATION_NAME)
+                    or (AgenticOperation.CHAT if capture_io else None)
+                )
+                if resolved_operation:
+                    safe_set(span, AgenticAttributes.OPERATION_NAME, resolved_operation)
             if capture_io and is_llm_kind:
-                safe_set(span, AgenticAttributes.OPERATION_NAME, AgenticOperation.CHAT)
                 input_messages = _extract_llm_input_messages(func, args, kwargs)
                 if input_messages is not None:
                     set_messages_if_capturing(span, input_messages=input_messages)

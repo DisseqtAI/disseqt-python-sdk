@@ -632,6 +632,232 @@ class TestDisseqtTraceIOCapture:
         assert AgenticAttributes.REQUEST_MODEL not in attrs
         assert AgenticAttributes.PROVIDER_NAME not in attrs
 
+    # -------------------------------------------------------------------
+    # TP-2209 review follow-ups (Yash's finding: non-chat custom models
+    # silently price at $0.00 because the decorator has no ``operation``
+    # kwarg and the backend enricher treats an absent operation as
+    # ``chat``, missing every embedding / image / audio pricing row).
+    # -------------------------------------------------------------------
+
+    def test_model_exec_operation_kwarg_overrides_default_chat(self):
+        """
+        The whole point of the ``operation`` kwarg: a self-hosted
+        embedding / image / audio model must be able to say what it is
+        so the backend classifier picks the right pricing mode. Without
+        this override the enricher's default branch treats the span as
+        chat and the registered rate never matches — $0.00 silently.
+        Recognised values today (see internal/enrichment/enricher.go:
+        235-248): embeddings | image_generation / image |
+        audio_transcription / audio_generation / audio | chat /
+        text_completion / generate_content.
+        """
+        import json as _json
+
+        @disseqt_trace(
+            self.client,
+            kind=SpanKind.MODEL_EXEC,
+            name="embed_call",
+            model="my-embed-v1",
+            provider="custom",
+            operation=AgenticOperation.EMBEDDINGS,
+        )
+        def embed(text: str) -> list[float]:
+            return [0.1, 0.2, 0.3]
+
+        embed("hello world")
+
+        attrs = _json.loads(self._find_span("embed_call").attributes_json)
+        assert attrs[AgenticAttributes.OPERATION_NAME] == AgenticOperation.EMBEDDINGS
+        # Model identity + provider still stamp alongside — same span.
+        assert attrs[AgenticAttributes.REQUEST_MODEL] == "my-embed-v1"
+        assert attrs[AgenticAttributes.PROVIDER_NAME] == "custom"
+
+    def test_operation_kwarg_wins_over_span_attrs_and_default(self):
+        """
+        Precedence contract: explicit ``operation=`` beats a value the
+        caller stamped via ``**span_attrs``, which itself beats the
+        chat default. Locks the order so a future refactor can't
+        quietly invert it — the SDK docs and the enricher both key on
+        the resolved value being deterministic.
+        """
+        import json as _json
+
+        @disseqt_trace(
+            self.client,
+            kind=SpanKind.MODEL_EXEC,
+            name="op_precedence",
+            model="my-model-v1",
+            provider="custom",
+            operation="image_generation",
+            **{AgenticAttributes.OPERATION_NAME: "embeddings"},  # should lose
+        )
+        def gen_image(prompt: str) -> str:
+            return "png-bytes"
+
+        gen_image("a cat")
+
+        attrs = _json.loads(self._find_span("op_precedence").attributes_json)
+        assert attrs[AgenticAttributes.OPERATION_NAME] == "image_generation"
+
+    def test_operation_from_span_attrs_survives_when_no_explicit_kwarg(self):
+        """
+        Companion to the precedence test above: when the ``operation=``
+        kwarg is absent, a value stamped via ``**span_attrs`` MUST
+        survive rather than getting silently overwritten by the chat
+        default. Before this fix, the stamp at line 528 unconditionally
+        clobbered whatever ``**span_attrs`` set for
+        ``agentic.operation.name`` whenever ``capture_io=True`` (Yash's
+        "workaround does not work" verification).
+        """
+        import json as _json
+
+        @disseqt_trace(
+            self.client,
+            kind=SpanKind.MODEL_EXEC,
+            name="op_from_attrs",
+            model="my-model-v1",
+            provider="custom",
+            **{AgenticAttributes.OPERATION_NAME: "audio_transcription"},
+        )
+        def transcribe(audio: bytes) -> str:
+            return "hello"
+
+        transcribe(b"wav-bytes")
+
+        attrs = _json.loads(self._find_span("op_from_attrs").attributes_json)
+        assert attrs[AgenticAttributes.OPERATION_NAME] == "audio_transcription"
+
+    def test_operation_kwarg_ignored_when_kind_not_model_exec(self):
+        """
+        Same guardrail as the model/provider kwargs: an ``operation=``
+        on a non-MODEL_EXEC decorator must NOT stamp the attribute.
+        The backend's operation-classifier switch only runs when
+        ``span.kind == MODEL_EXEC`` (see
+        internal/enrichment/enricher.go around the ``isModelExec``
+        check), so stamping it elsewhere is dead metadata at best and
+        confusing UI at worst.
+        """
+        import json as _json
+
+        @disseqt_trace(
+            self.client,
+            kind=SpanKind.TOOL_EXEC,
+            name="tool_with_op",
+            operation="embeddings",
+        )
+        def tool(x: str) -> str:
+            return x
+
+        tool("x")
+
+        attrs = _json.loads(self._find_span("tool_with_op").attributes_json)
+        # TOOL_EXEC stamps operation.name = execute_tool unconditionally
+        # (drives ``is_tool_call`` server-side) — the embeddings kwarg
+        # is silently ignored, not honoured, not merged.
+        assert attrs[AgenticAttributes.OPERATION_NAME] == AgenticOperation.EXECUTE_TOOL
+
+    # -------------------------------------------------------------------
+    # TP-2209 "third guardrail" coverage (Yash: "implemented correctly
+    # but has zero test coverage — the one guardrail whose regression
+    # nothing would catch"). Model identity is identity, not content,
+    # so it MUST stamp regardless of ``capture_io``; if it didn't,
+    # anyone turning capture off would silently break pricing.
+    # -------------------------------------------------------------------
+
+    def test_model_and_provider_stamp_even_when_capture_io_disabled(self):
+        """
+        Model + provider are pricing-lookup identity, not content. If a
+        team disables ``capture_io=False`` to keep prompts / responses
+        off their observability plane, we still MUST stamp
+        ``agentic.request.model`` / ``agentic.provider.name`` — the
+        backend needs them to match the registered pricing rate, and a
+        silent drop would produce $0.00 spans downstream. What we
+        should NOT stamp are ``agentic.input.messages`` /
+        ``agentic.output.messages`` (those are content and honour the
+        capture flag).
+        """
+        import json as _json
+
+        @disseqt_trace(
+            self.client,
+            kind=SpanKind.MODEL_EXEC,
+            name="no_capture_llm",
+            model="my-model-v1",
+            provider="custom",
+            capture_io=False,
+        )
+        def call(q: str) -> str:
+            return f"answer: {q}"
+
+        call("what?")
+
+        attrs = _json.loads(self._find_span("no_capture_llm").attributes_json)
+        # Identity: MUST be present.
+        assert attrs[AgenticAttributes.REQUEST_MODEL] == "my-model-v1"
+        assert attrs[AgenticAttributes.PROVIDER_NAME] == "custom"
+        # Content: MUST be absent (capture is off).
+        assert AgenticAttributes.INPUT_MESSAGES not in attrs
+        assert AgenticAttributes.OUTPUT_MESSAGES not in attrs
+
+    def test_operation_kwarg_stamps_even_when_capture_io_disabled(self):
+        """
+        Operation is also identity — it feeds the pricing classifier
+        (embedding / image / audio / chat), not the content plane. So
+        the same capture_io-independence rule that applies to
+        model/provider MUST apply here too, otherwise a team running
+        ``capture_io=False`` on a self-hosted embedding model reverts
+        to the exact $0.00 bug this whole thing exists to prevent.
+        """
+        import json as _json
+
+        @disseqt_trace(
+            self.client,
+            kind=SpanKind.MODEL_EXEC,
+            name="no_capture_embed",
+            model="my-embed-v1",
+            provider="custom",
+            operation=AgenticOperation.EMBEDDINGS,
+            capture_io=False,
+        )
+        def embed(text: str) -> list[float]:
+            return [0.1, 0.2]
+
+        embed("hello")
+
+        attrs = _json.loads(self._find_span("no_capture_embed").attributes_json)
+        assert attrs[AgenticAttributes.OPERATION_NAME] == AgenticOperation.EMBEDDINGS
+
+    def test_capture_io_disabled_and_no_operation_kwarg_leaves_operation_unset(self):
+        """
+        Symmetric to the tests above: when NEITHER an explicit
+        ``operation=`` nor a ``**span_attrs`` entry is provided AND
+        ``capture_io=False``, no operation stamp is written. This
+        preserves the pre-``operation``-kwarg wire format for the
+        capture-off case (the old code only stamped ``chat`` inside
+        the ``capture_io and is_llm_kind`` branch, so an off-capture
+        span had no operation attribute) and lets the backend fall
+        through to its ``default → chat`` pricing branch. If we
+        stamped an unwanted default here we'd silently price a
+        genuinely-unknown-shape span as chat.
+        """
+        import json as _json
+
+        @disseqt_trace(
+            self.client,
+            kind=SpanKind.MODEL_EXEC,
+            name="no_capture_no_op",
+            model="my-model-v1",
+            provider="custom",
+            capture_io=False,
+        )
+        def call(q: str) -> str:
+            return f"answer: {q}"
+
+        call("what?")
+
+        attrs = _json.loads(self._find_span("no_capture_no_op").attributes_json)
+        assert AgenticAttributes.OPERATION_NAME not in attrs
+
     def test_provider_ignored_when_model_absent(self):
         """
         ``provider=`` alone is meaningless — the backend keys pricing
