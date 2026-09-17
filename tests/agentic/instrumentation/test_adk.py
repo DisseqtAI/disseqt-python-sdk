@@ -27,8 +27,10 @@ from disseqt_agentic_sdk.instrumentation.adk.patch import (
     _install_aggregator_if_absent,
     _LlmStreamState,
     _normalize_contents,
+    a2a_run_async_impl,
     agent_run_async,
     llm_generate_content_async,
+    memory_search_memory,
     runner_run_async,
     tool_run_async,
 )
@@ -593,6 +595,177 @@ class TestAgentGenScope:
 
         _run(_drain())
         find_span(recording_client, "adk.agent.y")
+
+
+# ---------------------------------------------------------------------
+# BaseMemoryService.search_memory wrapper
+# ---------------------------------------------------------------------
+class TestMemoryWrapper:
+    def test_records_query_and_result_count(self, recording_client):
+        instrumentor = MagicMock(client=recording_client)
+        wrapper = memory_search_memory(instrumentor)
+
+        response = SimpleNamespace(memories=[SimpleNamespace(id="m1"), SimpleNamespace(id="m2")])
+
+        async def wrapped(*, app_name, user_id, query):
+            return response
+
+        # A concrete subclass so type(instance).__name__ reads sensibly.
+        class InMemoryMemoryService:
+            pass
+
+        result = _run(
+            wrapper(
+                wrapped,
+                InMemoryMemoryService(),
+                (),
+                {"app_name": "weather-app", "user_id": "u-1", "query": "hiking"},
+            )
+        )
+        assert result is response
+
+        span = find_span(recording_client, "adk.memory.search")
+        attrs = json.loads(span.attributes_json)
+        assert attrs[AgenticAttributes.OPERATION_NAME] == "search_memory"
+        assert attrs["agentic.rag.backend"] == "InMemoryMemoryService"
+        assert attrs["agentic.rag.query"] == "hiking"
+        assert attrs["agentic.rag.result_count"] == 2
+        assert attrs["agentic.app.name"] == "weather-app"
+        assert attrs["agentic.session.user_id"] == "u-1"
+
+    def test_exception_closes_span_and_reraises(self, recording_client):
+        instrumentor = MagicMock(client=recording_client)
+        wrapper = memory_search_memory(instrumentor)
+
+        async def wrapped(*, app_name, user_id, query):
+            raise RuntimeError("memory backend down")
+
+        with pytest.raises(RuntimeError, match="memory backend down"):
+            _run(
+                wrapper(
+                    wrapped,
+                    SimpleNamespace(),
+                    (),
+                    {"app_name": "a", "user_id": "u", "query": "q"},
+                )
+            )
+        # Span reached the buffer — scope closed on the error path.
+        find_span(recording_client, "adk.memory.search")
+
+    def test_no_memories_field_leaves_result_count_absent(self, recording_client):
+        # Old / alternative backend that returns a bare list or a shape
+        # without ``.memories`` — instrumentation must not crash and
+        # should silently skip the count attribute.
+        instrumentor = MagicMock(client=recording_client)
+        wrapper = memory_search_memory(instrumentor)
+
+        async def wrapped(*, app_name, user_id, query):
+            return SimpleNamespace()  # no .memories
+
+        _run(
+            wrapper(
+                wrapped,
+                SimpleNamespace(),
+                (),
+                {"app_name": "a", "user_id": "u", "query": "q"},
+            )
+        )
+        span = find_span(recording_client, "adk.memory.search")
+        attrs = json.loads(span.attributes_json)
+        assert "agentic.rag.result_count" not in attrs
+
+
+# ---------------------------------------------------------------------
+# RemoteA2aAgent._run_async_impl wrapper (A2A CLIENT span)
+# ---------------------------------------------------------------------
+class TestA2aWrapper:
+    def test_records_from_and_to(self, recording_client):
+        instrumentor = MagicMock(client=recording_client)
+        wrapper = a2a_run_async_impl(instrumentor)
+
+        events = [SimpleNamespace(id="e1"), SimpleNamespace(id="e2")]
+
+        def wrapped(ctx):
+            return _AsyncGen(events)
+
+        remote = SimpleNamespace(
+            name="weather_agent",
+            agent_card="https://peer.example.com/agent.json",
+            url=None,
+            _timeout=30.0,
+        )
+        ctx = SimpleNamespace(invocation_id="inv-1")
+        gen = wrapper(wrapped, remote, (ctx,), {})
+
+        async def _drain():
+            return [ev async for ev in gen]
+
+        drained = _run(_drain())
+        assert drained == events
+
+        span = find_span(recording_client, "adk.a2a.send")
+        attrs = json.loads(span.attributes_json)
+        assert attrs["agentic.a2a.from"] == "weather_agent"
+        assert attrs["agentic.a2a.to"] == "https://peer.example.com/agent.json"
+        assert attrs["agentic.a2a.timeout_s"] == 30.0
+        # Verify span kind is CLIENT — differentiates it from AGENT_EXEC.
+        assert span.kind == "CLIENT"
+
+    def test_cancellation_finalizes_span(self, recording_client):
+        instrumentor = MagicMock(client=recording_client)
+        wrapper = a2a_run_async_impl(instrumentor)
+
+        class _NeverEnds:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                await asyncio.sleep(3600)
+
+            async def aclose(self):
+                pass
+
+        def wrapped(ctx):
+            return _NeverEnds()
+
+        remote = SimpleNamespace(name="peer", agent_card="u", url=None, _timeout=1.0)
+        gen = wrapper(wrapped, remote, (SimpleNamespace(),), {})
+
+        async def _drive():
+            it = gen.__aiter__()
+            task = asyncio.create_task(it.__anext__())
+            await asyncio.sleep(0)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        _run(_drive())
+        # Span reached the buffer via cancellation path — no deadlock.
+        find_span(recording_client, "adk.a2a.send")
+
+    def test_does_not_install_tool_aggregator(self, recording_client):
+        # A2A CLIENT span is a transport wrapper; aggregation belongs on
+        # the enclosing AGENT_EXEC. Verify install_agg=False actually
+        # prevents this wrapper from setting the aggregator contextvar.
+        instrumentor = MagicMock(client=recording_client)
+        wrapper = a2a_run_async_impl(instrumentor)
+
+        def wrapped(ctx):
+            return _AsyncGen([SimpleNamespace(id="e")])
+
+        remote = SimpleNamespace(name="peer", agent_card="u", url=None, _timeout=1.0)
+        gen = wrapper(wrapped, remote, (SimpleNamespace(),), {})
+
+        captured: list = []
+
+        async def _drive():
+            async for _ in gen:
+                captured.append(_current_agg.get())
+
+        _run(_drive())
+        # No aggregator installed while iterating A2A stream (unlike
+        # runner/agent wrappers).
+        assert captured == [None]
 
 
 # ---------------------------------------------------------------------

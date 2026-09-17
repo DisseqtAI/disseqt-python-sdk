@@ -544,6 +544,129 @@ def llm_generate_content_async(instrumentor: AdkInstrumentor) -> Callable[..., A
 
 
 # ---------------------------------------------------------------------
+# BaseMemoryService.search_memory wrapper
+# ---------------------------------------------------------------------
+def _set_memory_search_attrs(span: DisseqtSpan, instance: Any, kwargs: dict[str, Any]) -> None:
+    span.set_operation("search_memory")
+    # ADK's memory service is a first-class RAG source; tag the backend
+    # so dashboards can distinguish InMemory / VertexAiRag / MemoryBank.
+    backend = type(instance).__name__ if instance is not None else "memory"
+    safe_set(span, "agentic.rag.backend", backend)
+    query = kwargs.get("query")
+    if query:
+        safe_set(span, "agentic.rag.query", str(query))
+    app_name = kwargs.get("app_name")
+    if app_name:
+        safe_set(span, "agentic.app.name", str(app_name))
+    user_id = kwargs.get("user_id")
+    if user_id:
+        safe_set(span, "agentic.session.user_id", str(user_id))
+
+
+def _set_memory_search_result_attrs(span: DisseqtSpan, result: Any) -> None:
+    memories = read(result, "memories")
+    if memories is None:
+        return
+    try:
+        count = len(memories)
+    except TypeError:
+        return
+    safe_set(span, "agentic.rag.result_count", count)
+
+
+def memory_search_memory(instrumentor: AdkInstrumentor) -> Callable[..., Any]:
+    """
+    Wrap ``BaseMemoryService.search_memory`` as a RAG_EXEC span.
+
+    All ADK memory services (``InMemoryMemoryService``,
+    ``VertexAiRagMemoryService``, ``VertexAiMemoryBankService``) override
+    the abstract ``search_memory(*, app_name, user_id, query)`` coroutine
+    on ``BaseMemoryService``, so one patch covers the tree. Return value
+    is a ``SearchMemoryResponse`` with ``.memories: list[MemoryEntry]``
+    — we record the count as ``agentic.rag.result_count``.
+    """
+
+    async def wrapper(
+        wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
+    ) -> Any:
+        scope = open_llm_span(instrumentor.client, "adk.memory.search", SpanKind.RAG_EXEC)
+        span = scope.span
+        safe_call(_set_memory_search_attrs, span, instance, kwargs)
+        try:
+            result = await wrapped(*args, **kwargs)
+        except BaseException as exc:
+            scope.__exit__(type(exc), exc, exc.__traceback__)
+            raise
+        safe_call(_set_memory_search_result_attrs, span, result)
+        scope.__exit__(None, None, None)
+        return result
+
+    return wrapper
+
+
+# ---------------------------------------------------------------------
+# RemoteA2aAgent._run_async_impl wrapper (A2A CLIENT span)
+# ---------------------------------------------------------------------
+def _set_a2a_attrs(span: DisseqtSpan, instance: Any) -> None:
+    # CLIENT-kind: this process is calling out to a remote agent over
+    # HTTP. Sits INSIDE the BaseAgent.run_async AGENT_EXEC (which fires
+    # first via inheritance) so the trace tree reads:
+    #     adk.agent.<name>  AGENT_EXEC
+    #     └── adk.a2a.send  CLIENT   ← this span
+    span.set_operation("a2a.send")
+    name = read(instance, "name")
+    if name:
+        safe_set(span, "agentic.a2a.from", str(name))
+    # RemoteA2aAgent stores the target as a URL or agent card source.
+    url = read(instance, "agent_card") or read(instance, "url")
+    if url:
+        safe_set(span, "agentic.a2a.to", str(url))
+    timeout = read(instance, "_timeout")
+    if timeout is not None:
+        safe_set(span, "agentic.a2a.timeout_s", timeout)
+
+
+def a2a_run_async_impl(instrumentor: AdkInstrumentor) -> Callable[..., Any]:
+    """
+    Wrap ``RemoteA2aAgent._run_async_impl`` as a CLIENT span around the
+    A2A network hop.
+
+    The outer ``BaseAgent.run_async`` patch already emits an AGENT_EXEC
+    span for this agent — we deliberately choose ``_run_async_impl``
+    (the async-gen that actually does ``_compat.send_message(...)`` at
+    line ~1640 of google-adk 2.9.1) so the CLIENT span nests *inside*
+    the AGENT_EXEC rather than replacing it. This mirrors OTel's
+    convention: AGENT_EXEC = "run this agent turn", CLIENT = "send
+    request to remote peer, wait for reply".
+
+    Reuses ``_AgentGenScope`` with ``install_agg=False`` since:
+      * we don't want a tool-call aggregator on this scope (aggregation
+        belongs on the enclosing AGENT_EXEC scope);
+      * we DO want the same idempotent-close + aclose-forwarding
+        guarantees that keep async-gen wrappers deadlock-safe.
+    """
+
+    def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+        scope = open_llm_span(instrumentor.client, "adk.a2a.send", SpanKind.CLIENT)
+        span = scope.span
+        safe_call(_set_a2a_attrs, span, instance)
+
+        try:
+            agen = wrapped(*args, **kwargs)
+        except BaseException as exc:
+            scope.__exit__(type(exc), exc, exc.__traceback__)
+            raise
+        return _AgentGenScope(
+            agen=agen,
+            scope=scope,
+            span=span,
+            install_agg=False,
+        )
+
+    return wrapper
+
+
+# ---------------------------------------------------------------------
 # AGENT_EXEC async-generator scope
 # ---------------------------------------------------------------------
 class _AgentGenScope:
