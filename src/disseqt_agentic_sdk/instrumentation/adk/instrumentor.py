@@ -28,6 +28,15 @@ not ship one as of Sep 2026):
     chunks (both non-streaming and streaming go through this single
     method; ``stream=True`` yields partials + one final aggregated
     ``partial=False`` chunk).
+  * ``google.adk.memory.base_memory_service.BaseMemoryService.search_memory``
+    — RAG_EXEC span. All memory services (``InMemoryMemoryService``,
+    ``VertexAiRagMemoryService``, ``VertexAiMemoryBankService``) override
+    this abstract method, so one patch covers the tree.
+  * ``google.adk.agents.remote_a2a_agent.RemoteA2aAgent._run_async_impl``
+    — CLIENT span nested under the ``BaseAgent.run_async`` AGENT_EXEC
+    span. Captures the A2A network hop between processes so multi-agent
+    architectures show as a proper service map without needing manual
+    ``@disseqt_trace(kind=CLIENT)`` wrappers.
 
 Not patched:
 
@@ -48,8 +57,10 @@ tracer; we do not.
 from __future__ import annotations
 
 from disseqt_agentic_sdk.instrumentation.adk.patch import (
+    a2a_run_async_impl,
     agent_run_async,
     llm_generate_content_async,
+    memory_search_memory,
     runner_run_async,
     tool_run_async,
 )
@@ -82,4 +93,14 @@ class AdkInstrumentor(DisseqtInstrumentor):
             "google.adk.models.base_llm",
             "BaseLlm.generate_content_async",
             llm_generate_content_async(self),
+        )
+        self._wrap(
+            "google.adk.memory.base_memory_service",
+            "BaseMemoryService.search_memory",
+            memory_search_memory(self),
+        )
+        self._wrap(
+            "google.adk.agents.remote_a2a_agent",
+            "RemoteA2aAgent._run_async_impl",
+            a2a_run_async_impl(self),
         )
