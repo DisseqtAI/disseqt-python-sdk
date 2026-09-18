@@ -36,6 +36,7 @@ _EXTRA_TO_PROVIDER = {
     "cohere": "cohere",
     "gemini": "google-genai",
     "litellm": "litellm",
+    "adk": "google-adk",
 }
 
 # Map provider (INSTRUMENTOR_CLASSES key) → pip distribution name in the
@@ -48,6 +49,7 @@ _PROVIDER_TO_DIST = {
     "cohere": "cohere",
     "google-genai": "google-genai",
     "litellm": "litellm",
+    "google-adk": "google-adk",
 }
 
 

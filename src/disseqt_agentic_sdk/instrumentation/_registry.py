@@ -17,6 +17,8 @@ INSTRUMENTOR_CLASSES: dict[str, str] = {
     "mistralai": "disseqt_agentic_sdk.instrumentation.mistral.MistralInstrumentor",
     "cohere": "disseqt_agentic_sdk.instrumentation.cohere.CohereInstrumentor",
     "google-genai": "disseqt_agentic_sdk.instrumentation.gemini.GeminiInstrumentor",
+    # Agent frameworks
+    "google-adk": "disseqt_agentic_sdk.instrumentation.adk.AdkInstrumentor",
     # Router / proxy
     "litellm": "disseqt_agentic_sdk.instrumentation.litellm.LiteLLMInstrumentor",
 }
@@ -31,6 +33,7 @@ INSTRUMENTOR_CLASSES: dict[str, str] = {
 INSTRUMENTOR_ALIASES: dict[str, str] = {
     "gemini": "google-genai",
     "mistral": "mistralai",
+    "adk": "google-adk",
 }
 
 
