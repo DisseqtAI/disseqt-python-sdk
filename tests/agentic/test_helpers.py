@@ -736,25 +736,36 @@ class TestDisseqtTraceIOCapture:
         internal/enrichment/enricher.go around the ``isModelExec``
         check), so stamping it elsewhere is dead metadata at best and
         confusing UI at worst.
+
+        Uses ``kind=SpanKind.AGENT_EXEC``, not ``TOOL_EXEC``: a
+        TOOL_EXEC span's own branch unconditionally re-stamps
+        ``operation.name=execute_tool`` regardless of what the
+        ``is_llm_kind`` guard did, so a TOOL_EXEC-based version of this
+        test passes whether or not the guard actually exists — it
+        can't fail on the regression it claims to catch (TP-2209
+        round-3 review, verified by removing the guard and watching a
+        TOOL_EXEC-based assertion stay green while AGENT_EXEC leaked).
+        AGENT_EXEC has no such downstream branch, so it's the kind that
+        can actually go red if this guard breaks.
         """
         import json as _json
 
         @disseqt_trace(
             self.client,
-            kind=SpanKind.TOOL_EXEC,
-            name="tool_with_op",
+            kind=SpanKind.AGENT_EXEC,
+            name="agent_with_op",
             operation="embeddings",
         )
-        def tool(x: str) -> str:
+        def agent_step(x: str) -> str:
             return x
 
-        tool("x")
+        agent_step("x")
 
-        attrs = _json.loads(self._find_span("tool_with_op").attributes_json)
-        # TOOL_EXEC stamps operation.name = execute_tool unconditionally
-        # (drives ``is_tool_call`` server-side) — the embeddings kwarg
-        # is silently ignored, not honoured, not merged.
-        assert attrs[AgenticAttributes.OPERATION_NAME] == AgenticOperation.EXECUTE_TOOL
+        attrs = _json.loads(self._find_span("agent_with_op").attributes_json)
+        # AGENT_EXEC is neither is_llm_kind nor is_tool_kind, so nothing
+        # in _prep_span stamps operation.name for it at all — the
+        # embeddings kwarg must be silently ignored, not leaked.
+        assert AgenticAttributes.OPERATION_NAME not in attrs
 
     # -------------------------------------------------------------------
     # TP-2209 "third guardrail" coverage (Yash: "implemented correctly
@@ -839,24 +850,130 @@ class TestDisseqtTraceIOCapture:
         through to its ``default → chat`` pricing branch. If we
         stamped an unwanted default here we'd silently price a
         genuinely-unknown-shape span as chat.
+
+        Also asserts no ``UserWarning`` fires here: the warn condition
+        checks ``explicit_operation`` (only set when the caller passed
+        something), so a future refactor that swapped it for
+        ``resolved_operation`` would spuriously warn on this exact
+        no-operation-passed, capture_io=False path (round-3 review,
+        MEDIUM finding).
         """
         import json as _json
+        import warnings as _warnings
 
-        @disseqt_trace(
-            self.client,
-            kind=SpanKind.MODEL_EXEC,
-            name="no_capture_no_op",
-            model="my-model-v1",
-            provider="custom",
-            capture_io=False,
-        )
-        def call(q: str) -> str:
-            return f"answer: {q}"
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter("always")
 
-        call("what?")
+            @disseqt_trace(
+                self.client,
+                kind=SpanKind.MODEL_EXEC,
+                name="no_capture_no_op",
+                model="my-model-v1",
+                provider="custom",
+                capture_io=False,
+            )
+            def call(q: str) -> str:
+                return f"answer: {q}"
+
+            call("what?")
+
+        assert not [w for w in caught if issubclass(w.category, UserWarning)]
 
         attrs = _json.loads(self._find_span("no_capture_no_op").attributes_json)
         assert AgenticAttributes.OPERATION_NAME not in attrs
+
+    # -------------------------------------------------------------------
+    # TP-2209 round-3 review follow-up: an unrecognized ``operation=``
+    # value (e.g. the singular "embedding") was otherwise indistinguishable
+    # from never having passed one — same silent chat-default mispricing.
+    # Warn-and-pass-through: never raises (this runs inside customer
+    # application code), never silently coerces the value, never fires on
+    # the plain no-operation path.
+    # -------------------------------------------------------------------
+
+    def test_unrecognized_operation_kwarg_warns_and_still_stamps_value(self):
+        """
+        A value outside PRICING_CLASSIFIED_OPERATIONS must still reach
+        the span as-is (pass-through, not dropped, not corrected) AND
+        must raise a UserWarning naming the recognized set — so a typo
+        like "embedding" (singular) is visible instead of silently
+        behaving exactly like no ``operation=`` was passed at all.
+        """
+        import json as _json
+
+        with pytest.warns(UserWarning, match="embedding"):
+
+            @disseqt_trace(
+                self.client,
+                kind=SpanKind.MODEL_EXEC,
+                name="typo_operation",
+                model="my-embed-v1",
+                provider="custom",
+                operation="embedding",  # typo: singular, not in the known set
+            )
+            def embed(text: str) -> list[float]:
+                return [0.1]
+
+            embed("hello")
+
+        attrs = _json.loads(self._find_span("typo_operation").attributes_json)
+        # Pass-through: the typo'd value is stamped verbatim, not silently
+        # corrected to "embeddings" and not dropped back to the chat default.
+        assert attrs[AgenticAttributes.OPERATION_NAME] == "embedding"
+
+    def test_recognized_operation_kwarg_does_not_warn(self):
+        """
+        A correctly-spelled, recognized value must never warn. Records
+        (rather than error-escalates) so the pre-existing, unrelated
+        DeprecationWarning that ``asyncio.iscoroutinefunction`` raises
+        on every decoration doesn't produce a false failure here — this
+        test is specifically about the operation-validation UserWarning.
+        """
+        import warnings as _warnings
+
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter("always")
+
+            @disseqt_trace(
+                self.client,
+                kind=SpanKind.MODEL_EXEC,
+                name="correct_operation",
+                model="my-embed-v1",
+                provider="custom",
+                operation=AgenticOperation.EMBEDDINGS,
+            )
+            def embed(text: str) -> list[float]:
+                return [0.1]
+
+            embed("hello")
+
+        assert not [w for w in caught if issubclass(w.category, UserWarning)]
+
+    def test_no_operation_kwarg_stays_silent(self):
+        """
+        The common, unchanged path: no ``operation=`` passed at all.
+        Must stay completely silent (no UserWarning) — a warning fired
+        on every untyped call would be a worse regression than the
+        typo bug this guards against.
+        """
+        import warnings as _warnings
+
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter("always")
+
+            @disseqt_trace(
+                self.client,
+                kind=SpanKind.MODEL_EXEC,
+                name="no_operation_at_all",
+                model="my-chat-v1",
+                provider="custom",
+            )
+            def call(q: str) -> str:
+                return f"answer: {q}"
+
+            call("hi")
+
+        assert not [w for w in caught if issubclass(w.category, UserWarning)]
 
     def test_provider_ignored_when_model_absent(self):
         """
