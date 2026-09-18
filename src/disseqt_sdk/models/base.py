@@ -2,8 +2,25 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
+
+
+@dataclass(frozen=True, slots=True)
+class Example:
+    """One judge few-shot example used for calibration (Phase 1d).
+
+    Passed inside ``SDKConfigInput.evaluation_examples`` and serialized
+    into the ``judge.evaluation_examples`` block on the wire. Quality
+    judges only — safety judges ignore caller-supplied criteria and
+    examples (server stamps ``others.criteria_ignored=true`` when
+    supplied).
+    """
+
+    input: str
+    expected_output: str
+    rationale: str = ""
+    score: float | None = None
 
 
 @dataclass(slots=True)
@@ -56,6 +73,12 @@ class SDKConfigInput:
     # their frozen rubric verbatim and ignore caller criteria (the response
     # stamps others.criteria_ignored=true when that happens).
     judge: dict[str, Any] | None = None
+    # Few-shot calibration examples for the judge (Phase 1d). Quality judges
+    # only — safety judges ignore these (frozen rubric). Serialized into the
+    # wire ``judge.evaluation_examples`` block. Examples MUST be scrubbed of
+    # any `<<<END_RESPONSE>>>`-style marker sequences server-side before
+    # injection into the judge prompt — see prompt_v1.go:neutralizeMarkers.
+    evaluation_examples: list[Example] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         has_integration_id = bool(self.llm_id or (self.judge or {}).get("custom_llm_id"))
@@ -88,6 +111,16 @@ class SDKConfigInput:
         judge_block = dict(self.judge) if self.judge else {}
         if self.llm_id:
             judge_block["custom_llm_id"] = self.llm_id
+        if self.evaluation_examples:
+            judge_block["evaluation_examples"] = [
+                {
+                    "input": e.input,
+                    "expected_output": e.expected_output,
+                    **({"rationale": e.rationale} if e.rationale else {}),
+                    **({"score": e.score} if e.score is not None else {}),
+                }
+                for e in self.evaluation_examples
+            ]
         if judge_block:
             out["judge"] = judge_block
         return out

@@ -27,7 +27,11 @@ dependencies = [
     "requests>=2.33.0",
     "typing-extensions>=4.8.0",
     "wrapt>=1.16.0",
+    "click>=8.1.0",
 ]
+
+[project.scripts]
+disseqt = "disseqt_sdk.cli:cli"
 
 # Optional extras — install only the LLM SDKs you actually call.
 #   pip install "disseqt-ai-sdk[openai]"          # one provider
@@ -57,6 +61,26 @@ dependencies = [
 # instrument_all() walks the canonical keys only, so each instrumentor
 # is applied exactly once regardless of which alias a caller uses.
 [project.optional-dependencies]
+# CLI extras: YAML config for `disseqt run`, rich progress bars for
+# long-running runs. The CLI degrades to JSON-only config without pyyaml.
+cli = ["pyyaml>=6.0", "rich>=13.0"]
+# Dev extra mirrors [dependency-groups].dev so `pip install -e ".[dev]"`
+# works on pip <25.1 (which doesn't yet consume PEP 735 groups).
+dev = [
+    "pytest>=9.0.3",
+    "pytest-cov>=7.0.0",
+    "pytest-mock>=3.15.1",
+    "requests-mock>=1.12.1",
+    "responses>=0.25.0",
+    "black>=26.3.1",
+    "ruff>=0.14.2",
+    "mypy>=1.18.2",
+    "types-requests>=2.32.4.20250913",
+    "packaging>=24.0",
+    "tomli>=2.0.0; python_version < '3.11'",
+    "pyyaml>=6.0",
+    "rich>=13.0",
+]
 openai = ["openai>=1.50.0"]
 anthropic = ["anthropic>=0.40.0"]
 groq = ["groq>=0.11.0"]
@@ -141,6 +165,16 @@ warn_no_return = true
 warn_unreachable = true
 strict_equality = true
 
+# Legacy module — pre-existing warnings baselined. Do not extend to new code.
+# ponytail: relax type-strictness on legacy agentic SDK, tighten module-by-module when touched.
+[[tool.mypy.overrides]]
+module = "disseqt_agentic_sdk.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = false
+warn_unreachable = false
+warn_unused_ignores = false
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
@@ -189,6 +223,7 @@ dev = [
     "pytest-cov>=7.0.0",
     "pytest-mock>=3.15.1",
     "requests-mock>=1.12.1",
+    "responses>=0.25.0",
     "ruff>=0.14.2",
     "types-requests>=2.32.4.20250913",
     # packaging + tomli are used by test_pyproject_min_versions to
