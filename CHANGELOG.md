@@ -17,9 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Previously an unrecognized value (e.g. the singular ``"embedding"``,
   the natural typo) was stamped and silently priced as chat — identical
   to never having passed ``operation=`` at all, with zero feedback. The
-  value is still stamped as-is (never corrected, never dropped, never
-  raises); calls that don't pass ``operation=`` remain completely silent,
-  as before.
+  value is still stamped as-is (never corrected, never dropped). The
+  decorator itself never raises, but — like any ``warnings.warn`` call —
+  a caller running under a strict warning filter (``-W error`` /
+  ``filterwarnings("error")``) will see this escalate to an exception at
+  decoration time. Calls that don't pass ``operation=`` remain completely
+  silent, as before.
 - ``test_operation_kwarg_ignored_when_kind_not_model_exec`` now uses
   ``kind=SpanKind.AGENT_EXEC`` instead of ``TOOL_EXEC``. The TOOL_EXEC
   branch unconditionally re-stamps ``operation.name=execute_tool``

@@ -592,6 +592,14 @@ def disseqt_trace(
             # never having passed ``operation=`` at all — same silent
             # $0.00-or-mispriced-as-chat failure this kwarg exists to
             # prevent.
+            #
+            # "Warn, don't raise" describes what THIS code does, not a
+            # guarantee about the caller: like any ``warnings.warn`` call,
+            # this escalates to a real exception under a caller's strict
+            # warning filter (``-W error`` / ``filterwarnings("error")``,
+            # e.g. common pytest configs). That's the caller's own policy
+            # choice applying uniformly to all warnings, not something this
+            # decorator can or should suppress.
             if explicit_operation and explicit_operation not in PRICING_CLASSIFIED_OPERATIONS:
                 warnings.warn(
                     f"disseqt_trace(operation={explicit_operation!r}) is not one of the "

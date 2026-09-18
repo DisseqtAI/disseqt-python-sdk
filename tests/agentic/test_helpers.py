@@ -975,6 +975,69 @@ class TestDisseqtTraceIOCapture:
 
         assert not [w for w in caught if issubclass(w.category, UserWarning)]
 
+    def test_unrecognized_operation_kwarg_warns_on_async_function(self):
+        """
+        Async-decorated functions must get the same warning as sync
+        ones. The warning is deliberately computed at decoration time
+        (not inside ``async_wrapper``) specifically because an async
+        function's caller is separated from its own call site by
+        asyncio's scheduling machinery, which would make a per-call
+        ``stacklevel`` unreliable — see the comment above
+        ``resolved_operation`` in helpers.py. Decorating an ``async
+        def`` is the one case that actually exercises that reasoning;
+        without this test nothing catches a future refactor that moves
+        the warning inside the async wrapper and silently drops it (or
+        points it at the wrong frame).
+        """
+        import asyncio
+        import json as _json
+
+        with pytest.warns(UserWarning, match="embedding"):
+
+            @disseqt_trace(
+                self.client,
+                kind=SpanKind.MODEL_EXEC,
+                name="typo_operation_async",
+                model="my-embed-v1",
+                provider="custom",
+                operation="embedding",  # typo: singular, not in the known set
+            )
+            async def embed(text: str) -> list[float]:
+                await asyncio.sleep(0)
+                return [0.1]
+
+            asyncio.run(embed("hello"))
+
+        attrs = _json.loads(self._find_span("typo_operation_async").attributes_json)
+        assert attrs[AgenticAttributes.OPERATION_NAME] == "embedding"
+
+    def test_no_operation_kwarg_stays_silent_on_async_function(self):
+        """
+        Async counterpart to ``test_no_operation_kwarg_stays_silent``:
+        the common no-``operation=`` path must stay silent for an
+        ``async def`` decoration too, not just a sync one.
+        """
+        import asyncio
+        import warnings as _warnings
+
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter("always")
+
+            @disseqt_trace(
+                self.client,
+                kind=SpanKind.MODEL_EXEC,
+                name="no_operation_at_all_async",
+                model="my-chat-v1",
+                provider="custom",
+            )
+            async def call(q: str) -> str:
+                await asyncio.sleep(0)
+                return f"answer: {q}"
+
+            asyncio.run(call("hi"))
+
+        assert not [w for w in caught if issubclass(w.category, UserWarning)]
+
     def test_provider_ignored_when_model_absent(self):
         """
         ``provider=`` alone is meaningless — the backend keys pricing
