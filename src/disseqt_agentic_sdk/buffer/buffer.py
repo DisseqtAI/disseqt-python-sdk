@@ -175,7 +175,25 @@ class TraceBuffer:
                 time.sleep(self.flush_interval)
                 if self.should_flush():
                     logger.debug("Time-based flush triggered")
-                    self.flush()
+                    try:
+                        self.flush()
+                    except Exception:
+                        # An uncaught exception here would otherwise
+                        # propagate out of flush_worker and kill this
+                        # daemon thread silently for the life of the
+                        # process -- no more automatic flushes, ever,
+                        # with nothing louder than a raw stderr traceback
+                        # from Python's default thread excepthook.
+                        # Validation at client construction (see
+                        # client.py's _validate_header_value) closes the
+                        # known trigger -- a header value that breaks
+                        # HTTP encoding -- before it can ever reach this
+                        # call; this catches whatever that validation
+                        # didn't anticipate, and keeps the thread alive
+                        # to try again next interval.
+                        logger.exception(
+                            "Time-based flush failed unexpectedly — flush thread continuing"
+                        )
 
         self._flush_thread = Thread(target=flush_worker, daemon=True, name="TraceBufferFlushThread")
         self._flush_thread.start()
