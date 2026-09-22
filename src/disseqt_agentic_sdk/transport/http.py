@@ -277,6 +277,23 @@ class HTTPTransport:
                 allow_redirects=False,
             )
             response.raise_for_status()
+            # raise_for_status() only raises on 4xx/5xx -- a 3xx would
+            # otherwise fall through as "success" below even though
+            # allow_redirects=False means it was never followed, so the
+            # spans were never actually delivered anywhere.
+            if 300 <= response.status_code < 400:
+                logger.error(
+                    "Trace POST received an unexpected redirect (%s) and "
+                    "was not followed (allow_redirects=False) — spans not "
+                    "delivered",
+                    response.status_code,
+                    extra={
+                        "endpoint": self.endpoint,
+                        "span_count": len(spans),
+                        "status_code": response.status_code,
+                    },
+                )
+                return False
             logger.info(
                 "Successfully sent spans to backend",
                 extra={

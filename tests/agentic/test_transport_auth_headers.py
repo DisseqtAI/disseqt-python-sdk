@@ -118,6 +118,26 @@ class TestHeaderFirstIdentity:
 
         assert kwargs["allow_redirects"] is False
 
+    def test_redirect_response_is_treated_as_failure_not_success(self):
+        """
+        ``response.raise_for_status()`` only raises on 4xx/5xx -- a 3xx
+        response would otherwise fall through to "success" even though
+        ``allow_redirects=False`` means it was never followed, so the
+        spans were never actually delivered anywhere. A silently-dropped
+        span with no error and no retry is worse than a loud failure.
+        """
+        transport = HTTPTransport(
+            endpoint="https://api.disseqt.ai/agentic-monitoring/api/v1/traces",
+            api_key="secret-key-42",
+            application_id="7ce57144-9df6-4fa4-8aad-8cbc1ffdb558",
+        )
+        fake_response = MagicMock(status_code=302)
+        fake_response.raise_for_status = MagicMock()  # 3xx doesn't raise, same as real requests
+        with patch.object(transport.session, "post", return_value=fake_response):
+            all_ok = transport.send_spans([_make_span("proj-123")])
+
+        assert all_ok is False
+
     def test_resource_attributes_still_carry_identity_for_backward_compat(self):
         """
         Backward compatibility with plugin versions that only read the
