@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **Server-side realtime-policy evaluation surface.** The
+  ``Client.validate(request, policies=[...])`` shape (and its
+  ``Client.validate_sync(..., raise_on_async=True)`` companion), the
+  ``Guardrails`` class, the ``BaseGuard`` extension, the ``disseqt
+  validate`` and ``disseqt run`` CLI commands, the ``disseqt_sdk.policy``
+  module (``any_blocking``, ``is_blocking``, ``is_async``,
+  ``parse_policy``, ``BlockedError``, ``PolicyDecision``, ``PolicyRule``,
+  ``PolicyRuleset``, ``DECISION_BLOCK/BORDERLINE/PASS``), and the
+  ``realtime_policy_base_url`` client kwarg + ``DISSEQT_POLICY_BASE_URL``
+  env var have been removed. The runtime evaluate endpoint they targeted
+  (``POST /api/v1/sdk/policies/{id}/evaluate``) is not currently served
+  by any in-scope backend; keeping the shape without a working transport
+  would silently 404 on the first live call. Class-based validators
+  (``Client.validate(SingleValidator(...))`` /
+  ``Client.validate(CompositeScoreEvaluator(...))``) are unaffected.
+
 ### Fixed
 - **``CreateRunRequest.run_name`` now actually reaches the server.** Since
   this SDK's first release, ``to_payload()`` sent the run name under the

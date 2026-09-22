@@ -12,31 +12,56 @@ from disseqt_logging import set_level as set_log_level
 from ._version import SDK_VERSION as __version__
 from .api_client import DisseqtAPIClient
 from .client import Client, HTTPError, SDKVersionBlockedError
-from .models.base import SDKConfigInput
-from .policy import (
-    PolicyDecision,
-    PolicyRule,
-    PolicyRuleset,
-    any_blocking,
-    is_async,
-    is_blocking,
+from .extensions import (
+    BaseAttack,
+    BaseLLM,
+    BaseMetric,
+    BaseMultiTurnAttack,
+    BaseSingleTurnAttack,
+    BaseVulnerability,
 )
-from .policy import parse as parse_policy
+from .models.base import SDKConfigInput
+from .red_team import RedTeamer, red_team
+from .resources import (
+    ByovValidatorsResource,
+    McpTargetsResource,
+    OutputValidationsResource,
+    PacksResource,
+    RagTargetsResource,
+    RagValidationsResource,
+    RunsResource,
+    SessionsResource,
+    TargetsResource,
+    VulnerabilitiesResource,
+)
+from .telemetry import cost_accumulator
 
 __all__ = [
+    "BaseAttack",
+    "BaseLLM",
+    "BaseMetric",
+    "BaseMultiTurnAttack",
+    "BaseSingleTurnAttack",
+    "BaseVulnerability",
+    "ByovValidatorsResource",
     "Client",
     "DisseqtAPIClient",
     "HTTPError",
-    "PolicyDecision",
-    "PolicyRule",
-    "PolicyRuleset",
+    "McpTargetsResource",
+    "OutputValidationsResource",
+    "PacksResource",
+    "RagTargetsResource",
+    "RagValidationsResource",
+    "RedTeamer",
+    "RunsResource",
     "SDKConfigInput",
     "SDKVersionBlockedError",
-    "any_blocking",
+    "SessionsResource",
+    "TargetsResource",
+    "VulnerabilitiesResource",
     "configure_logging",
+    "cost_accumulator",
     "get_logger",
-    "is_async",
-    "is_blocking",
-    "parse_policy",
+    "red_team",
     "set_log_level",
 ]

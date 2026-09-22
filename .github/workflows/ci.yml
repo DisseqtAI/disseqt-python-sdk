@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+# Least-privilege token per CodeQL actions/missing-workflow-permissions.
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: lint

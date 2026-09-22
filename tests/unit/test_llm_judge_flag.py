@@ -1,6 +1,9 @@
 """Per-request LLM-judge flag: ``SDKConfigInput.llm_as_a_judge`` /
-``SDKConfigInput.judge`` serialization, and the policy path forwarding
-``config_input`` to policy evaluation."""
+``SDKConfigInput.judge`` serialization and validator-payload forwarding.
+
+The policy-path forwarding coverage that used to live here was retired
+alongside the server-side policy-evaluate transport.
+"""
 
 from __future__ import annotations
 
@@ -15,16 +18,9 @@ from disseqt_sdk.models.input_validation import InputValidationRequest
 from disseqt_sdk.validators.input.safety import ToxicityValidator
 
 BASE = "https://judge-flag.test"
-P1 = "11111111-1111-4111-8111-111111111111"
 TOX_URL = f"{BASE}/api/v1/sdk/validators/input-validation/toxicity"
-P1_URL = f"{BASE}/api/v1/sdk/policies/{P1}/evaluate"
 
 VALIDATOR_RESPONSE = {"success": True, "result": {"data": {"metric_name": "toxicity_evaluation"}}}
-P1_PASS = {
-    "status": "success",
-    "code": "DSQ-2000",
-    "data": {"policy_id": P1, "decision": "PASS", "enforcement": "sync"},
-}
 
 
 def make_client() -> Client:
@@ -32,7 +28,6 @@ def make_client() -> Client:
         project_id="proj",
         api_key="key",
         base_url=BASE,
-        realtime_policy_base_url=BASE,
         application_name="judge-flag-test",
     )
 
@@ -150,43 +145,9 @@ class TestValidatorWirePayload:
         assert "judge" not in sent["config_input"]
 
 
-class TestPolicyPathForwardsConfigInput:
-    """_validate_with_policies passes the validator's config_input through
-    to policy evaluation; bare models send none."""
-
-    def test_validator_config_forwarded_to_policy_evaluate(self, requests_mock):
-        requests_mock.post(TOX_URL, json=VALIDATOR_RESPONSE)
-        pol = requests_mock.post(P1_URL, json=P1_PASS)
-        make_client().validate(
-            toxicity(SDKConfigInput(threshold=0.7, llm_as_a_judge=True, llm_id="cllm-1")),
-            policies=[P1],
-        )
-        sent = pol.last_request.json()
-        assert sent["config_input"] == {
-            "threshold": 0.7,
-            "llm_as_a_judge": True,
-            "judge": {"custom_llm_id": "cllm-1"},
-        }
-
-    def test_plain_config_also_forwarded(self, requests_mock):
-        requests_mock.post(TOX_URL, json=VALIDATOR_RESPONSE)
-        pol = requests_mock.post(P1_URL, json=P1_PASS)
-        make_client().validate(toxicity(SDKConfigInput(threshold=0.3)), policies=[P1])
-        assert pol.last_request.json()["config_input"] == {"threshold": 0.3}
-
-    def test_bare_model_sends_no_config_input(self, requests_mock):
-        pol = requests_mock.post(P1_URL, json=P1_PASS)
-        make_client().validate(InputValidationRequest(prompt="hi"), policies=[P1])
-        sent = pol.last_request.json()
-        assert "config_input" not in sent
-        assert sent["input_data"] == {"llm_input_query": "hi"}
-
-    def test_policies_only_shape_unaffected_by_flag_default(self, requests_mock):
-        # No validator run for a bare model even though policies get input.
-        pol = requests_mock.post(P1_URL, json=P1_PASS)
-        result = make_client().validate(InputValidationRequest(prompt="hi"), policies=[P1])
-        assert result["validation"] is None
-        assert pol.called
+# NOTE: TestPolicyPathForwardsConfigInput removed alongside the server-side
+# policy-evaluate transport. Validator-side config_input forwarding remains
+# covered by TestPayloadFromToPayload above.
 
 
 class TestJudgeResponsePassthrough:
