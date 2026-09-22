@@ -234,6 +234,26 @@ class HTTPTransport:
         # application_id — never send an empty value.
         if self.application_id:
             headers["X-Application-Id"] = self.application_id
+        # X-Api-Key / X-Project-Id / X-Realtime-Policy-Id: header-first path
+        # for Kong's traces-auth plugin. Historically the SDK put all three
+        # under resource.attributes, so the plugin had to buffer + JSON-parse
+        # the full body just to authenticate — that's what put the auth path
+        # next to the 8 KB spool-to-disk bug in TP-2314. Sending them as
+        # headers lets a header-aware plugin version decide auth before
+        # touching a single byte of body. resource.attributes below stay
+        # populated so this SDK still works against plugin versions that
+        # only look in the body — old-server / new-client is safe.
+        #
+        # X-Realtime-Policy-Id is set per-group (each policy bucket is its
+        # own POST — see _send_group above), so it always matches the
+        # resource.attributes["policy.id"] on the same request.
+        project_id = resource_attrs.get("project.id")
+        if self.api_key:
+            headers["X-Api-Key"] = self.api_key
+        if project_id:
+            headers["X-Project-Id"] = project_id
+        if policy_id:
+            headers["X-Realtime-Policy-Id"] = policy_id
         try:
             response = self.session.post(
                 self.endpoint,
