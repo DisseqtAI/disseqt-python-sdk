@@ -11,6 +11,7 @@ from disseqt_agentic_sdk.buffer import TraceBuffer
 from disseqt_agentic_sdk.trace import DisseqtTrace
 from disseqt_agentic_sdk.transport import HTTPTransport
 from disseqt_agentic_sdk.utils.logging import get_logger
+from disseqt_agentic_sdk.utils.validation import validate_header_value as _validate_header_value
 
 logger = get_logger()
 
@@ -68,71 +69,6 @@ def _reject_missing_or_empty(value: object, name: str, extra_hint: str = "") -> 
         if extra_hint:
             msg = f"{msg}. {extra_hint}"
         raise ValueError(msg)
-
-
-# The two things that actually break sending a value as an HTTP header,
-# checked directly against the real failure modes rather than an
-# assumed character blacklist:
-#
-#   1. Embedded \r / \n — `requests` raises InvalidHeader for these
-#      (header-injection risk); everything else in the C0-control /
-#      DEL range (tab, NUL, bell, ...) is, in practice, sent over the
-#      wire by `requests` without complaint, so it isn't checked here.
-#   2. Anything outside the Latin-1 range — `http.client.putheader`
-#      encodes header values as Latin-1 and raises an uncaught
-#      UnicodeEncodeError for anything outside it (an emoji, most
-#      non-Latin scripts, a copy-pasted smart quote). That exception
-#      isn't a `requests.exceptions.RequestException`, so nothing
-#      downstream catches it — it can kill the background flush thread
-#      outright. Checked directly via an encode attempt rather than an
-#      enumerated character set, so it can't drift out of sync with
-#      what actually breaks. TP-2128 round-3 senior review P1 #1.1
-#      (the original C0-control blacklist rejected harmless characters
-#      like tab while letting the actual crash-risk class through).
-#
-# Originally application_id-only (TP-2128 round-2 P2 #2.3). Generalized
-# to cover api_key and project_id too: both now also travel as HTTP
-# headers on every trace POST (X-Api-Key / X-Project-Id — see
-# transport/http.py), so an unvalidated bad value in either fails
-# exactly the same uncaught-UnicodeEncodeError way application_id did.
-# One shared check instead of three copies so the two checks it runs
-# can't drift out of sync with each other.
-_HEADER_VALUE_DISALLOWED_LINE_BREAKS = frozenset("\r\n")
-
-
-def _validate_header_value(
-    value: str, field_name: str, example_hint: str = "a plain ASCII token (typically a UUID)"
-) -> None:
-    """
-    Raise ``ValueError`` immediately when ``value`` is unsafe to send as
-    an HTTP header.
-
-    ``field_name``'s value is opaque to us but must not carry characters
-    that would break sending it as an HTTP header on every send.
-    Combined with retain-on-failure (TP-2128 round-2 P1 #1.2) an
-    un-caught failure here would otherwise retry forever against a
-    value that will never succeed. Fail loudly here instead. TP-2128
-    round-2 P2 #2.3, tightened by round-3 P1 #1.1 to match what
-    ``requests``/``http.client`` actually reject rather than an assumed
-    control-character list. Caller is responsible for the emptiness
-    check — these are required fields so ``""`` / whitespace is
-    rejected at construction with a different, more actionable message
-    than the header-encoding one below.
-    """
-    if _HEADER_VALUE_DISALLOWED_LINE_BREAKS & set(value):
-        raise ValueError(
-            f"{field_name} contains a carriage return or newline character, "
-            f"which requests rejects as a header-injection risk on every send. "
-            f"Use {example_hint}."
-        )
-    try:
-        value.encode("latin-1")
-    except UnicodeEncodeError as exc:
-        raise ValueError(
-            f"{field_name} contains a character outside the Latin-1 range "
-            f"({exc}), which would crash HTTP header encoding on every send. "
-            f"Use {example_hint}."
-        ) from exc
 
 
 class DisseqtAgenticClient:
@@ -277,10 +213,18 @@ class DisseqtAgenticClient:
         # that http.client.putheader raises on). Combined with retain-on-
         # failure in the buffer, an unvalidated bad value would fail every
         # flush forever without ever reaching the CRITICAL auth-failure
-        # banner. TP-2128 round-2 P2 #2.3 + round-3 P1 #1.1. Covers every
-        # value this SDK stamps onto a header on every trace POST —
-        # api_key and project_id travel as X-Api-Key / X-Project-Id
-        # alongside application_id's X-Application-Id (transport/http.py).
+        # banner. TP-2128 round-2 P2 #2.3 + round-3 P1 #1.1.
+        #
+        # This covers the documented construction path (this client), not
+        # every possible path: project_id can also reach a header via a
+        # directly-constructed DisseqtTrace/DisseqtSpan/EnrichedSpan
+        # (all public classes) bypassing this client entirely, and
+        # application_id/api_key can likewise bypass this client via a
+        # directly-constructed HTTPTransport. transport/http.py validates
+        # both at the one point every value actually passes through
+        # before becoming a header, regardless of how it got there — this
+        # check here is the fail-fast-and-loud layer for the common path,
+        # not the only layer.
         _validate_header_value(self.api_key, "api_key")
         _validate_header_value(self.project_id, "project_id")
         _validate_header_value(self.application_id, "application_id")

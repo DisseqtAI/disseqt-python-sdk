@@ -13,6 +13,7 @@ from urllib3.util.retry import Retry
 
 from disseqt_agentic_sdk.models.span import EnrichedSpan
 from disseqt_agentic_sdk.utils.logging import get_logger
+from disseqt_agentic_sdk.utils.validation import validate_header_value
 
 logger = get_logger()
 
@@ -100,6 +101,16 @@ class HTTPTransport:
         self.verify_ssl = verify_ssl
         self.realtime_policy_id = realtime_policy_id
         self.application_id = application_id
+        # api_key/application_id don't vary after construction (unlike
+        # project_id, validated per-send below in _send_group), so fail
+        # fast here. This is the layer that catches a value that reached
+        # HTTPTransport WITHOUT going through DisseqtAgenticClient's own
+        # (earlier, friendlier) validation -- e.g. HTTPTransport
+        # constructed directly, as this module's own test suite does.
+        if self.api_key:
+            validate_header_value(self.api_key, "api_key")
+        if self.application_id:
+            validate_header_value(self.application_id, "application_id")
 
         # Setup session with retry strategy
         self.session = requests.Session()
@@ -252,6 +263,32 @@ class HTTPTransport:
         # consumer, not ahead of it. resource.attributes["policy.id"]
         # above is unaffected — that's the existing body-side contract.
         project_id = resource_attrs.get("project.id")
+        if project_id:
+            # Unlike api_key/application_id (validated once in __init__,
+            # above), project_id varies per group/span and can reach here
+            # via more than one directly-constructible public class
+            # (DisseqtTrace, DisseqtSpan, EnrichedSpan) that bypasses
+            # DisseqtAgenticClient's own validation entirely. This is the
+            # one point every value actually passes through before
+            # becoming a header, so validate it here too -- and treat a
+            # bad value as this group's send failure (logged, retried
+            # like any other failure) rather than letting an uncaught
+            # UnicodeEncodeError propagate into the caller's own thread
+            # (add_span's synchronous flush path isn't covered by
+            # buffer.py's background-thread try/except).
+            try:
+                validate_header_value(project_id, "project_id")
+            except ValueError as exc:
+                logger.error(
+                    "Dropping span group: project_id is not safe to send " "as an HTTP header (%s)",
+                    exc,
+                    extra={
+                        "endpoint": self.endpoint,
+                        "span_count": len(spans),
+                        "policy_id": policy_id or None,
+                    },
+                )
+                return False
         if self.api_key:
             headers["X-Api-Key"] = self.api_key
         if project_id:
