@@ -92,6 +92,7 @@ class TestTransportEmitsPolicyId:
         def fake_post(url, json=None, headers=None, **kwargs):
             captured["payload"] = json
             resp = MagicMock()
+            resp.status_code = 200
             resp.raise_for_status.return_value = None
             return resp
 
@@ -109,6 +110,7 @@ class TestTransportEmitsPolicyId:
         def fake_post(url, json=None, headers=None, **kwargs):
             captured["payload"] = json
             resp = MagicMock()
+            resp.status_code = 200
             resp.raise_for_status.return_value = None
             return resp
 
@@ -158,6 +160,7 @@ class TestPerTracePolicyOverride:
         def fake_post(url, json=None, headers=None, **kwargs):
             posts.append(json)
             resp = MagicMock()
+            resp.status_code = 200
             resp.raise_for_status.return_value = None
             return resp
 
@@ -184,6 +187,7 @@ class TestPerTracePolicyOverride:
         def fake_post(url, json=None, headers=None, **kwargs):
             posts.append(json)
             resp = MagicMock()
+            resp.status_code = 200
             resp.raise_for_status.return_value = None
             return resp
 
@@ -214,6 +218,7 @@ class TestPerTracePolicyOverride:
         def fake_post(url, json=None, headers=None, **kwargs):
             posts.append(json)
             resp = MagicMock()
+            resp.status_code = 200
             resp.raise_for_status.return_value = None
             return resp
 
@@ -234,6 +239,7 @@ class TestPerTracePolicyOverride:
         def fake_post(url, json=None, headers=None, **kwargs):
             posts.append(json)
             resp = MagicMock()
+            resp.status_code = 200
             resp.raise_for_status.return_value = None
             return resp
 
@@ -281,6 +287,7 @@ class TestNoPolicyAnywhere:
         def fake_post(url, json=None, headers=None, **kwargs):
             posts.append(json)
             resp = MagicMock()
+            resp.status_code = 200
             resp.raise_for_status.return_value = None
             return resp
 
@@ -356,6 +363,7 @@ class TestPerSpanPolicyOverride:
         def fake_post(url, json=None, headers=None, **kwargs):
             posts.append(json)
             resp = MagicMock()
+            resp.status_code = 200
             resp.raise_for_status.return_value = None
             return resp
 
@@ -388,6 +396,7 @@ class TestPerSpanPolicyOverride:
         def fake_post(url, json=None, headers=None, **kwargs):
             posts.append(json)
             resp = MagicMock()
+            resp.status_code = 200
             resp.raise_for_status.return_value = None
             return resp
 
