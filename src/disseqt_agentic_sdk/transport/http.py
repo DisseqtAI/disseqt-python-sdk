@@ -234,26 +234,28 @@ class HTTPTransport:
         # application_id — never send an empty value.
         if self.application_id:
             headers["X-Application-Id"] = self.application_id
-        # X-Api-Key / X-Project-Id / X-Realtime-Policy-Id: header-first path
-        # for Kong's traces-auth plugin. Historically the SDK put all three
-        # under resource.attributes, so the plugin had to buffer + JSON-parse
-        # the full body just to authenticate — that's what put the auth path
-        # next to the 8 KB spool-to-disk bug in TP-2314. Sending them as
-        # headers lets a header-aware plugin version decide auth before
-        # touching a single byte of body. resource.attributes below stay
-        # populated so this SDK still works against plugin versions that
-        # only look in the body — old-server / new-client is safe.
+        # X-Api-Key / X-Project-Id: header-first path for Kong's traces-auth
+        # plugin. Historically the SDK put both under resource.attributes,
+        # so the plugin had to buffer + JSON-parse the full body just to
+        # authenticate — that's what put the auth path next to the 8 KB
+        # spool-to-disk bug in TP-2314. Sending them as headers lets a
+        # header-aware plugin version decide auth before touching a single
+        # byte of body. resource.attributes below stay populated so this
+        # SDK still works against plugin versions that only look in the
+        # body — old-server / new-client is safe.
         #
-        # X-Realtime-Policy-Id is set per-group (each policy bucket is its
-        # own POST — see _send_group above), so it always matches the
-        # resource.attributes["policy.id"] on the same request.
+        # X-Realtime-Policy-Id is deliberately NOT sent as a header: as of
+        # this change nothing server-side reads it (traces-auth's header
+        # extractor only checks X-Api-Key/X-Project-Id), so shipping it
+        # now would only add exposure (see allow_redirects below) with no
+        # matching benefit. Add it in the same change that adds its
+        # consumer, not ahead of it. resource.attributes["policy.id"]
+        # above is unaffected — that's the existing body-side contract.
         project_id = resource_attrs.get("project.id")
         if self.api_key:
             headers["X-Api-Key"] = self.api_key
         if project_id:
             headers["X-Project-Id"] = project_id
-        if policy_id:
-            headers["X-Realtime-Policy-Id"] = policy_id
         try:
             response = self.session.post(
                 self.endpoint,
@@ -261,6 +263,18 @@ class HTTPTransport:
                 headers=headers,
                 timeout=self.timeout,
                 verify=self.verify_ssl,
+                # requests' default (True) strips only `Authorization` on a
+                # cross-host redirect -- custom headers like X-Api-Key are
+                # NOT stripped, so a compromised/misconfigured endpoint
+                # that answers with a 301/302/303 to a different host
+                # would otherwise leak the live API key to that host in
+                # plaintext (the JSON body, and its
+                # resource.attributes["api.key"] copy, IS dropped on that
+                # same redirect class -- headers were the one channel the
+                # body-only design never exposed here). This POST is
+                # internal machine-to-machine trace ingestion; there's no
+                # product reason it should ever need to follow a redirect.
+                allow_redirects=False,
             )
             response.raise_for_status()
             logger.info(

@@ -7,12 +7,18 @@ forced Kong's ``traces-auth`` plugin to buffer + JSON-parse the entire
 payload just to decide auth — the read path that landed next to the
 8 KB spool-to-disk bug in TP-2314.
 
-The transport now stamps the same three values as HTTP headers on every
-outgoing POST (``X-Api-Key``, ``X-Project-Id``, ``X-Realtime-Policy-Id``)
-so a header-aware Kong plugin can authenticate before touching any body.
+The transport now stamps ``api.key`` and ``project.id`` as HTTP headers
+(``X-Api-Key``, ``X-Project-Id``) on every outgoing POST so a
+header-aware Kong plugin can authenticate before touching any body.
 ``resource.attributes`` are still populated so this SDK version keeps
 working against Kong plugin versions that only look in the body — the
 migration is safe old-server / new-client.
+
+``X-Realtime-Policy-Id`` was deliberately NOT added as a header
+alongside the other two: nothing server-side reads it yet, so shipping
+it would only add exposure (see ``test_transport_redirect_safety.py``)
+with no matching benefit. ``resource.attributes["policy.id"]`` is
+unaffected — see ``test_resource_attributes_still_carry_identity_for_backward_compat``.
 """
 
 from __future__ import annotations
@@ -73,11 +79,15 @@ class TestHeaderFirstIdentity:
         # a regression here would silently 401 every SDK.
         assert headers["X-Application-Id"] == "7ce57144-9df6-4fa4-8aad-8cbc1ffdb558"
 
-    def test_realtime_policy_id_is_sent_when_the_client_default_is_set(self):
+    def test_realtime_policy_id_header_never_sent(self):
         """
-        Client-level ``realtime_policy_id`` becomes the fallback for every
-        span that didn't override it. The header must reflect the same
-        value the body will carry — a header-aware plugin routes on it.
+        X-Realtime-Policy-Id has no server-side consumer (as of this
+        change) and is not sent — regardless of whether a policy is
+        configured. This locks in the SPLIT decision: shipping a header
+        with no consumer only adds exposure (see
+        test_transport_redirect_safety.py) for no benefit.
+        resource.attributes["policy.id"] is unaffected — the body-side
+        contract for policy routing is untouched by this test.
         """
         transport = HTTPTransport(
             endpoint="https://api.disseqt.ai/agentic-monitoring/api/v1/traces",
@@ -87,15 +97,17 @@ class TestHeaderFirstIdentity:
         )
         _, kwargs = _post_call(transport)
 
-        assert kwargs["headers"]["X-Realtime-Policy-Id"] == "pol-default"
+        assert "X-Realtime-Policy-Id" not in kwargs["headers"]
+        assert kwargs["json"]["resource"]["attributes"]["policy.id"] == "pol-default"
 
-    def test_realtime_policy_id_is_not_sent_when_unset(self):
+    def test_post_does_not_follow_redirects(self):
         """
-        Non-policy callers get bit-for-bit the same request shape as
-        before — the header is only emitted when there is a policy to
-        stamp. This mirrors the resource.attributes["policy.id"] contract
-        added earlier and keeps the ``if not header, do the old thing``
-        branch on Kong reachable.
+        ``session.post`` must be called with ``allow_redirects=False``.
+        A credential-bearing header (X-Api-Key) is not covered by
+        requests' Authorization-only redirect stripping, so following a
+        redirect to a different host would leak it — see
+        test_transport_redirect_safety.py for the real, non-mocked
+        reproduction of that exposure and its fix.
         """
         transport = HTTPTransport(
             endpoint="https://api.disseqt.ai/agentic-monitoring/api/v1/traces",
@@ -104,7 +116,7 @@ class TestHeaderFirstIdentity:
         )
         _, kwargs = _post_call(transport)
 
-        assert "X-Realtime-Policy-Id" not in kwargs["headers"]
+        assert kwargs["allow_redirects"] is False
 
     def test_resource_attributes_still_carry_identity_for_backward_compat(self):
         """
