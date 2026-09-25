@@ -214,17 +214,11 @@ class DisseqtAgenticClient:
         # banner. TP-2128 round-2 P2 #2.3 + round-3 P1 #1.1.
         #
         # This covers the documented construction path (this client), not
-        # every possible path: project_id can also reach a header via a
-        # directly-constructed DisseqtTrace/DisseqtSpan/EnrichedSpan
-        # (all public classes) bypassing this client entirely, and
-        # application_id/api_key can likewise bypass this client via a
-        # directly-constructed HTTPTransport. transport/http.py validates
-        # both at the one point every value actually passes through
-        # before becoming a header, regardless of how it got there — this
-        # check here is the fail-fast-and-loud layer for the common path,
-        # not the only layer.
+        # every possible path: application_id/api_key can also bypass this
+        # client via a directly-constructed HTTPTransport, which validates
+        # them again in its own __init__ — this check here is the
+        # fail-fast-and-loud layer for the common path, not the only layer.
         _validate_header_value(self.api_key, "api_key")
-        _validate_header_value(self.project_id, "project_id")
         _validate_header_value(self.application_id, "application_id")
 
         # Initialize transport
