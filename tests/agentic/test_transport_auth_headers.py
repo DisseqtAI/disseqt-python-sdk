@@ -1,21 +1,20 @@
 """
 Tests for the header-first identity contract on ``HTTPTransport``.
 
-Historically the SDK stamped ``api.key``, ``project.id``, and
-``policy.id`` only inside the OTLP body's ``resource.attributes``. That
+Historically the SDK stamped ``api.key`` and ``policy.id`` only inside the OTLP body's ``resource.attributes``. That
 forced Kong's ``traces-auth`` plugin to buffer + JSON-parse the entire
 payload just to decide auth — the read path that landed next to the
 8 KB spool-to-disk bug in TP-2314.
 
-The transport now stamps ``api.key`` and ``project.id`` as HTTP headers
-(``X-Api-Key``, ``X-Project-Id``) on every outgoing POST so a
+The transport now stamps ``api.key`` as an HTTP header (``X-Api-Key``)
+on every outgoing POST so a
 header-aware Kong plugin can authenticate before touching any body.
 ``resource.attributes`` are still populated so this SDK version keeps
 working against Kong plugin versions that only look in the body — the
 migration is safe old-server / new-client.
 
 ``X-Realtime-Policy-Id`` was deliberately NOT added as a header
-alongside the other two: nothing server-side reads it yet, so shipping
+alongside it: nothing server-side reads it yet, so shipping
 it would only add exposure (see ``test_transport_redirect_safety.py``)
 with no matching benefit. ``resource.attributes["policy.id"]`` is
 unaffected — see ``test_resource_attributes_still_carry_identity_for_backward_compat``.
@@ -30,7 +29,7 @@ from disseqt_agentic_sdk.models.span import EnrichedSpan
 from disseqt_agentic_sdk.transport.http import HTTPTransport
 
 
-def _make_span(project_id: str, realtime_policy_id: str = "") -> EnrichedSpan:
+def _make_span(realtime_policy_id: str = "") -> EnrichedSpan:
     return EnrichedSpan(
         trace_id=str(uuid4()),
         span_id=str(uuid4()),
@@ -40,7 +39,6 @@ def _make_span(project_id: str, realtime_policy_id: str = "") -> EnrichedSpan:
         end_time_unix_nano=1_700_000_001_000_000_000,
         duration_ns=1_000_000_000,
         status_code="OK",
-        project_id=project_id,
         service_name="probe-service",
         realtime_policy_id=realtime_policy_id,
     )
@@ -51,16 +49,16 @@ def _post_call(transport: HTTPTransport, response_status: int = 200):
     fake_response = MagicMock(status_code=response_status)
     fake_response.raise_for_status = MagicMock()
     with patch.object(transport.session, "post", return_value=fake_response) as post:
-        transport.send_spans([_make_span("proj-123")])
+        transport.send_spans([_make_span()])
         assert post.called, "transport did not POST to the endpoint"
         return post.call_args
 
 
 class TestHeaderFirstIdentity:
-    def test_api_key_and_project_id_are_sent_as_headers(self):
+    def test_api_key_is_sent_as_header_and_project_id_is_not(self):
         """
         A header-aware Kong plugin authenticates off headers before ever
-        reading the body. Both fields must therefore be on the request
+        reading the body. The api key must therefore be on the request
         line, not only in the payload — that's the whole point of the
         migration path documented in the transport module.
         """
@@ -73,7 +71,8 @@ class TestHeaderFirstIdentity:
 
         headers = kwargs["headers"]
         assert headers["X-Api-Key"] == "secret-key-42"
-        assert headers["X-Project-Id"] == "proj-123"
+        # project_id is resolved server-side by Kong from the api_key.
+        assert "X-Project-Id" not in headers
         # X-Application-Id must survive the header migration — every trace
         # POST already relied on it for policy-management verification and
         # a regression here would silently 401 every SDK.
@@ -134,7 +133,7 @@ class TestHeaderFirstIdentity:
         fake_response = MagicMock(status_code=302)
         fake_response.raise_for_status = MagicMock()  # 3xx doesn't raise, same as real requests
         with patch.object(transport.session, "post", return_value=fake_response):
-            all_ok = transport.send_spans([_make_span("proj-123")])
+            all_ok = transport.send_spans([_make_span()])
 
         assert all_ok is False
 
@@ -155,7 +154,7 @@ class TestHeaderFirstIdentity:
 
         attrs = kwargs["json"]["resource"]["attributes"]
         assert attrs["api.key"] == "secret-key-42"
-        assert attrs["project.id"] == "proj-123"
+        assert "project.id" not in attrs
         assert attrs["policy.id"] == "pol-default"
 
     def test_api_key_header_omitted_when_client_has_no_key(self):

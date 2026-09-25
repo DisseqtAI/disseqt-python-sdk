@@ -52,7 +52,6 @@ def _make_span() -> EnrichedSpan:
         end_time_unix_nano=1_700_000_001_000_000_000,
         duration_ns=1_000_000_000,
         status_code="OK",
-        project_id="proj-resilience-test",
         service_name="probe-service",
         realtime_policy_id="",
     )

@@ -35,7 +35,6 @@ DISSEQT_CLIENT: DisseqtAgenticClient | None = None
 try:
     client = DisseqtAgenticClient(
         api_key=os.getenv("DISSEQT_API_KEY", "your-api-key"),
-        project_id=os.getenv("DISSEQT_PROJECT_ID", "proj_456"),
         service_name=APP_NAME,
         service_version="1.0.0",
         environment=os.getenv("DISSEQT_ENV", "production"),

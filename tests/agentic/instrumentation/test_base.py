@@ -89,7 +89,6 @@ class TestBase:
         )
         other_client = DisseqtAgenticClient(
             api_key="other",
-            project_id="other",
             service_name="other",
             endpoint="http://localhost/v1/traces",
             application_id="test-app-id",

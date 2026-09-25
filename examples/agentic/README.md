@@ -8,7 +8,6 @@ from disseqt_agentic_sdk import DisseqtAgenticClient
 
 client = DisseqtAgenticClient(
     api_key="your-api-key",
-    project_id="proj_456",
     service_name="my-service",
     endpoint="http://localhost:8080/v1/traces",
     application_id="your-application-uuid",  # required
@@ -64,8 +63,7 @@ client.shutdown()
 ### Client Initialization
 ```python
 client = DisseqtAgenticClient(
-    api_key: str,               # Required: API key for authentication
-    project_id: str,            # Required: Project ID
+    api_key: str,               # Required: API key for authentication (Kong resolves project from it)
     service_name: str,          # Required: Service name
     endpoint: str,              # Required: Backend endpoint URL
     *,                          # everything below is keyword-only
