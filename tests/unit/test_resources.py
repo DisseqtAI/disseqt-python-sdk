@@ -119,7 +119,7 @@ class TestMcpTargetsResource:
 
 
 class TestPacksResource:
-    PATH = f"{BASE_URL}/api/v1/prompt-packs"
+    PATH = f"{BASE_URL}/api/v1/sdk/prompt-packs"
 
     def test_create(self, requests_mock, client: DisseqtAPIClient) -> None:
         requests_mock.post(self.PATH, json={"id": "p1"})
@@ -144,7 +144,7 @@ class TestPacksResource:
 
     def test_publish_uses_patch(self, requests_mock, client: DisseqtAPIClient) -> None:
         # G3 regression: backend registers PATCH at
-        # /api/v1/prompt-packs/:id/publish (server.go:2237, 2460); POST is a 404.
+        # PATCH /api/v1/sdk/prompt-packs/:id/publish; POST is a 404.
         requests_mock.patch(f"{self.PATH}/p1/publish", json={"published": True})
         assert client.packs.publish("p1") == {"published": True}
         assert requests_mock.last_request.method == "PATCH"
@@ -156,15 +156,6 @@ class TestPacksResource:
         assert client.packs.unpublish("p1") == {"published": False}
         assert requests_mock.last_request.method == "PATCH"
         assert requests_mock.last_request.url.endswith("/p1/unpublish")
-
-    def test_upload_session_complete_route(self, requests_mock, client: DisseqtAPIClient) -> None:
-        # G3 regression: backend finisher is /upload/sessions/:sid/complete
-        # (server.go:2196). Prior SDK method upload_session_finish hit the
-        # unregistered /finish suffix.
-        requests_mock.post(f"{self.PATH}/upload/sessions/s1/complete", json={"pack_id": "p1"})
-        assert client.packs.upload_session_complete("s1") == {"pack_id": "p1"}
-        assert requests_mock.last_request.method == "POST"
-        assert requests_mock.last_request.url.endswith("/upload/sessions/s1/complete")
 
     def test_download_returns_csv_bytes(self, requests_mock, client: DisseqtAPIClient) -> None:
         csv_body = b"id,prompt\n1,hello\n2,world\n"
@@ -179,7 +170,7 @@ class TestPacksResource:
 
 
 class TestRunsResource:
-    PATH = f"{BASE_URL}/api/v1/prompt-packs"
+    PATH = f"{BASE_URL}/api/v1/sdk/prompt-packs"
 
     def test_create(self, requests_mock, client: DisseqtAPIClient) -> None:
         requests_mock.post(f"{self.PATH}/p1/runs", json={"id": "r1"})
@@ -217,7 +208,7 @@ class TestRunsResource:
 
 
 class TestOutputValidationsResource:
-    PATH = f"{BASE_URL}/api/v1/prompt-packs"
+    PATH = f"{BASE_URL}/api/v1/sdk/prompt-packs"
 
     def test_create(self, requests_mock, client: DisseqtAPIClient) -> None:
         requests_mock.post(f"{self.PATH}/runs/r1/validate-outputs", json={"id": "v1"})
@@ -234,22 +225,6 @@ class TestOutputValidationsResource:
     def test_delete(self, requests_mock, client: DisseqtAPIClient) -> None:
         requests_mock.delete(f"{self.PATH}/output-validations/v1", status_code=204)
         assert client.output_validations.delete("v1") == {"status": "ok"}
-
-
-class TestRagValidationsResource:
-    PATH = f"{BASE_URL}/api/v1/prompt-packs"
-
-    def test_create(self, requests_mock, client: DisseqtAPIClient) -> None:
-        requests_mock.post(f"{self.PATH}/runs/r1/rag-validate", json={"id": "v1"})
-        assert client.rag_validations.create("r1", {}) == {"id": "v1"}
-
-    def test_list_for_run(self, requests_mock, client: DisseqtAPIClient) -> None:
-        requests_mock.get(f"{self.PATH}/runs/r1/rag-validations", json={"data": []})
-        assert client.rag_validations.list_for_run("r1") == {"data": []}
-
-    def test_get(self, requests_mock, client: DisseqtAPIClient) -> None:
-        requests_mock.get(f"{self.PATH}/rag-validations/v1", json={"id": "v1"})
-        assert client.rag_validations.get("v1") == {"id": "v1"}
 
 
 class TestSessionsResource:
@@ -469,7 +444,7 @@ class TestRequestAbs:
         assert exc.value.status_code == 404
 
     def test_auth_headers_sent(self, requests_mock, client: DisseqtAPIClient) -> None:
-        requests_mock.get(f"{BASE_URL}/api/v1/prompt-packs", json={"data": []})
+        requests_mock.get(f"{BASE_URL}/api/v1/sdk/prompt-packs", json={"data": []})
         client.packs.list()
         headers = requests_mock.request_history[0].headers
         assert headers["X-API-Key"] == "test_key_xyz"

@@ -49,8 +49,20 @@ the dataset-backend Go structs; the file/line is cited next to each builder.
 - CLI exit codes: 1 for HTTP/network failures, 2 for usage/config errors.
 - ``disseqt login`` verifies against the dataset gateway and no longer
   stores ``base_url``; ``logout`` is local-only (``--local-only`` removed).
+- **Prompt packs use the service-key mount.** ``PacksResource`` /
+  ``RunsResource`` / ``OutputValidationsResource``, the ``pack`` /
+  ``pp-run`` / ``output-validation`` CLI groups and
+  ``DisseqtAPIClient._PROMPT_PACKS_BASE`` now target
+  ``/api/v1/sdk/prompt-packs`` (``/api/v1/prompt-packs`` is browser-session
+  only and rejects API keys with ``ErrAuthHeaderRequired``).
 
 ### Removed
+- ``client.rag_validations`` / ``RagValidationsResource`` and the
+  ``disseqt rag-validation`` group, ``PacksResource.restore`` /
+  ``import_status`` / ``upload_session_*`` (``pack restore`` /
+  ``import-status``) and ``RunsResource.retrieval_traces``
+  (``pp-run retrieval-traces``): none of these routes exist on the
+  service-key mount, so API-key callers could never reach them.
 - ``disseqt redteam eval-csv`` and ``eval-single-turn`` (the routes need a
   browser session), the whole ``disseqt policy`` group, and the env vars
   ``DISSEQT_REDTEAM_BASE_URL`` / ``DISSEQT_DATASET_BASE_URL`` /

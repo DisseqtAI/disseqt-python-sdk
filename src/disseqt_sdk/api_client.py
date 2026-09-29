@@ -16,8 +16,9 @@ from .models.prompt_packs import (
     PromptPackOutputValidationRequest,
 )
 
-# Kong route prefix + service path
-_PROMPT_PACKS_BASE = "/sdk/prompt-packs/api/v1/sdk/prompt-packs"
+# Service-key mount for prompt packs (api/server.go sdkPromptPackRoutes), on the
+# same dataset gateway base as every other /api/v1/* resource.
+_PROMPT_PACKS_BASE = "/api/v1/sdk/prompt-packs"
 
 
 def unwrap_envelope(raw: Any, status_code: int = 200) -> Any:
@@ -101,7 +102,6 @@ class DisseqtAPIClient:
             OutputValidationsResource,
             PacksResource,
             RagTargetsResource,
-            RagValidationsResource,
             RunsResource,
             SessionsResource,
             TargetsResource,
@@ -116,7 +116,6 @@ class DisseqtAPIClient:
         self.packs = PacksResource(self)
         self.runs = RunsResource(self)
         self.output_validations = OutputValidationsResource(self)
-        self.rag_validations = RagValidationsResource(self)
         self.sessions = SessionsResource(self)
         self.byov_validators = ByovValidatorsResource(self)
         self.vulnerabilities = VulnerabilitiesResource(self)

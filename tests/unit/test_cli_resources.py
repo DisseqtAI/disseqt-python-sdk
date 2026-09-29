@@ -45,7 +45,6 @@ def runner() -> CliRunner:
         "pack",
         "pp-run",
         "output-validation",
-        "rag-validation",
         "session",
         "byov",
         "vulnerability",
@@ -146,15 +145,17 @@ def test_mcp_target_list(runner: CliRunner, requests_mock) -> None:
 
 
 def test_pack_list(runner: CliRunner, requests_mock) -> None:
-    requests_mock.get(f"{DATASET_BASE}/api/v1/prompt-packs", json={"data": []})
+    requests_mock.get(f"{DATASET_BASE}/api/v1/sdk/prompt-packs", json={"data": []})
     result = runner.invoke(cli, ["pack", "list"])
     assert result.exit_code == 0
 
 
 def test_pack_publish_uses_patch(runner: CliRunner, requests_mock) -> None:
     # G3 regression: backend registers PATCH at
-    # /api/v1/prompt-packs/:id/publish (server.go:2237); POST is a 404.
-    requests_mock.patch(f"{DATASET_BASE}/api/v1/prompt-packs/p1/publish", json={"published": True})
+    # PATCH /api/v1/sdk/prompt-packs/:id/publish; POST is a 404.
+    requests_mock.patch(
+        f"{DATASET_BASE}/api/v1/sdk/prompt-packs/p1/publish", json={"published": True}
+    )
     result = runner.invoke(cli, ["pack", "publish", "p1"])
     assert result.exit_code == 0, result.output
     assert '"published": true' in result.output
@@ -165,7 +166,7 @@ def test_pack_publish_uses_patch(runner: CliRunner, requests_mock) -> None:
 def test_pack_unpublish_uses_patch(runner: CliRunner, requests_mock) -> None:
     # G3 regression: PATCH at server.go:2238.
     requests_mock.patch(
-        f"{DATASET_BASE}/api/v1/prompt-packs/p1/unpublish", json={"published": False}
+        f"{DATASET_BASE}/api/v1/sdk/prompt-packs/p1/unpublish", json={"published": False}
     )
     result = runner.invoke(cli, ["pack", "unpublish", "p1"])
     assert result.exit_code == 0, result.output
@@ -181,20 +182,20 @@ def test_pack_add_prompts_requires_prompts_key(runner: CliRunner) -> None:
 
 
 def test_pp_run_create(runner: CliRunner, requests_mock) -> None:
-    requests_mock.post(f"{DATASET_BASE}/api/v1/prompt-packs/p1/runs", json={"id": "r1"})
+    requests_mock.post(f"{DATASET_BASE}/api/v1/sdk/prompt-packs/p1/runs", json={"id": "r1"})
     result = runner.invoke(cli, ["pp-run", "create", "p1", "--json", '{"provider": "openai"}'])
     assert result.exit_code == 0
 
 
 def test_pp_run_get(runner: CliRunner, requests_mock) -> None:
-    requests_mock.get(f"{DATASET_BASE}/api/v1/prompt-packs/runs/r1", json={"id": "r1"})
+    requests_mock.get(f"{DATASET_BASE}/api/v1/sdk/prompt-packs/runs/r1", json={"id": "r1"})
     result = runner.invoke(cli, ["pp-run", "get", "r1"])
     assert result.exit_code == 0
 
 
 def test_pp_run_cancel(runner: CliRunner, requests_mock) -> None:
     requests_mock.post(
-        f"{DATASET_BASE}/api/v1/prompt-packs/runs/r1/cancel", json={"cancelled": True}
+        f"{DATASET_BASE}/api/v1/sdk/prompt-packs/runs/r1/cancel", json={"cancelled": True}
     )
     result = runner.invoke(cli, ["pp-run", "cancel", "r1"])
     assert result.exit_code == 0
@@ -202,7 +203,7 @@ def test_pp_run_cancel(runner: CliRunner, requests_mock) -> None:
 
 def test_output_validation_create(runner: CliRunner, requests_mock) -> None:
     requests_mock.post(
-        f"{DATASET_BASE}/api/v1/prompt-packs/runs/r1/validate-outputs", json={"id": "v1"}
+        f"{DATASET_BASE}/api/v1/sdk/prompt-packs/runs/r1/validate-outputs", json={"id": "v1"}
     )
     result = runner.invoke(
         cli, ["output-validation", "create", "r1", "--json", '{"metric_evaluations": []}']
@@ -212,15 +213,9 @@ def test_output_validation_create(runner: CliRunner, requests_mock) -> None:
 
 def test_output_validation_get(runner: CliRunner, requests_mock) -> None:
     requests_mock.get(
-        f"{DATASET_BASE}/api/v1/prompt-packs/output-validations/v1", json={"id": "v1"}
+        f"{DATASET_BASE}/api/v1/sdk/prompt-packs/output-validations/v1", json={"id": "v1"}
     )
     result = runner.invoke(cli, ["output-validation", "get", "v1"])
-    assert result.exit_code == 0
-
-
-def test_rag_validation_get(runner: CliRunner, requests_mock) -> None:
-    requests_mock.get(f"{DATASET_BASE}/api/v1/prompt-packs/rag-validations/v1", json={"id": "v1"})
-    result = runner.invoke(cli, ["rag-validation", "get", "v1"])
     assert result.exit_code == 0
 
 
@@ -272,7 +267,7 @@ def test_invalid_json_fails_fast(runner: CliRunner) -> None:
 def test_dataset_base_env_override(runner: CliRunner, requests_mock, monkeypatch) -> None:
     """DISSEQT_BASE_URL routes calls to a different host."""
     monkeypatch.setenv("DISSEQT_BASE_URL", "https://custom.example")
-    requests_mock.get("https://custom.example/api/v1/prompt-packs", json={"data": []})
+    requests_mock.get("https://custom.example/api/v1/sdk/prompt-packs", json={"data": []})
     result = runner.invoke(cli, ["pack", "list"])
     assert result.exit_code == 0
 
@@ -281,7 +276,7 @@ def test_pack_export_delegates_to_sdk(runner: CliRunner, requests_mock) -> None:
     """`pack export` delegates to PacksResource.download and prints CSV text."""
     csv_body = b"id,prompt\n1,hello\n"
     requests_mock.get(
-        f"{DATASET_BASE}/api/v1/prompt-packs/p1/download",
+        f"{DATASET_BASE}/api/v1/sdk/prompt-packs/p1/download",
         content=csv_body,
         headers={"Content-Type": "text/csv"},
     )
@@ -300,7 +295,7 @@ def test_pp_run_reveal_command_removed(runner: CliRunner) -> None:
 
 def test_pp_run_validate_hits_correct_url(runner: CliRunner, requests_mock) -> None:
     requests_mock.post(
-        f"{DATASET_BASE}/api/v1/prompt-packs/runs/r1/validate-outputs",
+        f"{DATASET_BASE}/api/v1/sdk/prompt-packs/runs/r1/validate-outputs",
         json={"id": "v1"},
     )
     result = runner.invoke(
@@ -315,7 +310,7 @@ def test_pp_run_validate_hits_correct_url(runner: CliRunner, requests_mock) -> N
 def test_pp_run_validate_no_body(runner: CliRunner, requests_mock) -> None:
     # Without --json the CLI sends {} — same shape as `output-validation create`.
     requests_mock.post(
-        f"{DATASET_BASE}/api/v1/prompt-packs/runs/r2/validate-outputs",
+        f"{DATASET_BASE}/api/v1/sdk/prompt-packs/runs/r2/validate-outputs",
         json={"id": "v2"},
     )
     result = runner.invoke(cli, ["pp-run", "validate", "r2"])
@@ -324,7 +319,7 @@ def test_pp_run_validate_no_body(runner: CliRunner, requests_mock) -> None:
 
 
 def test_pp_run_add_to_pack(runner: CliRunner, requests_mock) -> None:
-    requests_mock.post(f"{DATASET_BASE}/api/v1/prompt-packs/p1/prompts/add", json={"added": 2})
+    requests_mock.post(f"{DATASET_BASE}/api/v1/sdk/prompt-packs/p1/prompts/add", json={"added": 2})
     result = runner.invoke(
         cli,
         [
@@ -462,3 +457,14 @@ def test_plan_run_trace_requires_prompt_ref(runner: CliRunner, requests_mock) ->
     result = runner.invoke(cli, ["plan-run", "trace", "r1", "--prompt-ref", "pr1"])
     assert result.exit_code == 0
     assert requests_mock.request_history[0].qs["prompt_ref"] == ["pr1"]
+
+
+def test_removed_prompt_pack_verbs_are_gone(runner: CliRunner) -> None:
+    """No service-key route exists for these on /api/v1/sdk/prompt-packs."""
+    for args in (
+        ["rag-validation", "get", "v1"],
+        ["pack", "restore", "p1"],
+        ["pack", "import-status", "p1"],
+        ["pp-run", "retrieval-traces", "r1"],
+    ):
+        assert runner.invoke(cli, args).exit_code == 2, args

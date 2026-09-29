@@ -1,6 +1,10 @@
 """CLI resource groups: ``target``, ``rag-target``, ``mcp-target``,
-``pack``, ``pp-run``, ``output-validation``, ``rag-validation``,
-``session``, ``byov``, ``vulnerability``, ``plan``, ``plan-run``.
+``pack``, ``pp-run``, ``output-validation``, ``session``, ``byov``,
+``vulnerability``, ``plan``, ``plan-run``.
+
+Prompt-pack verbs use the service-key mount ``/api/v1/sdk/prompt-packs``
+(api/server.go sdkPromptPackRoutes); the browser-session mount is not
+reachable with an API key.
 
 Thin wrappers over :mod:`._http` — one command per backend endpoint,
 all on the dataset gateway (``DISSEQT_BASE_URL``).
@@ -196,7 +200,7 @@ mcp_target = _make_crud_group("mcp-target", "/api/v1/llm/mcp-integrations", "MCP
 
 
 # ---------------------------------------------------------------------------
-# Packs  (/api/v1/prompt-packs)
+# Packs  (/api/v1/sdk/prompt-packs)
 # ---------------------------------------------------------------------------
 
 
@@ -208,43 +212,37 @@ def pack() -> None:
 @pack.command("create")
 @_json_option()
 def pack_create(json_body: str | None) -> None:
-    _post("/api/v1/prompt-packs", _load_json_body(json_body))
+    _post("/api/v1/sdk/prompt-packs", _load_json_body(json_body))
 
 
 @pack.command("list")
 def pack_list() -> None:
-    _get("/api/v1/prompt-packs")
+    _get("/api/v1/sdk/prompt-packs")
 
 
 @pack.command("get")
 @click.argument("pack_id")
 def pack_get(pack_id: str) -> None:
-    _get(f"/api/v1/prompt-packs/{pack_id}")
+    _get(f"/api/v1/sdk/prompt-packs/{pack_id}")
 
 
 @pack.command("update")
 @click.argument("pack_id")
 @_json_option()
 def pack_update(pack_id: str, json_body: str | None) -> None:
-    _patch(f"/api/v1/prompt-packs/{pack_id}", _load_json_body(json_body))
+    _patch(f"/api/v1/sdk/prompt-packs/{pack_id}", _load_json_body(json_body))
 
 
 @pack.command("delete")
 @click.argument("pack_id")
 def pack_delete(pack_id: str) -> None:
-    _delete(f"/api/v1/prompt-packs/{pack_id}")
-
-
-@pack.command("restore")
-@click.argument("pack_id")
-def pack_restore(pack_id: str) -> None:
-    _post(f"/api/v1/prompt-packs/{pack_id}/restore")
+    _delete(f"/api/v1/sdk/prompt-packs/{pack_id}")
 
 
 @pack.command("prompts")
 @click.argument("pack_id")
 def pack_prompts(pack_id: str) -> None:
-    _get(f"/api/v1/prompt-packs/{pack_id}/prompts")
+    _get(f"/api/v1/sdk/prompt-packs/{pack_id}/prompts")
 
 
 @pack.command("add-prompts")
@@ -254,34 +252,26 @@ def pack_add_prompts(pack_id: str, json_body: str | None) -> None:
     body = _load_json_body(json_body)
     if "prompts" not in body:
         _fail("payload must contain a 'prompts' array")
-    _post(f"/api/v1/prompt-packs/{pack_id}/prompts/bulk", body)
+    _post(f"/api/v1/sdk/prompt-packs/{pack_id}/prompts/bulk", body)
 
 
 @pack.command("duplicate")
 @click.argument("pack_id")
 @_json_option("Optional duplicate-config JSON.")
 def pack_duplicate(pack_id: str, json_body: str | None) -> None:
-    _post(f"/api/v1/prompt-packs/{pack_id}/duplicate", _load_json_body(json_body))
+    _post(f"/api/v1/sdk/prompt-packs/{pack_id}/duplicate", _load_json_body(json_body))
 
 
 @pack.command("publish")
 @click.argument("pack_id")
 def pack_publish(pack_id: str) -> None:
-    # Backend PATCHes /api/v1/prompt-packs/:id/publish (server.go:2237).
-    _patch(f"/api/v1/prompt-packs/{pack_id}/publish", {})
+    _patch(f"/api/v1/sdk/prompt-packs/{pack_id}/publish", {})
 
 
 @pack.command("unpublish")
 @click.argument("pack_id")
 def pack_unpublish(pack_id: str) -> None:
-    # See pack_publish; PATCH at server.go:2238.
-    _patch(f"/api/v1/prompt-packs/{pack_id}/unpublish", {})
-
-
-@pack.command("import-status")
-@click.argument("pack_id")
-def pack_import_status(pack_id: str) -> None:
-    _get(f"/api/v1/prompt-packs/{pack_id}/import-status")
+    _patch(f"/api/v1/sdk/prompt-packs/{pack_id}/unpublish", {})
 
 
 @pack.command("export")
@@ -297,14 +287,14 @@ def pack_export(pack_id: str) -> None:
 @click.argument("pack_id")
 @_json_option("Rating JSON, e.g. '{\"rating\": 5}'.")
 def pack_rate(pack_id: str, json_body: str | None) -> None:
-    _post(f"/api/v1/prompt-packs/{pack_id}/ratings", _load_json_body(json_body))
+    _post(f"/api/v1/sdk/prompt-packs/{pack_id}/ratings", _load_json_body(json_body))
 
 
 @pack.command("review")
 @click.argument("pack_id")
 @_json_option("Review JSON.")
 def pack_review(pack_id: str, json_body: str | None) -> None:
-    _post(f"/api/v1/prompt-packs/{pack_id}/reviews", _load_json_body(json_body))
+    _post(f"/api/v1/sdk/prompt-packs/{pack_id}/reviews", _load_json_body(json_body))
 
 
 # ---------------------------------------------------------------------------
@@ -322,67 +312,61 @@ def pp_run() -> None:
 @click.argument("pack_id")
 @_json_option("Run payload JSON.")
 def pp_run_create(pack_id: str, json_body: str | None) -> None:
-    _post(f"/api/v1/prompt-packs/{pack_id}/runs", _load_json_body(json_body))
+    _post(f"/api/v1/sdk/prompt-packs/{pack_id}/runs", _load_json_body(json_body))
 
 
 @pp_run.command("list")
 @click.argument("pack_id")
 def pp_run_list(pack_id: str) -> None:
-    _get(f"/api/v1/prompt-packs/{pack_id}/runs")
+    _get(f"/api/v1/sdk/prompt-packs/{pack_id}/runs")
 
 
 @pp_run.command("get")
 @click.argument("run_id")
 def pp_run_get(run_id: str) -> None:
-    _get(f"/api/v1/prompt-packs/runs/{run_id}")
+    _get(f"/api/v1/sdk/prompt-packs/runs/{run_id}")
 
 
 @pp_run.command("delete")
 @click.argument("run_id")
 def pp_run_delete(run_id: str) -> None:
-    _delete(f"/api/v1/prompt-packs/runs/{run_id}")
+    _delete(f"/api/v1/sdk/prompt-packs/runs/{run_id}")
 
 
 @pp_run.command("stats")
 @click.argument("pack_id")
 def pp_run_stats(pack_id: str) -> None:
-    _get(f"/api/v1/prompt-packs/{pack_id}/runs/stats")
+    _get(f"/api/v1/sdk/prompt-packs/{pack_id}/runs/stats")
 
 
 @pp_run.command("compare")
 @click.argument("pack_id")
 def pp_run_compare(pack_id: str) -> None:
-    _get(f"/api/v1/prompt-packs/{pack_id}/runs/compare")
+    _get(f"/api/v1/sdk/prompt-packs/{pack_id}/runs/compare")
 
 
 @pp_run.command("outputs")
 @click.argument("run_id")
 def pp_run_outputs(run_id: str) -> None:
-    _get(f"/api/v1/prompt-packs/runs/{run_id}/outputs")
-
-
-@pp_run.command("retrieval-traces")
-@click.argument("run_id")
-def pp_run_retrieval_traces(run_id: str) -> None:
-    _get(f"/api/v1/prompt-packs/runs/{run_id}/retrieval-traces")
+    _get(f"/api/v1/sdk/prompt-packs/runs/{run_id}/outputs")
 
 
 @pp_run.command("cancel")
 @click.argument("run_id")
 def pp_run_cancel(run_id: str) -> None:
-    _post(f"/api/v1/prompt-packs/runs/{run_id}/cancel")
+    _post(f"/api/v1/sdk/prompt-packs/runs/{run_id}/cancel")
 
 
 @pp_run.command("trace")
 @click.argument("run_id")
 def pp_run_trace(run_id: str) -> None:
-    _get(f"/api/v1/prompt-packs/runs/{run_id}/trace")
+    _get(f"/api/v1/sdk/prompt-packs/runs/{run_id}/trace")
 
 
 @pp_run.command("report")
 @click.argument("run_id")
 def pp_run_report(run_id: str) -> None:
-    _get(f"/api/v1/prompt-packs/runs/{run_id}/report")
+    _get(f"/api/v1/sdk/prompt-packs/runs/{run_id}/report")
 
 
 @pp_run.command("validate")
@@ -392,10 +376,10 @@ def pp_run_validate(run_id: str, json_body: str | None) -> None:
     """Re-validate outputs of a run.
 
     Alias for ``output-validation create`` — POSTs to
-    /api/v1/prompt-packs/runs/:run_id/validate-outputs. Kept on the pp-run
+    /api/v1/sdk/prompt-packs/runs/:run_id/validate-outputs. Kept on the pp-run
     group for discoverability alongside outputs / trace / report.
     """
-    _post(f"/api/v1/prompt-packs/runs/{run_id}/validate-outputs", _load_json_body(json_body))
+    _post(f"/api/v1/sdk/prompt-packs/runs/{run_id}/validate-outputs", _load_json_body(json_body))
 
 
 # NOTE: `pp-run reveal` intentionally NOT added — no backend route exists for
@@ -417,7 +401,7 @@ def pp_run_validate(run_id: str, json_body: str | None) -> None:
 def pp_run_add_to_pack(run_id: str, output_ids: tuple[str, ...], pack_id: str) -> None:
     """Add selected run outputs to a prompt pack."""
     _post(
-        f"/api/v1/prompt-packs/{pack_id}/prompts/add",
+        f"/api/v1/sdk/prompt-packs/{pack_id}/prompts/add",
         {"run_id": run_id, "output_ids": list(output_ids)},
     )
 
@@ -436,90 +420,55 @@ def output_validation() -> None:
 @click.argument("run_id")
 @_json_option()
 def ov_create(run_id: str, json_body: str | None) -> None:
-    _post(f"/api/v1/prompt-packs/runs/{run_id}/validate-outputs", _load_json_body(json_body))
+    _post(f"/api/v1/sdk/prompt-packs/runs/{run_id}/validate-outputs", _load_json_body(json_body))
 
 
 @output_validation.command("list-for-pack")
 @click.argument("pack_id")
 def ov_list_for_pack(pack_id: str) -> None:
-    _get(f"/api/v1/prompt-packs/{pack_id}/output-validations")
+    _get(f"/api/v1/sdk/prompt-packs/{pack_id}/output-validations")
 
 
 @output_validation.command("get")
 @click.argument("validation_id")
 def ov_get(validation_id: str) -> None:
-    _get(f"/api/v1/prompt-packs/output-validations/{validation_id}")
+    _get(f"/api/v1/sdk/prompt-packs/output-validations/{validation_id}")
 
 
 @output_validation.command("summary")
 @click.argument("validation_id")
 def ov_summary(validation_id: str) -> None:
-    _get(f"/api/v1/prompt-packs/output-validations/{validation_id}/summary")
+    _get(f"/api/v1/sdk/prompt-packs/output-validations/{validation_id}/summary")
 
 
 @output_validation.command("rca-status")
 @click.argument("validation_id")
 def ov_rca_status(validation_id: str) -> None:
-    _get(f"/api/v1/prompt-packs/output-validations/{validation_id}/rca-status")
+    _get(f"/api/v1/sdk/prompt-packs/output-validations/{validation_id}/rca-status")
 
 
 @output_validation.command("results-csv")
 @click.argument("validation_id")
 def ov_results_csv(validation_id: str) -> None:
-    _get(f"/api/v1/prompt-packs/output-validations/{validation_id}/results/csv")
+    _get(f"/api/v1/sdk/prompt-packs/output-validations/{validation_id}/results/csv")
 
 
 @output_validation.command("compare")
 @click.argument("pack_id")
 def ov_compare(pack_id: str) -> None:
-    _get(f"/api/v1/prompt-packs/{pack_id}/validations/compare")
+    _get(f"/api/v1/sdk/prompt-packs/{pack_id}/validations/compare")
 
 
 @output_validation.command("delete")
 @click.argument("validation_id")
 def ov_delete(validation_id: str) -> None:
-    _delete(f"/api/v1/prompt-packs/output-validations/{validation_id}")
+    _delete(f"/api/v1/sdk/prompt-packs/output-validations/{validation_id}")
 
 
 @output_validation.command("cancel")
 @click.argument("validation_id")
 def ov_cancel(validation_id: str) -> None:
-    _post(f"/api/v1/prompt-packs/output-validations/{validation_id}/cancel")
-
-
-# ---------------------------------------------------------------------------
-# RAG validations
-# ---------------------------------------------------------------------------
-
-
-@click.group("rag-validation")
-def rag_validation() -> None:
-    """RAG-validations on prompt-pack runs."""
-
-
-@rag_validation.command("create")
-@click.argument("run_id")
-@_json_option()
-def rv_create(run_id: str, json_body: str | None) -> None:
-    _post(f"/api/v1/prompt-packs/runs/{run_id}/rag-validate", _load_json_body(json_body))
-
-
-@rag_validation.command("list-for-run")
-@click.argument("run_id")
-def rv_list_for_run(run_id: str) -> None:
-    _get(f"/api/v1/prompt-packs/runs/{run_id}/rag-validations")
-
-
-@rag_validation.command("get")
-@click.argument("validation_id")
-def rv_get(validation_id: str) -> None:
-    _get(f"/api/v1/prompt-packs/rag-validations/{validation_id}")
-
-
-@rag_validation.command("cancel")
-@click.argument("validation_id")
-def rv_cancel(validation_id: str) -> None:
-    _post(f"/api/v1/prompt-packs/rag-validations/{validation_id}/cancel")
+    _post(f"/api/v1/sdk/prompt-packs/output-validations/{validation_id}/cancel")
 
 
 # ---------------------------------------------------------------------------
@@ -927,7 +876,6 @@ __all__ = [
     "plan_run",
     "pp_run",
     "rag_target",
-    "rag_validation",
     "session",
     "target",
     "vulnerability",

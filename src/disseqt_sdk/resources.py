@@ -2,7 +2,7 @@
 
 Additive to :class:`~disseqt_sdk.api_client.DisseqtAPIClient`: mounted as
 lazy attribute-style resources (``client.targets``, ``client.packs``,
-``client.runs``, ``client.output_validations``, ``client.rag_validations``,
+``client.runs``, ``client.output_validations``,
 ``client.sessions``, ``client.byov_validators``, ``client.rag_targets``,
 ``client.mcp_targets``, ``client.vulnerabilities``). Each resource is a
 thin façade — one method per backend endpoint, ``dict`` in / ``dict`` out.
@@ -148,7 +148,9 @@ class PacksResource(_Base):
     :class:`DisseqtAPIClient`; those methods stay for back-compat.
     """
 
-    _BASE = "/api/v1/prompt-packs"
+    # Service-key mount (api/server.go sdkPromptPackRoutes). /api/v1/prompt-packs is
+    # browser-session only and rejects API-key callers with ErrAuthHeaderRequired.
+    _BASE = "/api/v1/sdk/prompt-packs"
 
     def create(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._req("POST", self._BASE, json_payload=payload)
@@ -164,9 +166,6 @@ class PacksResource(_Base):
 
     def delete(self, pack_id: str) -> dict[str, Any]:
         return self._req("DELETE", f"{self._BASE}/{pack_id}")
-
-    def restore(self, pack_id: str) -> dict[str, Any]:
-        return self._req("POST", f"{self._BASE}/{pack_id}/restore")
 
     def prompts(self, pack_id: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         return self._req("GET", f"{self._BASE}/{pack_id}/prompts", params=params)
@@ -185,16 +184,10 @@ class PacksResource(_Base):
         return self._req("POST", f"{self._BASE}/{pack_id}/duplicate", json_payload=payload or {})
 
     def publish(self, pack_id: str) -> dict[str, Any]:
-        # Backend PATCHes at /api/v1/prompt-packs/:id/publish (server.go:2237)
-        # and /api/v1/sdk/prompt-packs/:id/publish (server.go:2460).
         return self._req("PATCH", f"{self._BASE}/{pack_id}/publish")
 
     def unpublish(self, pack_id: str) -> dict[str, Any]:
-        # See publish(); PATCH at server.go:2238 and :2461.
         return self._req("PATCH", f"{self._BASE}/{pack_id}/unpublish")
-
-    def import_status(self, pack_id: str) -> dict[str, Any]:
-        return self._req("GET", f"{self._BASE}/{pack_id}/import-status")
 
     def download(self, pack_id: str) -> bytes:
         """Download pack as CSV. Returns raw bytes (CSV content)."""
@@ -209,26 +202,11 @@ class PacksResource(_Base):
     def list_reviews(self, pack_id: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         return self._req("GET", f"{self._BASE}/{pack_id}/reviews", params=params)
 
-    def upload_session_start(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Start a chunked upload session (POST /upload/sessions)."""
-        return self._req("POST", f"{self._BASE}/upload/sessions", json_payload=payload)
-
-    def upload_session_chunk(self, session_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._req(
-            "POST", f"{self._BASE}/upload/sessions/{session_id}/chunks", json_payload=payload
-        )
-
-    def upload_session_complete(self, session_id: str) -> dict[str, Any]:
-        # Backend route: POST /api/v1/prompt-packs/upload/sessions/:sid/complete
-        # (server.go:2196, handler completeChunkedUpload). The prior /finish
-        # suffix was never registered.
-        return self._req("POST", f"{self._BASE}/upload/sessions/{session_id}/complete")
-
 
 class RunsResource(_Base):
     """Prompt-pack runs (nested under packs)."""
 
-    _BASE = "/api/v1/prompt-packs"
+    _BASE = "/api/v1/sdk/prompt-packs"
 
     def create(self, pack_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         return self._req("POST", f"{self._BASE}/{pack_id}/runs", json_payload=payload)
@@ -250,9 +228,6 @@ class RunsResource(_Base):
 
     def outputs(self, run_id: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         return self._req("GET", f"{self._BASE}/runs/{run_id}/outputs", params=params)
-
-    def retrieval_traces(self, run_id: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        return self._req("GET", f"{self._BASE}/runs/{run_id}/retrieval-traces", params=params)
 
     def cancel(self, run_id: str) -> dict[str, Any]:
         """Backend agent adds this endpoint; call may 404 on older servers."""
@@ -291,7 +266,7 @@ class RunsResource(_Base):
 class OutputValidationsResource(_Base):
     """Output-validations on a prompt-pack run."""
 
-    _BASE = "/api/v1/prompt-packs"
+    _BASE = "/api/v1/sdk/prompt-packs"
 
     def create(self, run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         return self._req(
@@ -322,25 +297,6 @@ class OutputValidationsResource(_Base):
     def cancel(self, validation_id: str) -> dict[str, Any]:
         """Backend agent adds this endpoint; call may 404 on older servers."""
         return self._req("POST", f"{self._BASE}/output-validations/{validation_id}/cancel")
-
-
-class RagValidationsResource(_Base):
-    """RAG validations on a prompt-pack run."""
-
-    _BASE = "/api/v1/prompt-packs"
-
-    def create(self, run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._req("POST", f"{self._BASE}/runs/{run_id}/rag-validate", json_payload=payload)
-
-    def list_for_run(self, run_id: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        return self._req("GET", f"{self._BASE}/runs/{run_id}/rag-validations", params=params)
-
-    def get(self, validation_id: str) -> dict[str, Any]:
-        return self._req("GET", f"{self._BASE}/rag-validations/{validation_id}")
-
-    def cancel(self, validation_id: str) -> dict[str, Any]:
-        """Backend agent adds this endpoint; call may 404 on older servers."""
-        return self._req("POST", f"{self._BASE}/rag-validations/{validation_id}/cancel")
 
 
 class SessionsResource(_Base):
@@ -715,7 +671,6 @@ __all__ = [
     "OutputValidationsResource",
     "PacksResource",
     "RagTargetsResource",
-    "RagValidationsResource",
     "RunsResource",
     "SessionsResource",
     "TargetsResource",

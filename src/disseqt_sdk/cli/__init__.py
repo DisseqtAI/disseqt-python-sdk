@@ -25,7 +25,6 @@ plan_group = _resources.plan
 plan_run_group = _resources.plan_run
 pp_run_group = _resources.pp_run
 rag_target_group = _resources.rag_target
-rag_validation_group = _resources.rag_validation
 session_group = _resources.session
 target_group = _resources.target
 vulnerability_group = _resources.vulnerability
@@ -50,7 +49,6 @@ cli.add_command(mcp_target_group)
 cli.add_command(pack_group)
 cli.add_command(pp_run_group)
 cli.add_command(output_validation_group)
-cli.add_command(rag_validation_group)
 cli.add_command(session_group)
 cli.add_command(byov_group)
 cli.add_command(vulnerability_group)
