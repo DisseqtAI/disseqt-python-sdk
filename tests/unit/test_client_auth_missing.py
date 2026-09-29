@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from disseqt_sdk import Client
-from disseqt_sdk.auth import AuthMissingError, token_store
+from disseqt_sdk.auth import AuthConfigPermissionError, AuthMissingError, token_store
 
 
 @pytest.fixture(autouse=True)
@@ -21,7 +21,23 @@ def _isolated_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     config_path = config_dir / "config.json"
     monkeypatch.setattr(token_store, "CONFIG_DIR", config_dir)
     monkeypatch.setattr(token_store, "CONFIG_PATH", config_path)
+    monkeypatch.delenv("DISSEQT_PROJECT_ID", raising=False)
+    monkeypatch.delenv("DISSEQT_API_KEY", raising=False)
     return config_path
+
+
+def test_client_falls_back_to_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DISSEQT_PROJECT_ID", "p_env")
+    monkeypatch.setenv("DISSEQT_API_KEY", "k_env")
+    c = Client()
+    assert (c.project_id, c.api_key) == ("p_env", "k_env")
+
+
+def test_client_refuses_insecure_config(_isolated_config: Path) -> None:
+    token_store.save({"api_key": "sk", "project_id": "p"})
+    _isolated_config.chmod(0o644)
+    with pytest.raises(AuthConfigPermissionError):
+        Client()
 
 
 def test_client_raises_auth_missing_when_no_creds_anywhere() -> None:

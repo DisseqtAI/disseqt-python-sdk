@@ -5,8 +5,8 @@ six app-sec judges: BFLA, BOLA, RBAC, ShellInjection, DebugAccess,
 IntellectualProperty; falls back to sql-injection / prompt-injection /
 data-leakage / insecure-output until those judges are deployed).
 
-Auth reads from the same env vars as every other CLI verb — see
-``disseqt validate --help`` for the required set.
+Auth reads ``DISSEQT_API_KEY`` / ``DISSEQT_PROJECT_ID`` like every other
+CLI verb; the validators gateway is ``DISSEQT_VALIDATORS_BASE_URL``.
 """
 
 from __future__ import annotations
@@ -144,8 +144,9 @@ def scan(
 ) -> None:
     """Scan SCAN_PATH for AI-security issues and print a report.
 
-    Exit code: 0 = no findings, 1 = findings remain after filtering (only
-    when --fail-on-findings is on), 2 = usage/config error.
+    Exit code: 0 = clean, 1 = any batch failed or findings remain after
+    filtering (the latter only when --fail-on-findings is on), 2 = usage/config
+    error.
     """
     _configure_logging()
     root = Path(scan_path).resolve()
@@ -205,6 +206,8 @@ def scan(
         err=True,
     )
 
-    if fail_on_findings and findings:
+    if stats.first_error:
+        click.secho(f"error: {stats.first_error}", fg="red", err=True)
+    if stats.batches_ok == 0 or stats.batches_failed > 0 or (fail_on_findings and findings):
         sys.exit(1)
     sys.exit(0)

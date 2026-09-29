@@ -26,10 +26,7 @@ import click
 from . import _http
 from ._common import echo_json
 
-BASE_ENV = "DISSEQT_REDTEAM_BASE_URL"
-DEFAULT_BASE = "https://api.disseqt.ai/dataset"
-
-_TERMINAL_STATES = {"completed", "failed", "cancelled", "error", "success", "done"}
+_TERMINAL_STATES = {"completed", "failed", "cancelled", "error", "done"}
 
 
 def _resolve_id(payload: Any, *keys: str) -> str | None:
@@ -85,15 +82,11 @@ def list_attacks(kind: str) -> None:
     """List available attack techniques (single-turn, multi-turn, agents)."""
     out: dict[str, Any] = {}
     if kind in ("single", "all"):
-        out["single_turn"] = _http.request(
-            "GET", BASE_ENV, DEFAULT_BASE, "/api/v1/testing/attack-techniques"
-        )
+        out["single_turn"] = _http.request("GET", "/api/v1/testing/attack-techniques")
     if kind in ("multi", "all"):
-        out["multi_turn"] = _http.request(
-            "GET", BASE_ENV, DEFAULT_BASE, "/api/v1/mr-jailbreak/techniques"
-        )
+        out["multi_turn"] = _http.request("GET", "/api/v1/mr-jailbreak/techniques")
     if kind in ("agents", "all"):
-        out["agents"] = _http.request("GET", BASE_ENV, DEFAULT_BASE, "/api/v1/mr-jailbreak/agents")
+        out["agents"] = _http.request("GET", "/api/v1/mr-jailbreak/agents")
     echo_json(out)
 
 
@@ -120,24 +113,18 @@ def attack(
 
     if multi_turn:
         body = {"technique": technique, "target": target, "objective": prompt or ""}
-        result = _http.request(
-            "POST", BASE_ENV, DEFAULT_BASE, "/api/v1/mr-jailbreak/batch-automate", json_body=body
-        )
+        result = _http.request("POST", "/api/v1/mr-jailbreak/batch-automate", json_body=body)
         echo_json(result)
         return
 
     # single-turn: create session, create run, poll, fetch results
-    session = _http.request(
-        "POST", BASE_ENV, DEFAULT_BASE, "/api/v1/testing/sessions", json_body={"target": target}
-    )
+    session = _http.request("POST", "/api/v1/testing/sessions", json_body={"target": target})
     session_id = _resolve_id(session, "id", "session_id")
     if not session_id:
         raise click.ClickException(f"could not resolve session id from response: {session!r}")
 
     run = _http.request(
         "POST",
-        BASE_ENV,
-        DEFAULT_BASE,
         f"/api/v1/testing/sessions/{session_id}/runs",
         json_body={"technique": technique, "prompt": prompt or ""},
     )
@@ -147,12 +134,10 @@ def attack(
 
     deadline = time.monotonic() + max_wait
     while time.monotonic() < deadline:
-        status = _http.request("GET", BASE_ENV, DEFAULT_BASE, f"/api/v1/testing/runs/{run_id}")
+        status = _http.request("GET", f"/api/v1/testing/runs/{run_id}")
         state = (status or {}).get("status") or (status or {}).get("state") or ""
         if state.lower() in _TERMINAL_STATES:
-            results = _http.request(
-                "GET", BASE_ENV, DEFAULT_BASE, f"/api/v1/testing/runs/{run_id}/results"
-            )
+            results = _http.request("GET", f"/api/v1/testing/runs/{run_id}/results")
             echo_json({"status": status, "results": results})
             return
         time.sleep(poll_interval)
@@ -167,16 +152,14 @@ def session() -> None:
 @session.command("list")
 def session_list() -> None:
     """List red-team sessions."""
-    echo_json(_http.request("GET", BASE_ENV, DEFAULT_BASE, "/api/v1/testing/sessions"))
+    echo_json(_http.request("GET", "/api/v1/testing/sessions"))
 
 
 @session.command("get")
 @click.argument("session_id")
 def session_get(session_id: str) -> None:
     """Fetch one session by id."""
-    echo_json(
-        _http.request("GET", BASE_ENV, DEFAULT_BASE, f"/api/v1/testing/sessions/{session_id}")
-    )
+    echo_json(_http.request("GET", f"/api/v1/testing/sessions/{session_id}"))
 
 
 @redteam.command("vuln-test")
@@ -188,8 +171,6 @@ def vuln_test(vuln_id: str, target: str) -> None:
     echo_json(
         _http.request(
             "POST",
-            BASE_ENV,
-            DEFAULT_BASE,
             f"/api/v1/vulnerabilities/{vuln_id}/test/poll",
             json_body=body,
         )
@@ -269,9 +250,7 @@ def run(config_path: str | None, as_json: bool) -> None:
         "max_depth": cfg.get("max_depth"),
         "stop_on_first_success": cfg.get("stop_on_first_success"),
     }
-    session = _http.request(
-        "POST", BASE_ENV, DEFAULT_BASE, "/api/v1/testing/sessions", json_body=session_payload
-    )
+    session = _http.request("POST", "/api/v1/testing/sessions", json_body=session_payload)
     session_id = _resolve_id(session, "id", "session_id")
     if not session_id:
         raise click.ClickException(f"could not resolve session id from response: {session!r}")
@@ -283,8 +262,6 @@ def run(config_path: str | None, as_json: bool) -> None:
     }
     launched = _http.request(
         "POST",
-        BASE_ENV,
-        DEFAULT_BASE,
         f"/api/v1/testing/sessions/{session_id}/runs",
         json_body=run_payload,
     )
@@ -332,33 +309,33 @@ def validate(
     }
     if threshold is not None:
         body["threshold"] = threshold
-    echo_json(
-        _http.request("POST", BASE_ENV, DEFAULT_BASE, "/api/v1/testing/validate", json_body=body)
-    )
+    echo_json(_http.request("POST", "/api/v1/testing/validate", json_body=body))
 
 
-def _status_probe(job_id: str) -> Any:
-    """Try the testing surface first, fall back to mr-jailbreak."""
+def _testing_or_mr(testing_path: str, mr_path: str) -> Any:
+    """Try the testing surface; on 404 only, fall back to mr-jailbreak."""
     try:
-        return _http.request("GET", BASE_ENV, DEFAULT_BASE, f"/api/v1/testing/runs/{job_id}")
-    except SystemExit:
-        return _http.request("GET", BASE_ENV, DEFAULT_BASE, f"/api/v1/mr-jailbreak/jobs/{job_id}")
+        return _http.request("GET", testing_path)
+    except _http.APIError as exc:
+        if exc.status_code != 404:
+            raise
+        return _http.request("GET", mr_path)
 
 
 @redteam.command("status")
 @click.argument("job_id")
 def status(job_id: str) -> None:
     """Fetch status for a running/completed job or run."""
-    echo_json(_status_probe(job_id))
+    echo_json(
+        _testing_or_mr(f"/api/v1/testing/runs/{job_id}", f"/api/v1/mr-jailbreak/jobs/{job_id}")
+    )
 
 
 @redteam.command("cancel")
 @click.argument("job_id")
 def cancel(job_id: str) -> None:
     """Cancel a running job or run."""
-    echo_json(
-        _http.request("POST", BASE_ENV, DEFAULT_BASE, f"/api/v1/testing/runs/{job_id}/cancel")
-    )
+    echo_json(_http.request("POST", f"/api/v1/testing/runs/{job_id}/cancel"))
 
 
 @redteam.command("results")
@@ -366,13 +343,9 @@ def cancel(job_id: str) -> None:
 def results(job_id: str) -> None:
     """Pretty-print results for a completed job or run."""
     try:
-        payload = _http.request(
-            "GET", BASE_ENV, DEFAULT_BASE, f"/api/v1/testing/runs/{job_id}/results"
-        )
+        payload = _http.request("GET", f"/api/v1/testing/runs/{job_id}/results")
     except SystemExit:
-        payload = _http.request(
-            "GET", BASE_ENV, DEFAULT_BASE, f"/api/v1/mr-jailbreak/jobs/{job_id}/interactions"
-        )
+        payload = _http.request("GET", f"/api/v1/mr-jailbreak/jobs/{job_id}/interactions")
     echo_json(payload)
 
 
@@ -380,7 +353,7 @@ def results(job_id: str) -> None:
 @click.option("--attack-type", help="Filter personas by attack_type field if present.")
 def list_personas(attack_type: str | None) -> None:
     """Enumerate persona agents (`/api/v1/mr-jailbreak/agents`)."""
-    payload = _http.request("GET", BASE_ENV, DEFAULT_BASE, "/api/v1/mr-jailbreak/agents")
+    payload = _http.request("GET", "/api/v1/mr-jailbreak/agents")
     if attack_type and isinstance(payload, list):
         payload = [
             p for p in payload if isinstance(p, dict) and p.get("attack_type") == attack_type
@@ -397,13 +370,9 @@ def list_techniques(single_turn: bool, multi_turn: bool) -> None:
         raise click.UsageError("pass at most one of --single-turn or --multi-turn")
     out: dict[str, Any] = {}
     if single_turn or not multi_turn:
-        out["single_turn"] = _http.request(
-            "GET", BASE_ENV, DEFAULT_BASE, "/api/v1/testing/attack-techniques"
-        )
+        out["single_turn"] = _http.request("GET", "/api/v1/testing/attack-techniques")
     if multi_turn or not single_turn:
-        out["multi_turn"] = _http.request(
-            "GET", BASE_ENV, DEFAULT_BASE, "/api/v1/mr-jailbreak/techniques"
-        )
+        out["multi_turn"] = _http.request("GET", "/api/v1/mr-jailbreak/techniques")
     echo_json(out)
 
 
@@ -467,9 +436,7 @@ def report(job_id: str, fmt: str) -> None:
     """Export a report for a completed job."""
     if fmt == "csv":
         # Server-side CSV renderer if available.
-        payload = _http.request(
-            "GET", BASE_ENV, DEFAULT_BASE, f"/api/v1/testing/sessions/{job_id}/report/csv"
-        )
+        payload = _http.request("GET", f"/api/v1/testing/sessions/{job_id}/report/csv")
         if isinstance(payload, str):
             click.echo(payload)
             return
@@ -477,7 +444,7 @@ def report(job_id: str, fmt: str) -> None:
         click.echo(_results_to_csv(payload))
         return
 
-    payload = _http.request("GET", BASE_ENV, DEFAULT_BASE, f"/api/v1/testing/runs/{job_id}/results")
+    payload = _http.request("GET", f"/api/v1/testing/runs/{job_id}/results")
     if fmt == "json":
         echo_json(payload)
     else:  # markdown
@@ -536,15 +503,11 @@ def analytics(summary_only: bool, prompts_only: bool, fmt: str) -> None:
 
     out: dict[str, Any] = {}
     if want_summary:
-        out["summary"] = _http.request(
-            "GET", BASE_ENV, DEFAULT_BASE, f"{_JAILBREAK_BASE}/analytics/summary"
-        )
+        out["summary"] = _http.request("GET", f"{_JAILBREAK_BASE}/analytics/summary")
     if want_prompts:
         # Backend registers /prompts-stats (not /analytics/prompts-stats) at
         # jailbreak_routes.go:57. /analytics/ only prefixes /analytics/summary.
-        out["prompts_stats"] = _http.request(
-            "GET", BASE_ENV, DEFAULT_BASE, f"{_JAILBREAK_BASE}/prompts-stats"
-        )
+        out["prompts_stats"] = _http.request("GET", f"{_JAILBREAK_BASE}/prompts-stats")
 
     if fmt == "json":
         # Unwrap single-key output when only one endpoint was requested.
@@ -583,7 +546,7 @@ def recommend(kind: str, context: str | None, config_path: str | None) -> None:
             raise click.ClickException(f"{config_path}: top-level must be a JSON object")
     else:
         body = {"context": context}
-    echo_json(_http.request("POST", BASE_ENV, DEFAULT_BASE, _RECOMMEND_PATHS[kind], json_body=body))
+    echo_json(_http.request("POST", _RECOMMEND_PATHS[kind], json_body=body))
 
 
 @redteam.command("parse-curl")
@@ -601,11 +564,7 @@ def parse_curl(source: str | None, from_stdin: bool) -> None:
     curl_text = curl_text.strip()
     if not curl_text:
         raise click.UsageError("empty curl input")
-    echo_json(
-        _http.request(
-            "POST", BASE_ENV, DEFAULT_BASE, f"{_BOT_BASE}/parse-curl", json_body={"curl": curl_text}
-        )
-    )
+    echo_json(_http.request("POST", f"{_BOT_BASE}/parse-curl", json_body={"curl": curl_text}))
 
 
 @redteam.command("test-connection")
@@ -647,11 +606,7 @@ def test_connection(target: str | None, config_path: str | None) -> None:
             if model
             else {"target": {"id": env_target}}
         )
-    echo_json(
-        _http.request(
-            "POST", BASE_ENV, DEFAULT_BASE, f"{_BOT_BASE}/test-connection", json_body=body
-        )
-    )
+    echo_json(_http.request("POST", f"{_BOT_BASE}/test-connection", json_body=body))
 
 
 @redteam.command("eval-csv")
@@ -672,8 +627,6 @@ def eval_csv(
         files = {"file": (os.path.basename(path), fh.read(), "text/csv")}
     submit = _http.request(
         "POST",
-        BASE_ENV,
-        DEFAULT_BASE,
         f"{_JAILBREAK_BASE}/evaluate-csv",
         files=files,
     )
@@ -691,9 +644,7 @@ def eval_csv(
         # Poll the CSV-eval job status via jailbreak_routes.go:55:
         # GET /api/v1/jailbreak/evaluate-csv/:generation_job_id.
         # /jobs/:id/process is a POST trigger, not a GET status probe.
-        last = _http.request(
-            "GET", BASE_ENV, DEFAULT_BASE, f"{_JAILBREAK_BASE}/evaluate-csv/{job_id}"
-        )
+        last = _http.request("GET", f"{_JAILBREAK_BASE}/evaluate-csv/{job_id}")
         state = (last or {}).get("status") or (last or {}).get("state") or ""
         if str(state).lower() in _TERMINAL_STATES:
             if output_path:
@@ -721,9 +672,7 @@ def eval_single_turn(
         body["technique"] = technique
     if vulnerability:
         body["vulnerability"] = vulnerability
-    payload = _http.request(
-        "POST", BASE_ENV, DEFAULT_BASE, f"{_JAILBREAK_BASE}/single-turn-evaluate", json_body=body
-    )
+    payload = _http.request("POST", f"{_JAILBREAK_BASE}/single-turn-evaluate", json_body=body)
     if fmt == "json":
         echo_json(payload)
         return
@@ -777,8 +726,6 @@ def technique_create(json_body: str | None) -> None:
     echo_json(
         _http.request(
             "POST",
-            BASE_ENV,
-            DEFAULT_BASE,
             f"{_JAILBREAK_BASE}/techniques",
             json_body=_load_json_body(json_body),
         )
@@ -792,8 +739,6 @@ def technique_update(technique_id: str, json_body: str | None) -> None:
     echo_json(
         _http.request(
             "PATCH",
-            BASE_ENV,
-            DEFAULT_BASE,
             f"{_JAILBREAK_BASE}/techniques/{technique_id}",
             json_body=_load_json_body(json_body),
         )
@@ -806,8 +751,6 @@ def technique_delete(technique_id: str) -> None:
     echo_json(
         _http.request(
             "DELETE",
-            BASE_ENV,
-            DEFAULT_BASE,
             f"{_JAILBREAK_BASE}/techniques/{technique_id}",
         )
     )
@@ -824,8 +767,6 @@ def prompt_create(json_body: str | None) -> None:
     echo_json(
         _http.request(
             "POST",
-            BASE_ENV,
-            DEFAULT_BASE,
             f"{_JAILBREAK_BASE}/prompts",
             json_body=_load_json_body(json_body),
         )
@@ -835,9 +776,7 @@ def prompt_create(json_body: str | None) -> None:
 @prompt.command("get")
 @click.argument("prompt_id")
 def prompt_get(prompt_id: str) -> None:
-    echo_json(
-        _http.request("GET", BASE_ENV, DEFAULT_BASE, f"{_JAILBREAK_BASE}/prompts/{prompt_id}")
-    )
+    echo_json(_http.request("GET", f"{_JAILBREAK_BASE}/prompts/{prompt_id}"))
 
 
 @prompt.command("update")
@@ -847,8 +786,6 @@ def prompt_update(prompt_id: str, json_body: str | None) -> None:
     echo_json(
         _http.request(
             "PATCH",
-            BASE_ENV,
-            DEFAULT_BASE,
             f"{_JAILBREAK_BASE}/prompts/{prompt_id}",
             json_body=_load_json_body(json_body),
         )
@@ -858,9 +795,7 @@ def prompt_update(prompt_id: str, json_body: str | None) -> None:
 @prompt.command("delete")
 @click.argument("prompt_id")
 def prompt_delete(prompt_id: str) -> None:
-    echo_json(
-        _http.request("DELETE", BASE_ENV, DEFAULT_BASE, f"{_JAILBREAK_BASE}/prompts/{prompt_id}")
-    )
+    echo_json(_http.request("DELETE", f"{_JAILBREAK_BASE}/prompts/{prompt_id}"))
 
 
 @redteam.group("generated-prompt")
@@ -875,8 +810,6 @@ def generated_prompt_mark_successful(generated_prompt_id: str) -> None:
     echo_json(
         _http.request(
             "PATCH",
-            BASE_ENV,
-            DEFAULT_BASE,
             f"{_JAILBREAK_BASE}/generated-prompts/{generated_prompt_id}/success",
         )
     )
@@ -891,11 +824,7 @@ def breach() -> None:
 @click.argument("run_id")
 def breach_list(run_id: str) -> None:
     """List breaches for a run (GET /testing/runs/:id/results/breaches)."""
-    echo_json(
-        _http.request(
-            "GET", BASE_ENV, DEFAULT_BASE, f"/api/v1/testing/runs/{run_id}/results/breaches"
-        )
-    )
+    echo_json(_http.request("GET", f"/api/v1/testing/runs/{run_id}/results/breaches"))
 
 
 @breach.command("get")
@@ -903,9 +832,7 @@ def breach_list(run_id: str) -> None:
 @click.argument("breach_id")
 def breach_get(run_id: str, breach_id: str) -> None:
     """Get one breach by id — client-side filter (no /findings/:id server route)."""
-    payload = _http.request(
-        "GET", BASE_ENV, DEFAULT_BASE, f"/api/v1/testing/runs/{run_id}/results/breaches"
-    )
+    payload = _http.request("GET", f"/api/v1/testing/runs/{run_id}/results/breaches")
     rows: list[Any]
     if isinstance(payload, list):
         rows = payload

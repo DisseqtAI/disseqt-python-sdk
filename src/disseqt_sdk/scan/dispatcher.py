@@ -55,8 +55,9 @@ FALLBACK_VALIDATORS: tuple[str, ...] = (
 
 VALIDATOR_DOMAIN = "input-validation"
 VALIDATOR_PATH = "/api/v1/sdk/validators/{domain}/{validator}"
-BASE_ENV = "DISSEQT_BASE_URL"
-DEFAULT_BASE = "https://api.disseqt.ai/realtime-validations"
+# Validators live on a different gateway than the dataset routes (DISSEQT_BASE_URL).
+VALIDATORS_BASE_ENV = "DISSEQT_VALIDATORS_BASE_URL"
+DEFAULT_VALIDATORS_BASE = "https://api.disseqt.ai/realtime-validations"
 
 
 def resolve_batch_chars(cli_value: int | None) -> int:
@@ -121,6 +122,7 @@ class DispatchStats:
     total_batches: int = 0
     batches_ok: int = 0
     batches_failed: int = 0
+    first_error: str | None = None
     findings_by_validator: dict[str, int] = field(default_factory=dict)
 
 
@@ -134,7 +136,12 @@ def _default_transport(method: str, path: str, body: dict[str, Any]) -> Any:
     # by resolving the HTTP layer at call time.
     from ..cli import _http  # noqa: PLC0415 — deliberate lazy import
 
-    return _http.request(method, BASE_ENV, DEFAULT_BASE, path, json_body=body)
+    return _http.request(
+        method,
+        path,
+        json_body=body,
+        base=_http.base_url(VALIDATORS_BASE_ENV, DEFAULT_VALIDATORS_BASE),
+    )
 
 
 def _validator_path(validator: str, domain: str = VALIDATOR_DOMAIN) -> str:
@@ -259,7 +266,7 @@ def dispatch(
     """POST batches to each validator and yield the parsed findings.
 
     Batch-level failures are logged and skipped so one flaky validator doesn't
-    kill the whole scan.
+    kill the whole scan; a 401/403 stops the scan since every batch would fail.
     """
     stats = stats or DispatchStats()
     send: Transport = transport or _default_transport
@@ -275,17 +282,12 @@ def dispatch(
                 envelope = send(
                     "POST", _validator_path(validator), _build_payload(batch, validator)
                 )
-            except SystemExit:
-                # _http._fail() raises SystemExit — treat as a batch-level
-                # failure, not a hard-abort, so the scan keeps going.
-                log.warning(
-                    "validator %s failed for batch of %d chunks", validator, len(batch.chunks)
-                )
-                stats.batches_failed += 1
-                continue
             except Exception as exc:  # noqa: BLE001 — anything the HTTP layer throws
                 log.warning("validator %s errored: %s", validator, exc)
                 stats.batches_failed += 1
+                stats.first_error = stats.first_error or f"{validator}: {exc}"
+                if getattr(exc, "status_code", 0) in (401, 403):
+                    return
                 continue
             stats.batches_ok += 1
             for raw in _extract_findings_list(envelope):

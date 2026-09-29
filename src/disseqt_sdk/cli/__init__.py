@@ -13,7 +13,6 @@ from .._version import SDK_VERSION
 from . import resources as _resources
 from .login import login as login_cmd
 from .login import logout as logout_cmd
-from .policy import policy as policy_group
 from .redteam import redteam as redteam_group
 from .scan import scan as scan_cmd
 from .whoami import whoami as whoami_cmd
@@ -37,14 +36,13 @@ vulnerability_group = _resources.vulnerability
 def cli() -> None:
     """Disseqt AI SDK command-line interface.
 
-    Red-team, GRC policy, prompt-pack, and scan tools. Auth flows from
+    Red-team, prompt-pack, and scan tools. Auth flows from
     environment variables — see ``disseqt login --help`` for the
     required set.
     """
 
 
 cli.add_command(redteam_group)
-cli.add_command(policy_group)
 cli.add_command(scan_cmd)
 cli.add_command(target_group)
 cli.add_command(rag_target_group)

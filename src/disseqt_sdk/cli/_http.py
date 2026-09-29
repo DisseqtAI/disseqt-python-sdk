@@ -1,8 +1,10 @@
-"""Minimal authenticated HTTP wrapper for CLI subcommands that hit
-red-team / policy-management endpoints not yet surfaced on
-:class:`~disseqt_sdk.client.Client`.
+"""Authenticated HTTP wrapper for CLI subcommands hitting the dataset gateway.
 
-Reads the same env vars as :mod:`._common` — see ``ENV_*`` constants.
+Sends only the user's project key (``X-API-Key`` + ``X-Project-Id``); the
+gateway validates it and injects the internal identity headers itself.
+Unwraps the ``{"status": "success", "data": ...}`` envelope and raises
+:class:`APIError` (click exits 1) on HTTP / network / error-envelope
+failures. Missing credentials are a config error (``_fail`` → exit 2).
 """
 
 from __future__ import annotations
@@ -11,23 +13,28 @@ import json
 import os
 from typing import Any
 
+import click
 import requests
 
 from .._version import sdk_identity_headers
-from ._common import ENV_API_KEY, ENV_PROJECT_ID, _fail
+from ..api_client import HTTPError, unwrap_envelope
+from ._common import ENV_API_KEY, ENV_BASE_URL, ENV_PROJECT_ID, _fail
 
+DEFAULT_BASE_URL = "https://api.disseqt.ai/dataset"
 DEFAULT_TIMEOUT_SECS = 60
 
-# Service-key identity headers the dataset-backend + policy-management
-# services read via populateServiceKeyIdentity (see disseqt-dataset-backend
-# PR #794). Without these, CLI-created rows land with user_id = uuid.Nil
-# server-side. Env-var driven so a CI/CD runner can pass its own identity.
-ENV_USER_ID = "DISSEQT_USER_ID"
-ENV_USER_EMAIL = "DISSEQT_USER_EMAIL"
-ENV_ORG_ID = "DISSEQT_ORGANIZATION_ID"
+
+class APIError(click.ClickException):
+    """HTTP / network failure. click prints it at the command boundary."""
+
+    exit_code = 1
+
+    def __init__(self, message: str, status_code: int = 0) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
-def _base_from(env_key: str, default: str) -> str:
+def base_url(env_key: str = ENV_BASE_URL, default: str = DEFAULT_BASE_URL) -> str:
     return (os.environ.get(env_key) or default).rstrip("/")
 
 
@@ -36,55 +43,27 @@ def _headers() -> dict[str, str]:
     api_key = os.environ.get(ENV_API_KEY)
     if not project_id or not api_key:
         _fail(f"set {ENV_PROJECT_ID} and {ENV_API_KEY} in the environment")
-    hdrs = {
-        "X-Service-API-Key": api_key,
+    return {
         "X-API-Key": api_key,
         "X-Project-Id": project_id,
-        # Newer server middleware prefers X-Internal-Project-Id; older path
-        # still reads X-Project-Id. Send both for forward-compat.
-        "X-Internal-Project-Id": project_id,
         "Content-Type": "application/json",
         **sdk_identity_headers(),
     }
-    user_id = os.environ.get(ENV_USER_ID)
-    if user_id:
-        hdrs["X-User-Id"] = user_id
-    user_email = os.environ.get(ENV_USER_EMAIL)
-    if user_email:
-        hdrs["X-User-Email"] = user_email
-    return hdrs
-
-
-def _org_project_headers() -> dict[str, str]:
-    """Extra headers the policy-management BFF injects downstream."""
-    hdrs: dict[str, str] = {}
-    org = os.environ.get(ENV_ORG_ID)
-    proj = os.environ.get(ENV_PROJECT_ID)
-    if org:
-        # Both spellings — dataset-backend reads X-Org-Id, policy-management
-        # reads X-Organization-ID.
-        hdrs["X-Organization-ID"] = org
-        hdrs["X-Org-Id"] = org
-    if proj:
-        hdrs["X-Project-ID"] = proj
-    return hdrs
 
 
 def request(
     method: str,
-    base_env: str,
-    default_base: str,
     path: str,
     *,
     json_body: dict[str, Any] | None = None,
     params: dict[str, Any] | None = None,
     files: dict[str, Any] | None = None,
     extra_headers: dict[str, str] | None = None,
+    base: str | None = None,
 ) -> Any:
-    """Make an authenticated HTTP request and return parsed JSON."""
-    url = f"{_base_from(base_env, default_base)}{path}"
+    """Authenticated request; returns the unwrapped ``data`` (or raw text for non-JSON)."""
+    url = f"{base or base_url()}{path}"
     headers = _headers()
-    headers.update(_org_project_headers())
     if extra_headers:
         headers.update(extra_headers)
     # requests picks the right Content-Type for multipart when `files` is set.
@@ -101,12 +80,16 @@ def request(
             timeout=DEFAULT_TIMEOUT_SECS,
         )
     except requests.RequestException as exc:
-        _fail(f"network error calling {url}: {exc}")
+        raise APIError(f"network error calling {url}: {exc}") from exc
     if not resp.ok:
-        _fail(f"HTTP {resp.status_code} from {url}: {resp.text[:512]}")
+        raise APIError(f"HTTP {resp.status_code} from {url}: {resp.text[:512]}", resp.status_code)
     if not resp.text:
         return None
     try:
-        return resp.json()
+        raw = resp.json()
     except json.JSONDecodeError:
         return resp.text
+    try:
+        return unwrap_envelope(raw, resp.status_code)
+    except HTTPError as exc:
+        raise APIError(str(exc), exc.status_code) from exc

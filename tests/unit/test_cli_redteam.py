@@ -27,7 +27,7 @@ _TESTING = f"{REDTEAM_BASE}/api/v1/testing"
 def _cli_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DISSEQT_API_KEY", "test_key")
     monkeypatch.setenv("DISSEQT_PROJECT_ID", "test_project")
-    monkeypatch.delenv("DISSEQT_REDTEAM_BASE_URL", raising=False)
+    monkeypatch.delenv("DISSEQT_BASE_URL", raising=False)
 
 
 @pytest.fixture

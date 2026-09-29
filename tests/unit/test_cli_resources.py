@@ -23,7 +23,7 @@ def _cli_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DISSEQT_API_KEY", "test_key")
     monkeypatch.setenv("DISSEQT_PROJECT_ID", "test_project")
     # Force the default base explicitly to avoid stray env pollution.
-    monkeypatch.delenv("DISSEQT_DATASET_BASE_URL", raising=False)
+    monkeypatch.delenv("DISSEQT_BASE_URL", raising=False)
 
 
 @pytest.fixture
@@ -270,8 +270,8 @@ def test_invalid_json_fails_fast(runner: CliRunner) -> None:
 
 
 def test_dataset_base_env_override(runner: CliRunner, requests_mock, monkeypatch) -> None:
-    """DISSEQT_DATASET_BASE_URL routes calls to a different host."""
-    monkeypatch.setenv("DISSEQT_DATASET_BASE_URL", "https://custom.example")
+    """DISSEQT_BASE_URL routes calls to a different host."""
+    monkeypatch.setenv("DISSEQT_BASE_URL", "https://custom.example")
     requests_mock.get("https://custom.example/api/v1/prompt-packs", json={"data": []})
     result = runner.invoke(cli, ["pack", "list"])
     assert result.exit_code == 0
@@ -420,11 +420,12 @@ def test_plan_run_create_with_wait_polls_to_terminal(
         f"{DATASET_BASE}/api/v1/test-plans/p1/runs",
         json={"run_id": "r1", "status": "queued"},
     )
+    # Real dataset-backend envelope: the poller must read status from `data`.
     requests_mock.get(
         f"{DATASET_BASE}/api/v1/test-plan-runs/r1",
         [
-            {"json": {"run_id": "r1", "status": "running"}},
-            {"json": {"run_id": "r1", "status": "completed"}},
+            {"json": {"status": "success", "data": {"run_id": "r1", "status": "running"}}},
+            {"json": {"status": "success", "data": {"run_id": "r1", "status": "completed"}}},
         ],
     )
     body = '{"target": {"execution_mode": "app_integration", "app_integration_id": "a1"}}'
@@ -433,6 +434,17 @@ def test_plan_run_create_with_wait_polls_to_terminal(
     )
     assert result.exit_code == 0, result.output
     assert '"status": "completed"' in result.output
+
+
+def test_plan_run_create_with_wait_times_out(runner: CliRunner, requests_mock, monkeypatch) -> None:
+    monkeypatch.setattr("disseqt_sdk.cli.resources.time.sleep", lambda _s: None)
+    requests_mock.post(f"{DATASET_BASE}/api/v1/test-plans/p1/runs", json={"run_id": "r1"})
+    requests_mock.get(f"{DATASET_BASE}/api/v1/test-plan-runs/r1", json={"status": "running"})
+    result = runner.invoke(
+        cli, ["plan-run", "create", "p1", "--json", "{}", "--wait", "--max-wait", "0"]
+    )
+    assert result.exit_code == 1
+    assert "did not finish" in result.output
 
 
 def test_plan_run_cancel(runner: CliRunner, requests_mock) -> None:

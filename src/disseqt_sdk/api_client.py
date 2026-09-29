@@ -20,6 +20,20 @@ from .models.prompt_packs import (
 _PROMPT_PACKS_BASE = "/sdk/prompt-packs/api/v1/sdk/prompt-packs"
 
 
+def unwrap_envelope(raw: Any, status_code: int = 200) -> Any:
+    """dataset-backend envelope (api/response.go): ``{"status": "success",
+    "data": X}`` → ``X``; ``{"status": "error", ...}`` → :class:`HTTPError`.
+    Anything else is returned untouched."""
+    if not isinstance(raw, dict):
+        return raw
+    if raw.get("status") == "error":
+        err = raw.get("error") if isinstance(raw.get("error"), dict) else {}
+        raise HTTPError(status_code, err.get("external") or "API error", json.dumps(raw)[:512])
+    if raw.get("status") == "success" and "data" in raw:
+        return raw["data"]
+    return raw
+
+
 class DisseqtAPIClient:
     """Disseqt API client for Prompt Packs management.
 
@@ -244,7 +258,7 @@ class DisseqtAPIClient:
             if response.status_code == 204 or not response.text:
                 return {"status": "ok"}
             try:
-                raw = response.json()
+                raw = unwrap_envelope(response.json(), response.status_code)
                 if raw is None:
                     return {"status": "ok"}
                 if isinstance(raw, list):

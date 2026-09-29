@@ -206,6 +206,23 @@ def test_dispatch_swallows_transport_errors():
     assert stats.batches_ok == 0
 
 
+def test_dispatch_stops_after_401():
+    chunks = [_chunk("a=1\n", path="a.py"), _chunk("b=2\n", path="b.py")]
+    calls = []
+
+    def unauthorized(method, path, body):
+        calls.append(path)
+        exc = RuntimeError("HTTP 401")
+        exc.status_code = 401  # mirrors cli._http.APIError
+        raise exc
+
+    stats = DispatchStats()
+    list(dispatch(chunks, ["bfla", "bola"], batch_chars=1, transport=unauthorized, stats=stats))
+    assert len(calls) == 1
+    assert stats.batches_failed == 1
+    assert stats.first_error and "401" in stats.first_error
+
+
 def test_dispatch_accepts_alternate_finding_shapes():
     chunks = [_chunk("secret = 'AKIA...'\n", path="s.py")]
 
@@ -371,7 +388,7 @@ def test_cli_scan_no_files_exits_zero(tmp_path: Path):
 def test_cli_scan_produces_sarif_when_requested(tmp_path: Path, monkeypatch):
     _write(tmp_path, "app.py", "eval(user_input)\n")
 
-    def fake_request(method, base_env, default_base, path, json_body=None, **kwargs):
+    def fake_request(method, path, json_body=None, **kwargs):
         return {
             "data": {
                 "findings": [
@@ -412,7 +429,7 @@ def test_cli_scan_produces_sarif_when_requested(tmp_path: Path, monkeypatch):
 def test_cli_scan_fail_on_findings_returns_1(tmp_path: Path, monkeypatch):
     _write(tmp_path, "app.py", "os.system(bad)\n")
 
-    def fake_request(method, base_env, default_base, path, json_body=None, **kwargs):
+    def fake_request(method, path, json_body=None, **kwargs):
         return {
             "data": {
                 "findings": [
@@ -441,7 +458,7 @@ def test_cli_scan_fail_on_findings_returns_1(tmp_path: Path, monkeypatch):
 def test_cli_scan_min_severity_filters_out_low(tmp_path: Path, monkeypatch):
     _write(tmp_path, "app.py", "x = 1\n")
 
-    def fake_request(method, base_env, default_base, path, json_body=None, **kwargs):
+    def fake_request(method, path, json_body=None, **kwargs):
         return {
             "data": {
                 "findings": [
@@ -469,6 +486,20 @@ def test_cli_scan_min_severity_filters_out_low(tmp_path: Path, monkeypatch):
     body = result.output[: result.output.rindex("}") + 1]
     doc = json.loads(body)
     assert doc["count"] == 0
+
+
+def test_cli_scan_failed_batch_returns_1(tmp_path: Path, monkeypatch):
+    _write(tmp_path, "app.py", "x = 1\n")
+
+    def boom(method, path, json_body=None, **kwargs):
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr("disseqt_sdk.cli._http.request", boom)
+    result = CliRunner().invoke(
+        cli, ["scan", str(tmp_path), "--validator", "bfla", "--no-fail-on-findings"]
+    )
+    assert result.exit_code == 1
+    assert "connection refused" in result.output
 
 
 def test_cli_scan_writes_output_file(tmp_path: Path, monkeypatch):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from collections.abc import Mapping
 from typing import Any, cast
@@ -31,16 +32,25 @@ logger = get_logger(__name__)
 
 
 def _load_stored_auth() -> dict[str, Any] | None:
-    """Try the local config; swallow any error so import-time / construction
-    stays dependable. A wider-than-0600 config surfaces later via the CLI's
-    ``disseqt login`` path where we can print an actionable message.
-    """
-    try:
-        from .auth import load as _load
+    """``~/.disseqt/config.json`` (written by ``disseqt login``), else the
+    ``DISSEQT_PROJECT_ID`` / ``DISSEQT_API_KEY`` env vars. An insecure config
+    file (mode wider than 0600) is an error, never a silent fallback."""
+    from .auth import AuthConfigPermissionError
+    from .auth import load as _load
 
-        return _load()
+    try:
+        stored = _load()
+    except AuthConfigPermissionError:
+        raise
     except Exception:
-        return None
+        stored = None
+    if stored is not None:
+        return stored
+    project_id = os.environ.get("DISSEQT_PROJECT_ID")
+    api_key = os.environ.get("DISSEQT_API_KEY")
+    if project_id and api_key:
+        return {"project_id": project_id, "api_key": api_key}
+    return None
 
 
 class HTTPError(Exception):
@@ -202,10 +212,7 @@ class Client:
                 instead of the first API call.
         """
         # Resolution order: explicit kwargs → ``~/.disseqt/config.json``
-        # (written by ``disseqt login``). Env-var fallback stays in the
-        # CLI; the SDK constructor only reads the local config so library
-        # callers get a predictable single source of truth. Missing creds
-        # still surface at first API call as today.
+        # (written by ``disseqt login``) → DISSEQT_* env vars.
         if not (project_id and api_key):
             stored = _load_stored_auth()
             if stored is not None:

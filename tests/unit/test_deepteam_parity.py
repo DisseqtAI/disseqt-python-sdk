@@ -108,7 +108,7 @@ class TestPhase6Telemetry:
 
 # NOTE: TestCliValidate (policies-based `disseqt validate` and
 # `disseqt run` smoke tests) removed alongside those commands. The
-# surviving CLI groups (redteam, resource groups, policy [GRC], scan)
+# surviving CLI groups (redteam, resource groups, scan)
 # are covered in their own test modules.
 
 
@@ -120,7 +120,7 @@ class TestCliRedteamExpansion:
     def _env(self, monkeypatch):
         monkeypatch.setenv("DISSEQT_PROJECT_ID", "proj")
         monkeypatch.setenv("DISSEQT_API_KEY", "key")
-        monkeypatch.setenv("DISSEQT_REDTEAM_BASE_URL", self.RT_BASE)
+        monkeypatch.setenv("DISSEQT_BASE_URL", self.RT_BASE)
 
     def test_redteam_bare_non_tty_shows_help(self, monkeypatch):
         # Non-TTY (CliRunner isolation) falls through to --help.
@@ -204,16 +204,14 @@ class TestCliRedteamExpansion:
         assert r.exit_code == 2, r.output
         assert "validator" in r.output.lower()
 
-    def test_service_key_headers_include_user_identity(self, monkeypatch, requests_mock):
-        """CLI must forward X-User-Id + X-User-Email so server-side rows
-        don't land with user_id = uuid.Nil (dataset-backend PR #794)."""
+    def test_cli_sends_only_user_key_headers(self, monkeypatch, requests_mock):
+        """Auth contract: the CLI sends X-API-Key + X-Project-Id only; the
+        gateway injects X-Service-API-Key / X-Internal-Project-Id / X-User-Id."""
         self._env(monkeypatch)
-        monkeypatch.setenv("DISSEQT_USER_ID", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
-        monkeypatch.setenv("DISSEQT_USER_EMAIL", "cli@example.com")
         monkeypatch.setenv("DISSEQT_ORGANIZATION_ID", "org-123")
         m = requests_mock.post(
             f"{self.RT_BASE}/api/v1/testing/validate",
-            json={"results": [], "aggregate_decision": "PASS"},
+            json={"status": "success", "data": {"results": [], "aggregate_decision": "PASS"}},
         )
         r = CliRunner().invoke(
             cli,
@@ -221,31 +219,53 @@ class TestCliRedteamExpansion:
         )
         assert r.exit_code == 0, r.output
         hdrs = m.last_request.headers
-        assert hdrs["X-User-Id"] == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-        assert hdrs["X-User-Email"] == "cli@example.com"
-        # Forward-compat: both project-id spellings + both org-id spellings.
-        assert hdrs["X-Internal-Project-Id"] == "proj"
+        assert hdrs["X-API-Key"] == "key"
         assert hdrs["X-Project-Id"] == "proj"
-        assert hdrs["X-Organization-ID"] == "org-123"
-        assert hdrs["X-Org-Id"] == "org-123"
+        for forbidden in (
+            "X-Service-API-Key",
+            "X-Internal-Project-Id",
+            "X-User-Id",
+            "X-User-Email",
+            "X-Org-Id",
+            "X-Organization-ID",
+        ):
+            assert forbidden not in hdrs
+        # Envelope unwrapped: only `data` is printed.
+        assert '"aggregate_decision": "PASS"' in r.output
+        assert '"status": "success"' not in r.output
 
-    def test_service_key_headers_omit_identity_when_env_absent(self, monkeypatch, requests_mock):
-        """No env => no X-User-Id header (server middleware then falls back)."""
+    def test_error_envelope_exits_1(self, monkeypatch, requests_mock):
         self._env(monkeypatch)
-        monkeypatch.delenv("DISSEQT_USER_ID", raising=False)
-        monkeypatch.delenv("DISSEQT_USER_EMAIL", raising=False)
-        m = requests_mock.post(
+        requests_mock.post(
             f"{self.RT_BASE}/api/v1/testing/validate",
-            json={"results": [], "aggregate_decision": "PASS"},
+            status_code=422,
+            json={"status": "error", "error": {"external": "validators required"}},
         )
         r = CliRunner().invoke(
-            cli,
-            ["redteam", "validate", "--input", "hi", "--validator", "toxicity"],
+            cli, ["redteam", "validate", "--input", "hi", "--validator", "toxicity"]
         )
+        assert r.exit_code == 1, r.output
+        assert "422" in r.output
+
+    def test_status_falls_back_to_mr_only_on_404(self, monkeypatch, requests_mock):
+        self._env(monkeypatch)
+        requests_mock.get(f"{self.RT_BASE}/api/v1/testing/runs/j1", status_code=404, text="nope")
+        requests_mock.get(
+            f"{self.RT_BASE}/api/v1/mr-jailbreak/jobs/j1",
+            json={"status": "success", "data": {"id": "j1", "status": "running"}},
+        )
+        r = CliRunner().invoke(cli, ["redteam", "status", "j1"])
         assert r.exit_code == 0, r.output
-        hdrs = m.last_request.headers
-        assert "X-User-Id" not in hdrs
-        assert "X-User-Email" not in hdrs
+        assert '"status": "running"' in r.output
+        assert "404" not in r.output
+
+    def test_status_does_not_fall_back_on_500(self, monkeypatch, requests_mock):
+        self._env(monkeypatch)
+        requests_mock.get(f"{self.RT_BASE}/api/v1/testing/runs/j1", status_code=500, text="boom")
+        mr = requests_mock.get(f"{self.RT_BASE}/api/v1/mr-jailbreak/jobs/j1", json={})
+        r = CliRunner().invoke(cli, ["redteam", "status", "j1"])
+        assert r.exit_code == 1
+        assert not mr.called
 
     def test_redteam_status_hits_testing_first(self, monkeypatch, requests_mock):
         self._env(monkeypatch)
@@ -371,7 +391,7 @@ class TestCliRedteamBatch2:
     def _env(self, monkeypatch):
         monkeypatch.setenv("DISSEQT_PROJECT_ID", "proj")
         monkeypatch.setenv("DISSEQT_API_KEY", "key")
-        monkeypatch.setenv("DISSEQT_REDTEAM_BASE_URL", self.RT_BASE)
+        monkeypatch.setenv("DISSEQT_BASE_URL", self.RT_BASE)
 
     # ---- analytics ---------------------------------------------------------
     def test_analytics_default_hits_both(self, monkeypatch, requests_mock):

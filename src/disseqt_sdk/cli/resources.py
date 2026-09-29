@@ -2,9 +2,8 @@
 ``pack``, ``pp-run``, ``output-validation``, ``rag-validation``,
 ``session``, ``byov``, ``vulnerability``, ``plan``, ``plan-run``.
 
-Thin wrappers over :mod:`._http` — one command per backend endpoint.
-No new deps, no new env vars beyond the shared ``DISSEQT_DATASET_BASE_URL``
-(falls back to the same host as ``DISSEQT_REDTEAM_BASE_URL``).
+Thin wrappers over :mod:`._http` — one command per backend endpoint,
+all on the dataset gateway (``DISSEQT_BASE_URL``).
 """
 
 from __future__ import annotations
@@ -20,9 +19,6 @@ import click
 from ..api_client import DisseqtAPIClient
 from . import _http
 from ._common import ENV_API_KEY, ENV_PROJECT_ID, _fail, echo_json
-
-BASE_ENV = "DISSEQT_DATASET_BASE_URL"
-DEFAULT_BASE = "https://api.disseqt.ai/dataset"
 
 
 def _json_option(
@@ -50,19 +46,19 @@ def _load_json_body(json_body: str | None) -> dict[str, Any]:
 
 
 def _get(path: str, params: dict[str, Any] | None = None) -> None:
-    echo_json(_http.request("GET", BASE_ENV, DEFAULT_BASE, path, params=params))
+    echo_json(_http.request("GET", path, params=params))
 
 
 def _post(path: str, body: dict[str, Any] | None = None) -> None:
-    echo_json(_http.request("POST", BASE_ENV, DEFAULT_BASE, path, json_body=body))
+    echo_json(_http.request("POST", path, json_body=body))
 
 
 def _patch(path: str, body: dict[str, Any]) -> None:
-    echo_json(_http.request("PATCH", BASE_ENV, DEFAULT_BASE, path, json_body=body))
+    echo_json(_http.request("PATCH", path, json_body=body))
 
 
 def _delete(path: str) -> None:
-    echo_json(_http.request("DELETE", BASE_ENV, DEFAULT_BASE, path))
+    echo_json(_http.request("DELETE", path))
 
 
 def _api_client() -> DisseqtAPIClient:
@@ -71,8 +67,7 @@ def _api_client() -> DisseqtAPIClient:
     api_key = os.environ.get(ENV_API_KEY)
     if not project_id or not api_key:
         _fail(f"set {ENV_PROJECT_ID} and {ENV_API_KEY} in the environment")
-    base_url = os.environ.get(BASE_ENV) or DEFAULT_BASE
-    return DisseqtAPIClient(project_id=project_id, api_key=api_key, base_url=base_url)
+    return DisseqtAPIClient(project_id=project_id, api_key=api_key, base_url=_http.base_url())
 
 
 # ---------------------------------------------------------------------------
@@ -314,8 +309,7 @@ def pack_review(pack_id: str, json_body: str | None) -> None:
 
 # ---------------------------------------------------------------------------
 # Runs (nested under packs)
-# Named `pp-run` (prompt-pack run) to avoid clashing with the existing
-# top-level `disseqt run` command.
+# Named `pp-run` (prompt-pack run) to avoid clashing with `redteam run`.
 # ---------------------------------------------------------------------------
 
 
@@ -817,23 +811,31 @@ def plan_run() -> None:
     show_default=True,
     help="Polling interval in seconds when --wait is set.",
 )
-def plan_run_create(plan_id: str, json_body: str | None, wait: bool, interval: float) -> None:
+@click.option(
+    "--max-wait",
+    type=float,
+    default=900.0,
+    show_default=True,
+    help="Give up (exit 1) after this many seconds when --wait is set.",
+)
+def plan_run_create(
+    plan_id: str, json_body: str | None, wait: bool, interval: float, max_wait: float
+) -> None:
     resp = _http.request(
         "POST",
-        BASE_ENV,
-        DEFAULT_BASE,
         f"/api/v1/test-plans/{plan_id}/runs",
         json_body=_load_json_body(json_body),
     )
     if not wait:
         echo_json(resp)
         return
-    run_id = resp.get("run_id") if isinstance(resp, dict) else None
+    run_id = (resp.get("run_id") or resp.get("id")) if isinstance(resp, dict) else None
     if not isinstance(run_id, str) or not run_id:
         _fail("--wait requires a run_id in the create response")
     # ponytail: naive poll loop, no jitter/backoff; upgrade if runs commonly outlive 30-60 min.
-    while True:
-        latest = _http.request("GET", BASE_ENV, DEFAULT_BASE, f"/api/v1/test-plan-runs/{run_id}")
+    deadline = time.monotonic() + max_wait
+    while time.monotonic() < deadline:
+        latest = _http.request("GET", f"/api/v1/test-plan-runs/{run_id}")
         status = (latest.get("status") if isinstance(latest, dict) else None) or (
             latest.get("header", {}).get("status")
             if isinstance(latest, dict) and isinstance(latest.get("header"), dict)
@@ -843,6 +845,7 @@ def plan_run_create(plan_id: str, json_body: str | None, wait: bool, interval: f
             echo_json(latest)
             return
         time.sleep(interval)
+    raise click.ClickException(f"run {run_id} did not finish within {max_wait}s")
 
 
 @plan_run.command("list")
