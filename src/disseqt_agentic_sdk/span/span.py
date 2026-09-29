@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from disseqt_agentic_sdk.client import DisseqtAgenticClient
 
-from disseqt_agentic_sdk.context import get_current_span, set_current_span
+from disseqt_agentic_sdk.context import get_current_span, reset_current_span, set_current_span
 from disseqt_agentic_sdk.enums import SpanKind, SpanStatus
 from disseqt_agentic_sdk.models.span import EnrichedSpan
 from disseqt_agentic_sdk.semantics import (
@@ -70,7 +70,6 @@ class DisseqtSpan:
         # Get parent from context if not explicitly provided
         # Only use context if parent_span_id was not passed (None means check context)
         # If parent_span_id was explicitly passed as None, use None (root span)
-        self._parent_span_context = None  # Store parent span for context restoration
         if parent_span_id is None:
             current_span = get_current_span()
             if current_span is not None:
@@ -80,7 +79,6 @@ class DisseqtSpan:
                 trace_id_str = str(trace_id)
                 if current_trace_id_str == trace_id_str:
                     parent_span_id = current_span.span_id
-                    self._parent_span_context = current_span  # Store parent for restoration
 
         # Determine if root span
         self.root = parent_span_id is None
@@ -116,8 +114,11 @@ class DisseqtSpan:
         # Attributes dictionary (will be serialized to attributes_json)
         self.attributes: dict[str, Any] = {}
 
-        # Set current span in context
-        set_current_span(self)
+        # Set current span in context, keeping the token so __exit__ can
+        # restore whatever span was current before this one (correct
+        # under nesting/concurrency -- see context.py). Deliberately NOT
+        # restored in end() -- only __exit__ does; see end()'s own comment.
+        self._span_context_token = set_current_span(self)
 
     def set_agent_info(
         self,
@@ -387,5 +388,7 @@ class DisseqtSpan:
             self.set_error(str(exc_val), error_type=exc_type.__name__)
         self.end()  # end() itself delivers to the buffer now -- see its own doc comment
 
-        # Restore parent span to context so sibling spans can find their parent
-        set_current_span(self._parent_span_context)
+        # Restore whatever span was current before this one, via the
+        # token captured in __init__, so sibling spans can find their
+        # real parent -- correct under concurrent/nested spans.
+        reset_current_span(self._span_context_token)

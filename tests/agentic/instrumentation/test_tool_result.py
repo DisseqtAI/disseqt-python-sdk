@@ -216,37 +216,6 @@ class TestLaneB:
         attrs = json.loads(agent.attributes_json)
         assert AgenticAttributes.TOOL_CALLS not in attrs
 
-    @pytest.mark.xfail(
-        reason=(
-            "Pre-existing bug, newly EXPOSED (not caused) by this PR's P1 fix "
-            "(DisseqtSpan.end() now actually delivers spans that used to be "
-            "silently dropped -- see span.py's end()). Root cause, verified: "
-            "disseqt_agentic_sdk/context.py's get_current_trace()/"
-            "get_current_span() are threading.local()-based, NOT "
-            "contextvars.ContextVar-based (_tool_result.py's own "
-            "_current_agg tool-call aggregator IS already a ContextVar and "
-            "is NOT part of this bug -- an earlier version of this note "
-            "wrongly implicated it too; corrected after independent review). "
-            "threading.local is not isolated across asyncio Tasks "
-            "interleaved on one thread, so two concurrent agent_span() flows "
-            "can share the same 'current trace' object: one task's "
-            "trace.end() sweep can prematurely end the OTHER task's "
-            "not-yet-finalized span (before agg.flush_onto() fuses its "
-            "tool-call attributes), and this fix's end()-is-idempotent guard "
-            "then permanently blocks that span's correct, later send -- "
-            "silent data corruption for concurrent-async agent workloads, "
-            "not just a rare test failure. Before this PR, the misattributed "
-            "span was simply never sent at all (P1's bug), which is why this "
-            "test passed -- data loss was masking the race. Fixing "
-            "context.py to use contextvars is a separate, larger change "
-            "(audits every threading.local consumer) and is out of scope for "
-            "this PR; given the severity above, treat the follow-up as "
-            "higher priority than routine tech debt. strict=True so this "
-            "starts failing loudly (not silently staying green) once that "
-            "fix lands."
-        ),
-        strict=True,
-    )
     def test_concurrent_agent_spans_are_isolated(self, recording_client):
         # Two asyncio tasks each open their own agent_span, each records
         # a distinct call_id. Neither should leak into the other's span.
