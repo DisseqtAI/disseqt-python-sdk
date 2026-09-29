@@ -15,11 +15,11 @@ from .config import load as load_config
 from .dispatcher import (
     APPSEC_VALIDATORS,
     DEFAULT_BATCH_CHARS,
-    FALLBACK_VALIDATORS,
     ChunkBatch,
     DispatchStats,
     batch_chunks,
     dispatch,
+    normalize_validator,
     resolve_batch_chars,
 )
 from .formatters import to_json, to_markdown, to_sarif
@@ -35,7 +35,7 @@ __all__ = [
     "DEFAULT_MAX_CHUNK_CHARS",
     "DEFAULT_MAX_FILE_BYTES",
     "DispatchStats",
-    "FALLBACK_VALIDATORS",
+    "normalize_validator",
     "GitDiffError",
     "SEVERITY_ORDER",
     "ScanConfig",

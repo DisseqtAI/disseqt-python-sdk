@@ -27,6 +27,7 @@ from disseqt_sdk.scan import (
     dispatch,
     iter_source_files,
     meets_min_severity,
+    normalize_validator,
     resolve_batch_chars,
     to_json,
     to_markdown,
@@ -160,6 +161,80 @@ def test_resolve_batch_chars_bad_env_falls_back(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+def _judge(score: float, *, labels=None, threshold: float = 0.5, reasoning: str = "why") -> dict:
+    """Wire envelope from handleSDKJudgeValidator (pkg/judge/wire.go WireResponse)."""
+    return {
+        "data": {
+            "metric_name": "llm-judge-shell-injection",
+            "actual_value": score,
+            "actual_value_type": "float",
+            "metric_labels": labels or [],
+            "threshold": [],
+            "threshold_score": threshold,
+            "others": {"reasoning": reasoning},
+        },
+        "status": {"code": "200", "message": "OK"},
+    }
+
+
+def test_normalize_validator_adds_prefix_and_kebab_case():
+    assert normalize_validator("bfla") == "llm-judge-bfla"
+    assert normalize_validator("shell_injection") == "llm-judge-shell-injection"
+    assert normalize_validator("LLM-Judge-Rbac") == "llm-judge-rbac"
+
+
+def test_dispatch_judge_verdict_emits_finding_per_chunk():
+    chunks = [_chunk("eval(x)\n", path="a.py", start=3), _chunk("os.system(y)\n", path="b.py")]
+    paths = []
+
+    def transport(method, path, body):
+        paths.append(path)
+        return _judge(0.95, labels=["Critical"], reasoning="shell exec on user input")
+
+    stats = DispatchStats()
+    findings = list(dispatch(chunks, ["shell-injection"], transport=transport, stats=stats))
+    assert paths == ["/api/v1/sdk/validators/input-validation/llm-judge-shell-injection"]
+    assert [f.file_path for f in findings] == ["a.py", "b.py"]
+    assert findings[0].severity == "critical"
+    assert findings[0].vulnerability_type == "llm-judge-shell-injection"
+    assert findings[0].reason == "shell exec on user input"
+    assert findings[0].line_start == 3 and findings[0].code_snippet == "eval(x)"
+    assert stats.findings_by_validator == {"llm-judge-shell-injection": 2}
+
+
+def test_dispatch_judge_below_threshold_is_clean():
+    chunks = [_chunk("x=1\n")]
+    findings = list(dispatch(chunks, ["bfla"], transport=lambda *a: _judge(0.2, threshold=0.5)))
+    assert findings == []
+
+
+def test_dispatch_judge_severity_from_score_when_no_label():
+    chunks = [_chunk("x=1\n")]
+    sev = {
+        s: next(iter(dispatch(chunks, ["bfla"], transport=lambda *a, s=s: _judge(s)))).severity
+        for s in (0.95, 0.75, 0.5)
+    }
+    assert sev == {0.95: "critical", 0.75: "high", 0.5: "medium"}
+
+
+def test_dispatch_wire_error_counts_as_failed_batch_and_403_stops():
+    chunks = [_chunk("a\n", path="a.py"), _chunk("b\n", path="b.py")]
+    calls = []
+
+    def denied(method, path, body):
+        calls.append(path)
+        return {
+            "data": {"metric_name": "llm-judge-bfla", "actual_value_type": "float"},
+            "status": {"code": "403", "message": "JUDGE_PACK_SAFETY not enabled"},
+        }
+
+    stats = DispatchStats()
+    findings = list(dispatch(chunks, ["bfla"], batch_chars=1, transport=denied, stats=stats))
+    assert findings == [] and len(calls) == 1
+    assert stats.batches_failed == 1 and stats.batches_ok == 0
+    assert stats.first_error and "403" in stats.first_error
+
+
 def test_dispatch_parses_findings_and_updates_stats():
     chunks = [_chunk("if user_input: eval(user_input)\n", path="danger.py", start=42)]
 
@@ -190,7 +265,7 @@ def test_dispatch_parses_findings_and_updates_stats():
     assert findings[0].vulnerability_type == "shell-injection"
     assert findings[0].code_snippet is not None
     assert stats.batches_ok == 1
-    assert stats.findings_by_validator == {"shell-injection": 1}
+    assert stats.findings_by_validator == {"llm-judge-shell-injection": 1}
 
 
 def test_dispatch_swallows_transport_errors():
@@ -389,20 +464,8 @@ def test_cli_scan_produces_sarif_when_requested(tmp_path: Path, monkeypatch):
     _write(tmp_path, "app.py", "eval(user_input)\n")
 
     def fake_request(method, path, json_body=None, **kwargs):
-        return {
-            "data": {
-                "findings": [
-                    {
-                        "file_path": "app.py",
-                        "line_start": 1,
-                        "vulnerability": "eval on untrusted input",
-                        "vulnerability_type": "shell-injection",
-                        "severity": "critical",
-                        "reason": "eval() on user input",
-                    }
-                ]
-            }
-        }
+        assert path.endswith("/llm-judge-shell-injection")
+        return _judge(0.95, labels=["Critical"], reasoning="eval() on user input")
 
     monkeypatch.setattr("disseqt_sdk.cli._http.request", fake_request)
 
@@ -423,51 +486,28 @@ def test_cli_scan_produces_sarif_when_requested(tmp_path: Path, monkeypatch):
     body = result.output[: result.output.rindex("}") + 1]
     doc = json.loads(body)
     assert doc["version"] == "2.1.0"
-    assert doc["runs"][0]["results"][0]["ruleId"] == "shell-injection"
+    assert doc["runs"][0]["results"][0]["ruleId"] == "llm-judge-shell-injection"
 
 
 def test_cli_scan_fail_on_findings_returns_1(tmp_path: Path, monkeypatch):
     _write(tmp_path, "app.py", "os.system(bad)\n")
 
-    def fake_request(method, path, json_body=None, **kwargs):
-        return {
-            "data": {
-                "findings": [
-                    {
-                        "file_path": "app.py",
-                        "line_start": 1,
-                        "vulnerability": "shell",
-                        "vulnerability_type": "shell-injection",
-                        "severity": "high",
-                        "reason": "os.system with user data",
-                    }
-                ]
-            }
-        }
-
-    monkeypatch.setattr("disseqt_sdk.cli._http.request", fake_request)
+    monkeypatch.setattr(
+        "disseqt_sdk.cli._http.request", lambda *a, **k: _judge(0.8, reasoning="os.system")
+    )
 
     result = CliRunner().invoke(
         cli,
         ["scan", str(tmp_path), "--format", "json", "--validator", "shell-injection"],
     )
     assert result.exit_code == 1
-    assert '"vulnerability_type": "shell-injection"' in result.output
+    assert '"vulnerability_type": "llm-judge-shell-injection"' in result.output
 
 
 def test_cli_scan_min_severity_filters_out_low(tmp_path: Path, monkeypatch):
     _write(tmp_path, "app.py", "x = 1\n")
 
-    def fake_request(method, path, json_body=None, **kwargs):
-        return {
-            "data": {
-                "findings": [
-                    {"file_path": "app.py", "line_start": 1, "severity": "low", "reason": "meh"}
-                ]
-            }
-        }
-
-    monkeypatch.setattr("disseqt_sdk.cli._http.request", fake_request)
+    monkeypatch.setattr("disseqt_sdk.cli._http.request", lambda *a, **k: _judge(0.3, threshold=0.2))
 
     result = CliRunner().invoke(
         cli,
@@ -506,7 +546,7 @@ def test_cli_scan_writes_output_file(tmp_path: Path, monkeypatch):
     _write(tmp_path, "app.py", "x = 1\n")
     monkeypatch.setattr(
         "disseqt_sdk.cli._http.request",
-        lambda *a, **k: {"data": {"findings": []}},
+        lambda *a, **k: _judge(0.05),
     )
     out = tmp_path / "report.json"
     result = CliRunner().invoke(
@@ -543,12 +583,12 @@ def test_scan_config_missing_returns_defaults(tmp_path: Path):
 
 
 def test_appsec_validator_set_present():
-    # The 6-judge default set is the top of the app-sec ladder.
+    # The SDK validators surface serves llm-judge-* metrics only.
     assert set(APPSEC_VALIDATORS) == {
-        "bfla",
-        "bola",
-        "rbac",
-        "shell-injection",
-        "debug-access",
-        "intellectual-property",
+        "llm-judge-bfla",
+        "llm-judge-bola",
+        "llm-judge-rbac",
+        "llm-judge-shell-injection",
+        "llm-judge-debug-access",
+        "llm-judge-intellectual-property",
     }

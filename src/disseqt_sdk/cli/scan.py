@@ -1,9 +1,9 @@
 """``disseqt scan`` — walk a source tree and hunt AI-security issues.
 
-Dispatches char-bounded chunks to disseqt-go validators (defaults to the
-six app-sec judges: BFLA, BOLA, RBAC, ShellInjection, DebugAccess,
-IntellectualProperty; falls back to sql-injection / prompt-injection /
-data-leakage / insecure-output until those judges are deployed).
+Dispatches char-bounded chunks to the ``llm-judge-*`` validators on the SDK
+validators surface (defaults to the six app-sec judges: bfla, bola, rbac,
+shell-injection, debug-access, intellectual-property). Validator names from
+``--validator`` or ``.disseqt-code-scan.yaml`` are normalised to that form.
 
 Auth reads ``DISSEQT_API_KEY`` / ``DISSEQT_PROJECT_ID`` like every other
 CLI verb; the validators gateway is ``DISSEQT_VALIDATORS_BASE_URL``.
@@ -72,7 +72,8 @@ def _render(findings: list, fmt: str) -> str:
 @click.option(
     "--diff",
     "diff_spec",
-    help="Scan only files changed between two git refs (e.g. main..HEAD).",
+    help="Scan only files changed between two git refs, as BASE..HEAD or "
+    "BASE...HEAD (e.g. main..HEAD, origin/main...HEAD).",
 )
 @click.option(
     "-f",
@@ -128,7 +129,9 @@ def _render(findings: list, fmt: str) -> str:
     "--validator",
     "validator_overrides",
     multiple=True,
-    help="Override the default validator set. Repeat for multiple.",
+    help="Override the default judge set (bfla, bola, rbac, shell-injection, "
+    "debug-access, intellectual-property). Repeat for multiple; names are "
+    "normalised to llm-judge-<name>.",
 )
 def scan(
     scan_path: str,

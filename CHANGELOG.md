@@ -20,9 +20,14 @@ the dataset-backend Go structs; the file/line is cited next to each builder.
   ``session``, ``breach``, ``technique``/``prompt``/``generated-prompt`` CRUD,
   ``analytics``, ``recommend``, ``parse-curl``, ``test-connection``,
   ``vuln-test``, ``list-attacks``/``list-techniques``/``list-personas``.
-- ``disseqt scan``: code scanner over the realtime validators
-  (``DISSEQT_VALIDATORS_BASE_URL``); exits 1 when any batch fails or
-  findings remain, stops after the first 401/403.
+- ``disseqt scan``: code scanner over the ``llm-judge-*`` validators on the
+  SDK validators surface (``DISSEQT_VALIDATORS_BASE_URL``). Validator names
+  are normalised to ``llm-judge-<name>``; the judge's wire envelope
+  (``actual_value`` 0-1, ``metric_labels``, ``threshold_score``,
+  ``others.reasoning``) yields one finding per chunk once the score reaches
+  the judge threshold. Exits 1 when any batch fails or findings remain,
+  stops after the first 401/403. ``--diff BASE..HEAD`` scans only changed
+  files.
 - Resource groups (``target``, ``pack``, ``pp-run``, ``session``, ``plan``,
   ``plan-run`` with ``--wait --max-wait``, ...), ``disseqt login`` /
   ``logout`` / ``whoami``.

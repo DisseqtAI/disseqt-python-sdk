@@ -4,15 +4,19 @@ Each batch is sent to *every* configured validator. A batch is a bundle of
 chunks whose combined text fits under ``batch_chars`` — grouping cuts the
 per-request overhead vs one-request-per-chunk.
 
-The validator returns a JSON envelope; we heuristically pull findings out
-of it. The disseqt-go response shapes we accept today:
+The SDK validators surface (dataset-backend ``handleSDKJudgeValidator`` →
+disseqt-go apicompat) serves ``llm-judge-*`` metrics only and answers with
+the ml-services wire envelope (``pkg/judge/wire.go`` WireResponse)::
 
-- ``{"data": {"findings": [...]}}``
-- ``{"data": {"issues":   [...]}}``
-- ``{"findings": [...]}``
+    {"data": {"metric_name", "actual_value" (0-1, higher = worse),
+              "metric_labels": [...], "threshold": [...], "threshold_score",
+              "others": {"reasoning": ...}},
+     "status": {"code": "200", "message": "OK"}}
 
-Any other shape → we log a warning and skip. The individual finding dict
-is fed to :func:`_finding_from_dict`, which maps common field aliases.
+Errors ride HTTP 200 with ``status.code != "200"``. One judge verdict covers
+the whole batch, so a finding is emitted per chunk when ``actual_value``
+reaches the judge's ``threshold_score``. A ``findings``/``issues`` list is
+still accepted for validators that return per-finding rows.
 """
 
 from __future__ import annotations
@@ -31,26 +35,20 @@ log = logging.getLogger(__name__)
 DEFAULT_BATCH_CHARS = 40_000
 BATCH_CHARS_ENV = "DISSEQT_SCAN_CONTEXT_LIMIT"
 
-# App-security judges wired on the disseqt-go feat branch. Once merged, the
-# CLI defaults to these six. Until then, callers can override with --validator
-# or via .disseqt-code-scan.yaml to hit whatever's currently registered.
-APPSEC_VALIDATORS: tuple[str, ...] = (
-    "bfla",
-    "bola",
-    "rbac",
-    "shell-injection",
-    "debug-access",
-    "intellectual-property",
-)
+JUDGE_PREFIX = "llm-judge-"
 
-# Validators that exist on disseqt-go today (fallback when app-sec judges
-# aren't deployed yet). Verified against
-# disseqt-go/internal/validatorregistry/registry.go and cli/enums.py.
-FALLBACK_VALIDATORS: tuple[str, ...] = (
-    "sql-injection",
-    "prompt-injection",
-    "data-leakage",
-    "insecure-output",
+
+def normalize_validator(name: str) -> str:
+    """``bfla`` / ``shell_injection`` → ``llm-judge-shell-injection``; the SDK
+    validators route rejects anything without the ``llm-judge-`` prefix."""
+    slug = name.strip().lower().replace("_", "-")
+    return slug if slug.startswith(JUDGE_PREFIX) else f"{JUDGE_PREFIX}{slug}"
+
+
+# The six app-security judges the CLI scans with by default.
+APPSEC_VALIDATORS: tuple[str, ...] = tuple(
+    normalize_validator(n)
+    for n in ("bfla", "bola", "rbac", "shell-injection", "debug-access", "intellectual-property")
 )
 
 VALIDATOR_DOMAIN = "input-validation"
@@ -128,6 +126,20 @@ class DispatchStats:
 
 # Type of the transport hook — split out so tests can inject a fake.
 Transport = Callable[[str, str, dict[str, Any]], Any]
+
+
+class JudgeError(RuntimeError):
+    """``status.code != "200"`` in the wire envelope (rides HTTP 200)."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(f"HTTP {code}: {message}")
+        self.status_code = int(code) if code.isdigit() else 0
+
+
+def _raise_for_wire_status(envelope: Any) -> None:
+    status = envelope.get("status") if isinstance(envelope, dict) else None
+    if isinstance(status, dict) and str(status.get("code") or "200") != "200":
+        raise JudgeError(str(status.get("code")), str(status.get("message") or "judge error"))
 
 
 def _default_transport(method: str, path: str, body: dict[str, Any]) -> Any:
@@ -242,11 +254,65 @@ def _slice_snippet(chunk: CodeChunk, line_start: int, line_end: int | None) -> s
     return "\n".join(lines[lo:hi]) or None
 
 
-def _extract_findings_list(envelope: Any) -> list[dict[str, Any]]:
-    """Pull the findings array out of a validator response, or ``[]``."""
+# ponytail: fixed score→severity bands; make them per-judge if the labels the
+# judges emit turn out to disagree with these cut-offs.
+_SCORE_BANDS: tuple[tuple[float, Severity], ...] = (
+    (0.9, "critical"),
+    (0.7, "high"),
+    (0.4, "medium"),
+    (0.0, "low"),
+)
+_KNOWN_SEVERITIES = {"critical", "high", "medium", "low"}
+
+
+def _judge_severity(score: float, labels: Any) -> Severity:
+    """First metric label when it is a severity word, else a score band."""
+    if isinstance(labels, list) and labels and str(labels[0]).lower() in _KNOWN_SEVERITIES:
+        return str(labels[0]).lower()  # type: ignore[return-value]
+    return next(sev for cut, sev in _SCORE_BANDS if score >= cut)
+
+
+def _judge_findings(
+    data: dict[str, Any], batch: ChunkBatch, validator: str
+) -> list[dict[str, Any]]:
+    """One verdict for the batch → one finding dict per chunk when the score
+    reaches the judge's own threshold_score (min-severity filtering happens
+    in the CLI afterwards)."""
+    try:
+        score = float(data.get("actual_value") or 0.0)
+        threshold = float(data.get("threshold_score") or 0.0)
+    except (TypeError, ValueError):
+        return []
+    if score <= 0.0 or score < threshold:
+        return []
+    others = data.get("others") if isinstance(data.get("others"), dict) else {}
+    severity = _judge_severity(score, data.get("metric_labels"))
+    metric = str(data.get("metric_name") or validator)
+    return [
+        {
+            "file_path": chunk.file_path,
+            "line_start": chunk.start_line,
+            "line_end": chunk.end_line,
+            "vulnerability": metric,
+            "vulnerability_type": validator,
+            "severity": severity,
+            "reason": others.get("reasoning") or others.get("reason") or metric,
+            "score": score,
+            "threshold_score": threshold,
+        }
+        for chunk in batch.chunks
+    ]
+
+
+def _extract_findings_list(
+    envelope: Any, batch: ChunkBatch, validator: str
+) -> list[dict[str, Any]]:
+    """Findings from a judge verdict (wire envelope) or a ``findings`` list."""
     if not isinstance(envelope, dict):
         return []
     data = envelope.get("data")
+    if isinstance(data, dict) and "actual_value" in data:
+        return _judge_findings(data, batch, validator)
     for holder in (data if isinstance(data, dict) else {}, envelope):
         for key in ("findings", "issues", "results"):
             val = holder.get(key)
@@ -270,6 +336,7 @@ def dispatch(
     """
     stats = stats or DispatchStats()
     send: Transport = transport or _default_transport
+    validators = [normalize_validator(v) for v in validators]
     if not validators:
         return
 
@@ -282,6 +349,7 @@ def dispatch(
                 envelope = send(
                     "POST", _validator_path(validator), _build_payload(batch, validator)
                 )
+                _raise_for_wire_status(envelope)
             except Exception as exc:  # noqa: BLE001 — anything the HTTP layer throws
                 log.warning("validator %s errored: %s", validator, exc)
                 stats.batches_failed += 1
@@ -290,7 +358,7 @@ def dispatch(
                     return
                 continue
             stats.batches_ok += 1
-            for raw in _extract_findings_list(envelope):
+            for raw in _extract_findings_list(envelope, batch, validator):
                 finding = _finding_from_dict(raw, validator=validator, batch=batch)
                 if finding is None:
                     continue
