@@ -70,7 +70,7 @@ def cost_accumulator() -> Iterator[CostBucket]:
     Example::
 
         with cost_accumulator() as costs:
-            client.validate_sync(req, policies=[pid])
+            client.validate(SomeValidator(...))
             print(costs.total_cost)
     """
     bucket = CostBucket()

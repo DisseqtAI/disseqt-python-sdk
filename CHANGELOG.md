@@ -7,8 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Removed
+## [0.12.0] - 2026-09-29
 
+DeepTeam parity: the ``disseqt`` CLI (``redteam``, ``scan``, resource
+groups, ``login``/``logout``/``whoami``), ``RedTeamer`` / ``red_team()``
+extensions, and ``cost_accumulator``. Every CLI request body is built from
+the dataset-backend Go structs; the file/line is cited next to each builder.
+
+### Added
+- ``disseqt redteam`` verbs: ``attack --single-turn|--multi-turn``, ``run
+  <yaml>``, ``validate``, ``status``, ``cancel``, ``results``, ``report``,
+  ``session``, ``breach``, ``technique``/``prompt``/``generated-prompt`` CRUD,
+  ``analytics``, ``recommend``, ``parse-curl``, ``test-connection``,
+  ``vuln-test``, ``list-attacks``/``list-techniques``/``list-personas``.
+- ``disseqt scan``: code scanner over the realtime validators
+  (``DISSEQT_VALIDATORS_BASE_URL``); exits 1 when any batch fails or
+  findings remain, stops after the first 401/403.
+- Resource groups (``target``, ``pack``, ``pp-run``, ``session``, ``plan``,
+  ``plan-run`` with ``--wait --max-wait``, ...), ``disseqt login`` /
+  ``logout`` / ``whoami``.
+- ``Client()`` falls back to ``DISSEQT_PROJECT_ID`` / ``DISSEQT_API_KEY``
+  after ``~/.disseqt/config.json``; an insecure config file now raises
+  ``AuthConfigPermissionError`` instead of being silently ignored.
+- ``DisseqtAPIClient`` resource calls unwrap the backend
+  ``{"status": "success", "data": ...}`` envelope and return ``data``.
+
+### Changed
+- **Auth contract.** The CLI sends only ``X-API-Key`` + ``X-Project-Id``;
+  the gateway injects the internal identity headers. ``DISSEQT_USER_ID`` /
+  ``DISSEQT_USER_EMAIL`` are no longer read.
+- **One base URL.** ``DISSEQT_BASE_URL`` (default
+  ``https://api.disseqt.ai/dataset``) for every dataset route;
+  ``DISSEQT_VALIDATORS_BASE_URL`` (default
+  ``https://api.disseqt.ai/realtime-validations``) for ``scan``.
+- ``redteam attack --single-turn`` takes ``--pack``/``--validator``;
+  ``--multi-turn`` takes ``--prompt`` (1..10) and a template ``--target``.
+  ``recommend`` takes ``--app-name``/``--app-description`` (was
+  ``--context``); ``test-connection`` takes
+  ``--endpoint/--provider/--model/--api-key/--api-key-env`` (was
+  ``--target``); ``report --format csv`` takes ``--session <id>``.
+- CLI exit codes: 1 for HTTP/network failures, 2 for usage/config errors.
+- ``disseqt login`` verifies against the dataset gateway and no longer
+  stores ``base_url``; ``logout`` is local-only (``--local-only`` removed).
+
+### Removed
+- ``disseqt redteam eval-csv`` and ``eval-single-turn`` (the routes need a
+  browser session), the whole ``disseqt policy`` group, and the env vars
+  ``DISSEQT_REDTEAM_BASE_URL`` / ``DISSEQT_DATASET_BASE_URL`` /
+  ``DISSEQT_POLICY_MGMT_BASE_URL``.
 - **Server-side realtime-policy evaluation surface.** The
   ``Client.validate(request, policies=[...])`` shape (and its
   ``Client.validate_sync(..., raise_on_async=True)`` companion), the

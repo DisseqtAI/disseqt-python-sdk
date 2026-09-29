@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "disseqt-ai-sdk"
-version = "0.11.2"
+version = "0.12.0"
 description = "Python SDK for disseqt.ai"
 readme = "README.md"
 license = {text = "Proprietary"}
@@ -61,11 +61,13 @@ disseqt = "disseqt_sdk.cli:cli"
 # instrument_all() walks the canonical keys only, so each instrumentor
 # is applied exactly once regardless of which alias a caller uses.
 [project.optional-dependencies]
-# CLI extras: YAML config for `disseqt run`, rich progress bars for
-# long-running runs. The CLI degrades to JSON-only config without pyyaml.
+# CLI extras: YAML config for `disseqt redteam run`, rich tables for
+# `redteam analytics`. The CLI degrades to JSON-only config without pyyaml.
 cli = ["pyyaml>=6.0", "rich>=13.0"]
-# Dev extra mirrors [dependency-groups].dev so `pip install -e ".[dev]"`
-# works on pip <25.1 (which doesn't yet consume PEP 735 groups).
+# Dev extra for `pip install -e ".[dev]"` on pip <25.1 (no PEP 735 groups).
+# Test/lint tooling only; the provider SDKs used by the agentic tests live in
+# [dependency-groups].dev, so install those with uv (or the [instrumentation]
+# extra) when running tests/agentic.
 dev = [
     "pytest>=9.0.3",
     "pytest-cov>=7.0.0",

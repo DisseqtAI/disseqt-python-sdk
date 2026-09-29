@@ -1,4 +1,4 @@
-"""``red_team()`` one-liner and :class:`RedTeamer` class (Phase 5c).
+"""``red_team()`` one-liner and :class:`RedTeamer` class.
 
 Both defer the actual server calls to the disseqt-dataset-backend-service
 red-team endpoints (``/api/v1/testing/*`` and
@@ -35,9 +35,8 @@ class RedTeamer:
     """Stateful red-team session — reuses attack results across calls.
 
     Args:
-        client: An initialized :class:`~disseqt_sdk.Client` (needed for
-            SDK-authenticated hits on the red-team endpoints once
-            Phase 4a API-key auth ships).
+        client: An initialized :class:`~disseqt_sdk.Client` used for
+            SDK-authenticated hits on the red-team endpoints.
         reuse_previous_attacks: When True, calls to :meth:`red_team` skip
             attacks whose prompts were already run in this session.
     """
@@ -58,8 +57,8 @@ class RedTeamer:
         For each (vulnerability, attack) pair, generates a prompt via
         the attack's :meth:`~BaseAttack.enhance`, calls ``model_callback``,
         and records the (attempted) outcome. Server-side scoring of
-        materialized vs. mitigated is out of scope here — Phase 4d's
-        TraceScanner + the batch-automate endpoint own that path.
+        materialized vs. mitigated is out of scope here — the
+        batch-automate endpoint owns that path.
         """
         prompts_seen: set[str] = (
             {e["prompt"] for e in self._history} if self.reuse_previous_attacks else set()
