@@ -42,7 +42,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``contextvars.ContextVar``, which isolates correctly per ``asyncio``
   Task. Does **not** affect the documented ``with start_trace(...) as
   trace: with trace.start_span(...):`` pattern — only implicit-bootstrap
-  callers were ever at risk.
+  callers were ever at risk. Also fixes ``DisseqtSpan.__exit__()``
+  raising ``RuntimeError`` if invoked twice on the same span (an
+  independent-review catch on this same migration).
+
+  **Scope note:** this fixes the *cross-flow* leak (two different
+  logical flows corrupting each other's current trace/span). It does
+  not add context-restoration to the bare, non-``with`` span helpers
+  (``trace_llm_call``/``trace_agent_action``/``trace_tool_call``) —
+  ``get_current_span()`` still won't clear after a bare span returned by
+  those helpers ends, same as before this migration; only ``__exit__()``
+  clears it, matching the pre-existing, unchanged design.
 
 - **``CreateRunRequest.run_name`` now actually reaches the server.** Since
   this SDK's first release, ``to_payload()`` sent the run name under the

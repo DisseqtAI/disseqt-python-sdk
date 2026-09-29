@@ -69,16 +69,25 @@ def reset_current_trace(token: "contextvars.Token") -> None:
 
     Safe to call even if the matching set_current_trace() happened in a
     different context (e.g. a trace was constructed in one asyncio Task
-    and ended from another) -- falls back to clearing this context's
-    slot to None rather than raising, since there's no previous value to
-    restore.
+    and ended from another) -- never raises. In that cross-context case
+    there is no previous value available to restore, so this actively
+    CLEARS this context's slot to None (not a no-op) -- if the calling
+    context happened to have its own, unrelated trace genuinely current
+    at that moment, this will overwrite it. Narrow in practice (requires
+    constructing a trace in one context and ending it from an unrelated
+    one that also has its own active trace), but real.
     """
     try:
         _current_trace.reset(token)
-    except ValueError:
+    except (ValueError, RuntimeError):
+        # ValueError: token was set in a different context (see above).
+        # RuntimeError: token already used (e.g. a caller invoking the
+        # matching end()/__exit__() a second time) -- same
+        # never-crash-the-caller policy as the rest of this SDK.
         logger.debug(
-            "reset_current_trace: token was set in a different context; "
-            "clearing this context's current trace instead of restoring"
+            "reset_current_trace: could not restore via token (different "
+            "context, or already used); clearing this context's current "
+            "trace instead"
         )
         _current_trace.set(None)
 
@@ -113,15 +122,21 @@ def reset_current_span(token: "contextvars.Token") -> None:
     Restore the span that was current before the matching set_current_span()
     call, using the Token it returned.
 
-    Same different-context fallback as reset_current_trace(): clears
-    rather than raising if the token can't be reset here.
+    Same different-context fallback as reset_current_trace() -- and the
+    same caveat: the fallback actively clears this context's current
+    span rather than safely no-op'ing, so it can overwrite an unrelated
+    span genuinely current in this context. Never raises: also tolerates
+    an already-used token (a caller invoking the matching __exit__() a
+    second time) as a second layer of defense on top of DisseqtSpan.__exit__'s
+    own idempotency guard.
     """
     try:
         _current_span.reset(token)
-    except ValueError:
+    except (ValueError, RuntimeError):
         logger.debug(
-            "reset_current_span: token was set in a different context; "
-            "clearing this context's current span instead of restoring"
+            "reset_current_span: could not restore via token (different "
+            "context, or already used); clearing this context's current "
+            "span instead"
         )
         _current_span.set(None)
 

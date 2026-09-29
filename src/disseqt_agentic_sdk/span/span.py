@@ -119,6 +119,9 @@ class DisseqtSpan:
         # under nesting/concurrency -- see context.py). Deliberately NOT
         # restored in end() -- only __exit__ does; see end()'s own comment.
         self._span_context_token = set_current_span(self)
+        # Guards __exit__'s context-restore step against being run twice
+        # (its own idempotency check -- see __exit__).
+        self._context_restored = False
 
     def set_agent_info(
         self,
@@ -387,6 +390,19 @@ class DisseqtSpan:
         if exc_type:
             self.set_error(str(exc_val), error_type=exc_type.__name__)
         self.end()  # end() itself delivers to the buffer now -- see its own doc comment
+
+        # Idempotency guard: contextvars.Token.reset() raises RuntimeError
+        # ("has already been used once") on a second reset -- unlike
+        # end()'s own end_time_ns-based guard, __exit__ had no protection
+        # against being invoked twice on the same span (e.g. a caller
+        # reusing `with span:` a second time, or a defensive cleanup path
+        # calling it again). Observability code should never crash the
+        # caller (same policy as set_agent_info's contextlib.suppress
+        # elsewhere in this file) -- so this must be safe to call more
+        # than once, same as end() already is.
+        if self._context_restored:
+            return
+        self._context_restored = True
 
         # Restore whatever span was current before this one, via the
         # token captured in __init__, so sibling spans can find their
