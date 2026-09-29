@@ -1,77 +1,154 @@
 """
 Context management for active traces and spans.
 
-Uses thread-local storage to track the current trace and span,
-enabling automatic parent-child relationships.
+Uses contextvars.ContextVar (not threading.local) to track the current
+trace and span, enabling automatic parent-child relationships.
+
+Why not threading.local(): a single OS thread can interleave many
+asyncio Tasks (the event loop switches between them at every `await`).
+threading.local() has exactly one slot per THREAD, shared by every Task
+running on it -- so two concurrent async flows (e.g. two in-flight
+requests in one async web server) would stomp each other's "current
+trace"/"current span" pointer. contextvars.ContextVar gives each asyncio
+Task its own isolated copy (Tasks fork the Context they were created in
+and never see another Task's writes to it), which is exactly the
+isolation boundary needed here. A new OS thread still starts with an
+empty Context either way, so this is not a behavior change for
+plain multi-threaded (non-async) callers.
 """
 
-import threading
-from typing import TYPE_CHECKING, Optional
+import contextvars
+import logging
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     # Avoid circular imports
     from disseqt_agentic_sdk.span import DisseqtSpan
     from disseqt_agentic_sdk.trace import DisseqtTrace
 
-# Thread-local storage for context
-_context = threading.local()
+logger = logging.getLogger(__name__)
+
+_current_trace: "contextvars.ContextVar[DisseqtTrace | None]" = contextvars.ContextVar(
+    "disseqt_current_trace", default=None
+)
+_current_span: "contextvars.ContextVar[DisseqtSpan | None]" = contextvars.ContextVar(
+    "disseqt_current_span", default=None
+)
 
 
-def get_current_trace() -> Optional["DisseqtTrace"]:
+def get_current_trace() -> "DisseqtTrace | None":
     """
-    Get the current active trace from thread-local storage.
+    Get the current active trace from context.
 
     Returns:
         DisseqtTrace or None: The current trace, or None if no trace is active
     """
-    return getattr(_context, "trace", None)
+    return _current_trace.get()
 
 
-def set_current_trace(trace: Optional["DisseqtTrace"]) -> None:
+def set_current_trace(trace: "DisseqtTrace | None") -> "contextvars.Token":
     """
-    Set the current active trace in thread-local storage.
+    Set the current active trace in context.
 
     Args:
         trace: The trace to set as current, or None to clear
+
+    Returns:
+        A Token. Pass it to reset_current_trace() to restore whatever
+        trace was current immediately before this call, in this same
+        logical context (asyncio Task / thread) -- the caller doesn't
+        need to separately remember the previous value.
     """
-    if trace is None:
-        if hasattr(_context, "trace"):
-            delattr(_context, "trace")
-    else:
-        _context.trace = trace
+    return _current_trace.set(trace)
 
 
-def get_current_span() -> Optional["DisseqtSpan"]:
+def reset_current_trace(token: "contextvars.Token") -> None:
     """
-    Get the current active span from thread-local storage.
+    Restore the trace that was current before the matching set_current_trace()
+    call, using the Token it returned.
+
+    Safe to call even if the matching set_current_trace() happened in a
+    different context (e.g. a trace was constructed in one asyncio Task
+    and ended from another) -- never raises. In that cross-context case
+    there is no previous value available to restore, so this actively
+    CLEARS this context's slot to None (not a no-op) -- if the calling
+    context happened to have its own, unrelated trace genuinely current
+    at that moment, this will overwrite it. Narrow in practice (requires
+    constructing a trace in one context and ending it from an unrelated
+    one that also has its own active trace), but real.
+    """
+    try:
+        _current_trace.reset(token)
+    except (ValueError, RuntimeError):
+        # ValueError: token was set in a different context (see above).
+        # RuntimeError: token already used (e.g. a caller invoking the
+        # matching end()/__exit__() a second time) -- same
+        # never-crash-the-caller policy as the rest of this SDK.
+        logger.debug(
+            "reset_current_trace: could not restore via token (different "
+            "context, or already used); clearing this context's current "
+            "trace instead"
+        )
+        _current_trace.set(None)
+
+
+def get_current_span() -> "DisseqtSpan | None":
+    """
+    Get the current active span from context.
 
     Returns:
         DisseqtSpan or None: The current span, or None if no span is active
     """
-    return getattr(_context, "span", None)
+    return _current_span.get()
 
 
-def set_current_span(span: Optional["DisseqtSpan"]) -> None:
+def set_current_span(span: "DisseqtSpan | None") -> "contextvars.Token":
     """
-    Set the current active span in thread-local storage.
+    Set the current active span in context.
 
     Args:
         span: The span to set as current, or None to clear
+
+    Returns:
+        A Token. Pass it to reset_current_span() to restore whatever
+        span was current immediately before this call, in this same
+        logical context (asyncio Task / thread).
     """
-    if span is None:
-        if hasattr(_context, "span"):
-            delattr(_context, "span")
-    else:
-        _context.span = span
+    return _current_span.set(span)
+
+
+def reset_current_span(token: "contextvars.Token") -> None:
+    """
+    Restore the span that was current before the matching set_current_span()
+    call, using the Token it returned.
+
+    Same different-context fallback as reset_current_trace() -- and the
+    same caveat: the fallback actively clears this context's current
+    span rather than safely no-op'ing, so it can overwrite an unrelated
+    span genuinely current in this context. Never raises: also tolerates
+    an already-used token (a caller invoking the matching __exit__() a
+    second time) as a second layer of defense on top of DisseqtSpan.__exit__'s
+    own idempotency guard.
+    """
+    try:
+        _current_span.reset(token)
+    except (ValueError, RuntimeError):
+        logger.debug(
+            "reset_current_span: could not restore via token (different "
+            "context, or already used); clearing this context's current "
+            "span instead"
+        )
+        _current_span.set(None)
 
 
 def clear_context() -> None:
     """
-    Clear all context (both trace and span) from thread-local storage.
+    Clear all context (both trace and span) in the current context.
 
-    Useful for cleanup or when starting a new operation.
+    Useful for cleanup or when starting a new operation. Unlike
+    reset_current_trace()/reset_current_span(), this always clears to
+    None rather than restoring a previous value -- there's no token to
+    restore from.
     """
-    if hasattr(_context, "trace"):
-        delattr(_context, "trace")
-    if hasattr(_context, "span"):
-        delattr(_context, "span")
+    _current_trace.set(None)
+    _current_span.set(None)

@@ -8,6 +8,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Manual spans ended via a bare ``.end()`` call (not a ``with`` block) are
+  now actually delivered.** ``DisseqtSpan``'s buffer-push only ran inside
+  ``__exit__``, so the documented ``trace_llm_call``/manual-span usage
+  pattern silently sent zero spans whenever a caller called ``.end()``
+  directly instead of using ``with``. ``end()`` now pushes to the buffer
+  itself and is idempotent (safe to call more than once, e.g. via both a
+  direct call and ``__exit__`` — it will not double-send).
+- **Crossing a buffer's ``max_batch_size`` no longer blocks the caller's
+  own thread on a network call.** ``add_span``/``add_spans`` used to send
+  the batch inline, synchronously, on whatever thread called them — an
+  application's own request-handling thread could block on a trace
+  upload. They now wake a background thread instead and return
+  immediately, regardless of batch size.
+- **Two concurrent ``flush()`` calls (e.g. shutdown racing an in-flight
+  background flush) no longer send at the same time.** The fix above
+  stopped holding the buffer lock across the network call, which
+  incidentally opened a window for two flush() calls to POST
+  concurrently with no ordering guarantee between them. A dedicated
+  send lock now serializes flush() sends; add_span/add_spans still never
+  block on it.
+- **Two concurrent async flows using implicit trace bootstrap
+  (``agent_span()``, the ``@disseqt_trace`` decorator, auto-instrumentation)
+  could get silently merged onto one trace.** ``context.py``'s
+  current-trace/current-span state was ``threading.local()``-based — one
+  slot per OS *thread*, shared by every ``asyncio`` Task running on it.
+  If flow B's implicit ``get_current_trace()`` lookup ran while flow A's
+  trace was still "current" (both on the same thread, interleaved via
+  ``await``), B would nest its span under A's trace instead of getting
+  its own. Newly exposed (not caused) by the span-delivery fix above —
+  before it, the misattributed span was simply never sent, which is why
+  this stayed invisible. Fixed by migrating to
+  ``contextvars.ContextVar``, which isolates correctly per ``asyncio``
+  Task. Does **not** affect the documented ``with start_trace(...) as
+  trace: with trace.start_span(...):`` pattern — only implicit-bootstrap
+  callers were ever at risk. Also fixes ``DisseqtSpan.__exit__()``
+  raising ``RuntimeError`` if invoked twice on the same span (an
+  independent-review catch on this same migration).
+
+  **Scope note:** this fixes the *cross-flow* leak (two different
+  logical flows corrupting each other's current trace/span). It does
+  not add context-restoration to the bare, non-``with`` span helpers
+  (``trace_llm_call``/``trace_agent_action``/``trace_tool_call``) —
+  ``get_current_span()`` still won't clear after a bare span returned by
+  those helpers ends, same as before this migration; only ``__exit__()``
+  clears it, matching the pre-existing, unchanged design.
+
 - **``CreateRunRequest.run_name`` now actually reaches the server.** Since
   this SDK's first release, ``to_payload()`` sent the run name under the
   key ``"run_name"``, but the backend has only ever bound
