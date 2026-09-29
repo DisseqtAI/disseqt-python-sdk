@@ -28,15 +28,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   concurrently with no ordering guarantee between them. A dedicated
   send lock now serializes flush() sends; add_span/add_spans still never
   block on it.
-
-### Known limitation
-- A pre-existing race (not introduced by the fixes above, but newly
-  *exposed* now that spans are no longer silently dropped) can leak
-  current-trace/current-span state between two concurrent ``asyncio``
-  Tasks sharing one thread, via ``context.py``'s ``threading.local()``
-  storage. Tracked as a follow-up (see the ``xfail(strict=True)`` on
-  ``test_concurrent_agent_spans_are_isolated``); not fixed in this
-  release.
+- **Two concurrent async flows using implicit trace bootstrap
+  (``agent_span()``, the ``@disseqt_trace`` decorator, auto-instrumentation)
+  could get silently merged onto one trace.** ``context.py``'s
+  current-trace/current-span state was ``threading.local()``-based — one
+  slot per OS *thread*, shared by every ``asyncio`` Task running on it.
+  If flow B's implicit ``get_current_trace()`` lookup ran while flow A's
+  trace was still "current" (both on the same thread, interleaved via
+  ``await``), B would nest its span under A's trace instead of getting
+  its own. Newly exposed (not caused) by the span-delivery fix above —
+  before it, the misattributed span was simply never sent, which is why
+  this stayed invisible. Fixed by migrating to
+  ``contextvars.ContextVar``, which isolates correctly per ``asyncio``
+  Task. Does **not** affect the documented ``with start_trace(...) as
+  trace: with trace.start_span(...):`` pattern — only implicit-bootstrap
+  callers were ever at risk.
 
 - **``CreateRunRequest.run_name`` now actually reaches the server.** Since
   this SDK's first release, ``to_payload()`` sent the run name under the
