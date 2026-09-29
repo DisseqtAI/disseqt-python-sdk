@@ -51,6 +51,16 @@ class TraceBuffer:
         self.buffer: list[EnrichedSpan] = []
         self.last_flush_time = time.time()
         self.lock = Lock()
+        # Held for flush()'s entire body (extraction through the network
+        # call to failure-merge), so two flush() calls on different
+        # threads (e.g. stop()'s final flush racing the background
+        # thread's still-in-flight size-triggered one) never send
+        # concurrently -- restores the ordering guarantee that holding
+        # `self.lock` across the network call used to provide before that
+        # was split out so add_span/add_spans would stop blocking on I/O.
+        # add_span/add_spans never acquire this -- they must still never
+        # block behind an in-flight send.
+        self._send_lock = Lock()
         self._stop_flush_thread = False
         self._flush_thread: Thread | None = None
         # Set by add_span/add_spans when max_batch_size is crossed, to wake
@@ -110,71 +120,86 @@ class TraceBuffer:
         behind this call's I/O, whether this runs on the caller's own
         thread (an explicit flush()) or the background flush thread (a
         size- or time-triggered one).
+
+        Holds self._send_lock for the whole call, so two flush() calls
+        from different threads (e.g. stop()'s final flush racing the
+        background thread's still-in-flight size-triggered one) always
+        send one at a time, in the order they reached this method --
+        never two concurrent outbound POSTs with no ordering guarantee
+        between them. add_span/add_spans never touch self._send_lock.
         """
-        with self.lock:
-            if not self.buffer:
-                return
-            spans_to_send = self.buffer.copy()
-            span_count = len(spans_to_send)
-            self.last_flush_time = time.time()
-            # Optimistically drop the batch we're about to send now, while
-            # still holding the lock, so add_span callers during the
-            # unlocked network call below land after these spans in
-            # self.buffer, not interleaved with them.
-            self.buffer = self.buffer[span_count:]
+        with self._send_lock:
+            with self.lock:
+                if not self.buffer:
+                    return
+                spans_to_send = self.buffer.copy()
+                span_count = len(spans_to_send)
+                self.last_flush_time = time.time()
+                # Optimistically drop the batch we're about to send now,
+                # while still holding the lock, so add_span callers during
+                # the unlocked network call below land after these spans
+                # in self.buffer, not interleaved with them. (Always []:
+                # spans_to_send is a full copy of self.buffer taken under
+                # this same lock, and self._send_lock rules out another
+                # flush() call having appended to self.buffer meanwhile.)
+                self.buffer = []
 
-        logger.debug(
-            "Flushing spans from buffer",
-            extra={
-                "span_count": span_count,
-                "buffer_size_before": span_count,
-            },
-        )
-
-        # Retain only the spans that actually failed to send. Using
-        # send_spans_with_failures (not the bool-returning send_spans)
-        # gives per-group granularity: a multi-policy_id batch where
-        # one group succeeds and another fails now retains only the
-        # failing group's spans, so the succeeded group isn't
-        # re-POSTed on the next flush (round-2 P1 #1.2 — the earlier
-        # round-1 fix retained the whole batch, silently double-
-        # delivering the succeeded group).
-        # No lock held here -- this is the actual network call (P2).
-        failed_spans = self.transport.send_spans_with_failures(spans_to_send)
-        if not failed_spans:
-            return
-
-        with self.lock:
-            # Put the failed spans back at the front (they're older, keep
-            # relative retry order), ahead of anything add_span appended
-            # to self.buffer while the send above was in flight.
-            self.buffer = failed_spans + self.buffer
-
-            logger.warning(
-                "Buffer flush partially/fully failed — retaining failed spans for retry",
+            logger.debug(
+                "Flushing spans from buffer",
                 extra={
-                    "attempted": span_count,
-                    "failed": len(failed_spans),
-                    "succeeded": span_count - len(failed_spans),
-                    "buffer_size_after": len(self.buffer),
-                    "max_retained_spans": self.max_retained_spans,
+                    "span_count": span_count,
+                    "buffer_size_before": span_count,
                 },
             )
-            # Guard against runaway growth if the backend stays down or
-            # auth is permanently misconfigured. Drop the oldest first;
-            # the newer spans are more useful for live debugging.
-            if len(self.buffer) > self.max_retained_spans:
-                overflow = len(self.buffer) - self.max_retained_spans
-                dropped = self.buffer[:overflow]
-                self.buffer = self.buffer[overflow:]
-                logger.error(
-                    "Buffer exceeded max_retained_spans — dropping oldest",
+
+            # Retain only the spans that actually failed to send. Using
+            # send_spans_with_failures (not the bool-returning send_spans)
+            # gives per-group granularity: a multi-policy_id batch where
+            # one group succeeds and another fails now retains only the
+            # failing group's spans, so the succeeded group isn't
+            # re-POSTed on the next flush (round-2 P1 #1.2 — the earlier
+            # round-1 fix retained the whole batch, silently double-
+            # delivering the succeeded group).
+            # self.lock not held here -- this is the actual network call
+            # (P2) -- but self._send_lock still is, so no other flush()
+            # call can start sending until this one finishes.
+            failed_spans = self.transport.send_spans_with_failures(spans_to_send)
+            if not failed_spans:
+                return
+
+            with self.lock:
+                # Put the failed spans back at the front (they're older,
+                # keep relative retry order), ahead of anything add_span
+                # appended to self.buffer while the send above was in
+                # flight.
+                self.buffer = failed_spans + self.buffer
+
+                logger.warning(
+                    "Buffer flush partially/fully failed — retaining failed spans for retry",
                     extra={
-                        "dropped_count": len(dropped),
-                        "retained_count": len(self.buffer),
+                        "attempted": span_count,
+                        "failed": len(failed_spans),
+                        "succeeded": span_count - len(failed_spans),
+                        "buffer_size_after": len(self.buffer),
                         "max_retained_spans": self.max_retained_spans,
                     },
                 )
+                # Guard against runaway growth if the backend stays down
+                # or auth is permanently misconfigured. Drop the oldest
+                # first; the newer spans are more useful for live
+                # debugging.
+                if len(self.buffer) > self.max_retained_spans:
+                    overflow = len(self.buffer) - self.max_retained_spans
+                    dropped = self.buffer[:overflow]
+                    self.buffer = self.buffer[overflow:]
+                    logger.error(
+                        "Buffer exceeded max_retained_spans — dropping oldest",
+                        extra={
+                            "dropped_count": len(dropped),
+                            "retained_count": len(self.buffer),
+                            "max_retained_spans": self.max_retained_spans,
+                        },
+                    )
 
     def should_flush(self) -> bool:
         """
