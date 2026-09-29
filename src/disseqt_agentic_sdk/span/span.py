@@ -301,16 +301,39 @@ class DisseqtSpan:
 
     def end(self) -> "DisseqtSpan":
         """
-        End the span (set end time).
+        End the span (set end time) and, if a client is attached, deliver it
+        to the buffer for incremental sending.
+
+        Idempotent: calling this more than once (directly, then again via
+        __exit__, or via DisseqtTrace.end()'s cleanup sweep over any span
+        the caller didn't explicitly end) only delivers the span once.
 
         Returns:
             self for method chaining
         """
-        if self.end_time_ns is None:
-            self.end_time_ns = now_ns()
+        if self.end_time_ns is not None:
+            return self  # already ended (and, if applicable, already sent)
+        self.end_time_ns = now_ns()
 
         # Don't clear context here - __exit__ will handle parent restoration
         # This prevents race conditions where child spans can't find their parent
+
+        # Incremental sending: every public way to end a span (this method
+        # directly, `with span:` via __exit__, or DisseqtTrace.end()'s sweep
+        # over spans returned bare by trace_llm_call/trace_agent_action/
+        # trace_tool_call in api/helpers.py -- none of which use `with`)
+        # must reach the buffer exactly once. This used to live only in
+        # __exit__, so a span ended any other way was silently never sent.
+        if self._client is not None:
+            try:
+                enriched_span = self.to_enriched_span()
+                self._client.buffer.add_span(enriched_span)
+            except Exception as e:
+                # Log error but don't fail the span completion
+                import logging
+
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Failed to send span {self.span_id} to buffer: {e}")
 
         return self
 
@@ -362,19 +385,7 @@ class DisseqtSpan:
         """Context manager exit - automatically end span and restore parent context"""
         if exc_type:
             self.set_error(str(exc_val), error_type=exc_type.__name__)
-        self.end()
-
-        # Send span to buffer immediately if client is available (incremental sending)
-        if self._client is not None:
-            try:
-                enriched_span = self.to_enriched_span()
-                self._client.buffer.add_span(enriched_span)
-            except Exception as e:
-                # Log error but don't fail the span completion
-                import logging
-
-                logger = logging.getLogger(__name__)
-                logger.warning(f"Failed to send span {self.span_id} to buffer: {e}")
+        self.end()  # end() itself delivers to the buffer now -- see its own doc comment
 
         # Restore parent span to context so sibling spans can find their parent
         set_current_span(self._parent_span_context)
