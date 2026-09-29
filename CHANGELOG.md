@@ -8,6 +8,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Manual spans ended via a bare ``.end()`` call (not a ``with`` block) are
+  now actually delivered.** ``DisseqtSpan``'s buffer-push only ran inside
+  ``__exit__``, so the documented ``trace_llm_call``/manual-span usage
+  pattern silently sent zero spans whenever a caller called ``.end()``
+  directly instead of using ``with``. ``end()`` now pushes to the buffer
+  itself and is idempotent (safe to call more than once, e.g. via both a
+  direct call and ``__exit__`` — it will not double-send).
+- **Crossing a buffer's ``max_batch_size`` no longer blocks the caller's
+  own thread on a network call.** ``add_span``/``add_spans`` used to send
+  the batch inline, synchronously, on whatever thread called them — an
+  application's own request-handling thread could block on a trace
+  upload. They now wake a background thread instead and return
+  immediately, regardless of batch size.
+- **Two concurrent ``flush()`` calls (e.g. shutdown racing an in-flight
+  background flush) no longer send at the same time.** The fix above
+  stopped holding the buffer lock across the network call, which
+  incidentally opened a window for two flush() calls to POST
+  concurrently with no ordering guarantee between them. A dedicated
+  send lock now serializes flush() sends; add_span/add_spans still never
+  block on it.
+
+### Known limitation
+- A pre-existing race (not introduced by the fixes above, but newly
+  *exposed* now that spans are no longer silently dropped) can leak
+  current-trace/current-span state between two concurrent ``asyncio``
+  Tasks sharing one thread, via ``context.py``'s ``threading.local()``
+  storage. Tracked as a follow-up (see the ``xfail(strict=True)`` on
+  ``test_concurrent_agent_spans_are_isolated``); not fixed in this
+  release.
+
 - **``CreateRunRequest.run_name`` now actually reaches the server.** Since
   this SDK's first release, ``to_payload()`` sent the run name under the
   key ``"run_name"``, but the backend has only ever bound
