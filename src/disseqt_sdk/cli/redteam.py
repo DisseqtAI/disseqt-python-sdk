@@ -21,9 +21,15 @@ from typing import Any
 import click
 
 from . import _http
-from ._common import ENV_PROJECT_ID, echo_json
+from ._common import echo_json, require_credentials
 
 _TERMINAL_STATES = {"completed", "failed", "cancelled", "error", "done"}
+
+
+# api/jailbreak_agents_handlers.go ListJailbreakAgentsRequest: page_id (min 1) and
+# kebab-case page-size (5..100) are required. ponytail: first page of 100 only;
+# add --page when a project has more agents than that.
+_AGENTS_PAGE = {"page_id": 1, "page-size": 100}
 
 
 def _resolve_id(payload: Any, *keys: str) -> str | None:
@@ -154,7 +160,7 @@ def list_attacks(kind: str) -> None:
     if kind in ("multi", "all"):
         out["multi_turn"] = _http.request("GET", "/api/v1/mr-jailbreak/techniques")
     if kind in ("agents", "all"):
-        out["agents"] = _http.request("GET", "/api/v1/mr-jailbreak/agents")
+        out["agents"] = _http.request("GET", "/api/v1/mr-jailbreak/agents", params=_AGENTS_PAGE)
     echo_json(out)
 
 
@@ -216,7 +222,7 @@ def attack(
             "target_prompts": list(prompts),
             "app_integration_template": template,
             "jailbreak_config": {
-                "project_id": os.environ.get(ENV_PROJECT_ID, ""),
+                "project_id": require_credentials()[0],
                 "job_name_prefix": "cli",
                 "app_name": template["name"],
                 "app_description_short": app_description or f"{template['name']} (disseqt CLI)",
@@ -282,7 +288,7 @@ def session_get(session_id: str) -> None:
 def vuln_test(vuln_id: str, app_integration_id: str, organization_id: str | None) -> None:
     """POST /api/v1/vulnerabilities/{id}/test/poll (api/vulnerability_types.go
     VulnerabilityTestRequest; org/project ids travel as query params)."""
-    params = {"project_id": os.environ.get(ENV_PROJECT_ID, "")}
+    params = {"project_id": require_credentials()[0]}
     if organization_id:
         params["organization_id"] = organization_id
     echo_json(
@@ -466,7 +472,7 @@ def results(job_id: str) -> None:
 @click.option("--attack-type", help="Filter personas by attack_type field if present.")
 def list_personas(attack_type: str | None) -> None:
     """Enumerate persona agents (`/api/v1/mr-jailbreak/agents`)."""
-    payload = _http.request("GET", "/api/v1/mr-jailbreak/agents")
+    payload = _http.request("GET", "/api/v1/mr-jailbreak/agents", params=_AGENTS_PAGE)
     if attack_type and isinstance(payload, list):
         payload = [
             p for p in payload if isinstance(p, dict) and p.get("attack_type") == attack_type

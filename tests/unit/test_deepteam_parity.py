@@ -295,7 +295,7 @@ class TestCliRedteamExpansion:
 
     def test_redteam_list_personas_filters(self, monkeypatch, requests_mock):
         self._env(monkeypatch)
-        requests_mock.get(
+        m = requests_mock.get(
             f"{self.RT_BASE}/api/v1/mr-jailbreak/agents",
             json=[
                 {"name": "dan", "attack_type": "roleplay"},
@@ -306,6 +306,8 @@ class TestCliRedteamExpansion:
         assert r.exit_code == 0, r.output
         assert "dan" in r.output
         assert "coder" not in r.output
+        # ListJailbreakAgentsRequest requires page_id + kebab-case page-size (5..100).
+        assert m.last_request.qs == {"page_id": ["1"], "page-size": ["100"]}
 
     def test_redteam_list_techniques_multi_only(self, monkeypatch, requests_mock):
         self._env(monkeypatch)
@@ -543,10 +545,13 @@ class TestCliRedteamExpansion:
         self._env(monkeypatch)
         requests_mock.get(f"{self.RT_BASE}/api/v1/testing/attack-techniques", json=[{"id": "st1"}])
         requests_mock.get(f"{self.RT_BASE}/api/v1/mr-jailbreak/techniques", json=[{"id": "mt1"}])
-        requests_mock.get(f"{self.RT_BASE}/api/v1/mr-jailbreak/agents", json=[{"name": "a1"}])
+        agents = requests_mock.get(
+            f"{self.RT_BASE}/api/v1/mr-jailbreak/agents", json=[{"name": "a1"}]
+        )
         r = CliRunner().invoke(cli, ["redteam", "list-attacks"])
         assert r.exit_code == 0, r.output
         assert "st1" in r.output and "mt1" in r.output and "a1" in r.output
+        assert agents.last_request.qs == {"page_id": ["1"], "page-size": ["100"]}
 
 
 class TestCliRedteamBatch2:

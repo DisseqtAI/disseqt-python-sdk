@@ -4,7 +4,8 @@ Sends only the user's project key (``X-API-Key`` + ``X-Project-Id``); the
 gateway validates it and injects the internal identity headers itself.
 Unwraps the ``{"status": "success", "data": ...}`` envelope and raises
 :class:`APIError` (click exits 1) on HTTP / network / error-envelope
-failures. Missing credentials are a config error (``_fail`` → exit 2).
+failures. Credentials come from the env or ``disseqt login`` (see
+:func:`._common.require_credentials`); missing ones are a config error (exit 2).
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ import requests
 
 from .._version import sdk_identity_headers
 from ..api_client import HTTPError, unwrap_envelope
-from ._common import ENV_API_KEY, ENV_BASE_URL, ENV_PROJECT_ID, _fail
+from ._common import ENV_BASE_URL, require_credentials
 
 DEFAULT_BASE_URL = "https://api.disseqt.ai/dataset"
 DEFAULT_TIMEOUT_SECS = 60
@@ -39,10 +40,7 @@ def base_url(env_key: str = ENV_BASE_URL, default: str = DEFAULT_BASE_URL) -> st
 
 
 def _headers() -> dict[str, str]:
-    project_id = os.environ.get(ENV_PROJECT_ID)
-    api_key = os.environ.get(ENV_API_KEY)
-    if not project_id or not api_key:
-        _fail(f"set {ENV_PROJECT_ID} and {ENV_API_KEY} in the environment")
+    project_id, api_key = require_credentials()
     return {
         "X-API-Key": api_key,
         "X-Project-Id": project_id,

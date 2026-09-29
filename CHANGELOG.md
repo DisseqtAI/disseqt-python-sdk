@@ -47,6 +47,12 @@ the dataset-backend Go structs; the file/line is cited next to each builder.
   ``--endpoint/--provider/--model/--api-key/--api-key-env`` (was
   ``--target``); ``report --format csv`` takes ``--session <id>``.
 - CLI exit codes: 1 for HTTP/network failures, 2 for usage/config errors.
+- Every CLI verb resolves credentials as env → ``~/.disseqt/config.json``
+  (from ``disseqt login``); a config file wider than 0600 is refused with
+  the ``chmod 600`` hint instead of being silently ignored (``whoami`` too).
+- ``redteam list-attacks --kind agents`` / ``list-personas`` send the
+  pagination the agents route requires (``page_id=1&page-size=100``; first
+  100 agents).
 - ``disseqt login`` verifies against the dataset gateway and no longer
   stores ``base_url``; ``logout`` is local-only (``--local-only`` removed).
 - **Prompt packs use the service-key mount.** ``PacksResource`` /

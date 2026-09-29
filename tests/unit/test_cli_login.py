@@ -27,6 +27,8 @@ def _isolated_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.setattr(token_store, "CONFIG_DIR", config_dir)
     monkeypatch.setattr(token_store, "CONFIG_PATH", config_path)
     monkeypatch.delenv("DISSEQT_BASE_URL", raising=False)
+    monkeypatch.delenv("DISSEQT_PROJECT_ID", raising=False)
+    monkeypatch.delenv("DISSEQT_API_KEY", raising=False)
     return config_path
 
 
@@ -131,3 +133,50 @@ def test_client_explicit_kwargs_override_config() -> None:
     client = Client(project_id="explicit_p", api_key="explicit_k")
     assert client.api_key == "explicit_k"
     assert client.project_id == "explicit_p"
+
+
+def test_stored_login_is_used_by_other_verbs(runner: CliRunner, requests_mock) -> None:
+    """After `disseqt login`, verbs work with no DISSEQT_* env vars set."""
+    requests_mock.get(SMOKE_URL, json=[])
+    assert (
+        runner.invoke(cli, ["login", "--api-key", "k" * 12, "--project-id", "proj_1"]).exit_code
+        == 0
+    )
+    m = requests_mock.get(SMOKE_URL, json={"status": "success", "data": [{"key": "b64"}]})
+    result = runner.invoke(cli, ["redteam", "list-attacks", "--kind", "single"])
+    assert result.exit_code == 0, result.output
+    assert m.last_request.headers["X-API-Key"] == "k" * 12
+    assert m.last_request.headers["X-Project-Id"] == "proj_1"
+    assert "b64" in result.output
+
+
+def test_no_env_no_config_mentions_login(runner: CliRunner) -> None:
+    result = runner.invoke(cli, ["redteam", "list-attacks"])
+    assert result.exit_code == 2
+    assert "disseqt login" in result.output
+
+
+def test_whoami_reads_stored_config(runner: CliRunner) -> None:
+    token_store.save({"api_key": "sk_stored_abc", "project_id": "p_stored"})
+    result = runner.invoke(cli, ["whoami", "--json"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["project_id"] == "p_stored"
+    assert payload["source"] == "config"
+    assert "sk_stored_abc" not in result.output
+
+
+def test_whoami_refuses_insecure_config(runner: CliRunner, _isolated_config: Path) -> None:
+    token_store.save({"api_key": "sk", "project_id": "p"})
+    _isolated_config.chmod(0o644)
+    result = runner.invoke(cli, ["whoami"])
+    assert result.exit_code == 2
+    assert "permissions" in result.output and "chmod 600" in result.output
+
+
+def test_verbs_refuse_insecure_config(runner: CliRunner, _isolated_config: Path) -> None:
+    token_store.save({"api_key": "sk", "project_id": "p"})
+    _isolated_config.chmod(0o644)
+    result = runner.invoke(cli, ["redteam", "list-attacks"])
+    assert result.exit_code == 2
+    assert "permissions" in result.output

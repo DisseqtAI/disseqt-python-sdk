@@ -13,7 +13,6 @@ all on the dataset gateway (``DISSEQT_BASE_URL``).
 from __future__ import annotations
 
 import json
-import os
 import time
 from collections.abc import Callable
 from typing import Any
@@ -22,7 +21,7 @@ import click
 
 from ..api_client import DisseqtAPIClient
 from . import _http
-from ._common import ENV_API_KEY, ENV_PROJECT_ID, _fail, echo_json
+from ._common import _fail, echo_json, require_credentials
 
 
 def _json_option(
@@ -66,11 +65,8 @@ def _delete(path: str) -> None:
 
 
 def _api_client() -> DisseqtAPIClient:
-    """Construct a :class:`DisseqtAPIClient` from the CLI env vars."""
-    project_id = os.environ.get(ENV_PROJECT_ID)
-    api_key = os.environ.get(ENV_API_KEY)
-    if not project_id or not api_key:
-        _fail(f"set {ENV_PROJECT_ID} and {ENV_API_KEY} in the environment")
+    """Construct a :class:`DisseqtAPIClient` from the CLI credentials."""
+    project_id, api_key = require_credentials()
     return DisseqtAPIClient(project_id=project_id, api_key=api_key, base_url=_http.base_url())
 
 
