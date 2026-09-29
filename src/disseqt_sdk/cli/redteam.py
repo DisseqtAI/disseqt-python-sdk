@@ -23,7 +23,7 @@ import click
 from . import _http
 from ._common import echo_json, require_credentials
 
-_TERMINAL_STATES = {"completed", "failed", "cancelled", "error", "done"}
+_TERMINAL_STATES = {"completed", "completed_with_errors", "complete", "failed", "cancelled", "error", "done"}
 
 
 # api/jailbreak_agents_handlers.go ListJailbreakAgentsRequest: page_id (min 1) and
