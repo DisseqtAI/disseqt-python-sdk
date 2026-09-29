@@ -1,14 +1,11 @@
-"""``disseqt redteam`` command family (Phase 4b + follow-up expansion).
+"""``disseqt redteam`` command family.
 
-Targets the newer ``/api/v1/testing/*`` surface + the batch endpoint
-``/api/v1/mr-jailbreak/batch-automate``. All routes currently require
-session cookies (see plan §4a — API-key middleware still pending);
-setting ``DISSEQT_REDTEAM_BASE_URL`` lets you point at a mock during
-that gap.
-
-Follow-up adds ``run``, ``validate``, ``status``, ``cancel``, ``results``,
-``list-personas``, ``list-techniques`` and ``report`` so the whole
-red-team surface lives under one command group.
+Targets the dataset gateway's ``/api/v1/testing/*``, ``/api/v1/jailbreak/*``
+and ``/api/v1/mr-jailbreak/*`` routes with the user's project key (see
+:mod:`._http`). Request bodies mirror the Go structs in
+disseqt-dataset-backend-service (``api/testing_types.go``,
+``pkg/testing/pipeline.go``, ``api/mr_jailbreak_batch_automation.go``,
+``api/testing_bot_types.go``); the file/line is cited next to each builder.
 """
 
 from __future__ import annotations
@@ -24,7 +21,7 @@ from typing import Any
 import click
 
 from . import _http
-from ._common import echo_json
+from ._common import ENV_PROJECT_ID, echo_json
 
 _TERMINAL_STATES = {"completed", "failed", "cancelled", "error", "done"}
 
@@ -37,6 +34,77 @@ def _resolve_id(payload: Any, *keys: str) -> str | None:
         if val:
             return str(val)
     return None
+
+
+def _wait_terminal(path: str, poll_interval: float, max_wait: float) -> Any:
+    """Poll an unwrapped status payload until ``status`` is terminal."""
+    deadline = time.monotonic() + max_wait
+    while time.monotonic() < deadline:
+        payload = _http.request("GET", path)
+        state = str((payload or {}).get("status") or "") if isinstance(payload, dict) else ""
+        if state.lower() in _TERMINAL_STATES:
+            return payload
+        time.sleep(poll_interval)
+    raise click.ClickException(f"{path} did not finish within {max_wait}s")
+
+
+def _testing_plan(
+    pack_ids: list[str],
+    techniques: list[str],
+    validators: list[str],
+    *,
+    stop_on_first_breach: bool = False,
+    max_total_prompts: int = 0,
+) -> dict[str, Any]:
+    """pkg/testing/pipeline.go TestingPlanConfig. Only the ``prompt_pack`` source
+    and the ``single_turn_jailbreak`` strategy are registered server-side
+    (pkg/task/testing_run_task.go); the strategy reads ``config.techniques``."""
+    return {
+        "prompt_sources": [{"type": "prompt_pack", "config": {"pack_ids": pack_ids}}],
+        "attack_strategies": [
+            {
+                "type": "single_turn_jailbreak",
+                "techniques": techniques,
+                "config": {"techniques": techniques},
+            }
+        ],
+        "validators": validators,
+        "execution": {
+            "mode": "sequential",
+            "stop_on_first_breach": stop_on_first_breach,
+            "max_total_prompts": max_total_prompts,
+        },
+    }
+
+
+def _session_body(
+    name: str, app_name: str, app_type: str, target: dict[str, Any], plan: dict[str, Any]
+) -> dict[str, Any]:
+    """api/testing_types.go CreateTestingSessionRequest — all four keys required.
+    application_context needs name + type or the session stays ``draft``
+    (determineSessionStatus, api/testing_handlers.go)."""
+    return {
+        "name": name,
+        "application_context": {"name": app_name, "type": app_type},
+        "target_config": target,
+        "testing_plan": plan,
+    }
+
+
+def _run_body(run_name: str) -> dict[str, Any]:
+    """api/testing_types.go CreateTestingRunRequest."""
+    return {"run_name": run_name, "trigger_metadata": {"source": "disseqt-cli"}}
+
+
+def _create_session_and_run(session_body: dict[str, Any], run_name: str) -> tuple[Any, Any]:
+    session = _http.request("POST", "/api/v1/testing/sessions", json_body=session_body)
+    session_id = _resolve_id(session, "id", "session_id")
+    if not session_id:
+        raise click.ClickException(f"could not resolve session id from response: {session!r}")
+    run = _http.request(
+        "POST", f"/api/v1/testing/sessions/{session_id}/runs", json_body=_run_body(run_name)
+    )
+    return session, run
 
 
 def _interactive_menu() -> None:
@@ -93,17 +161,40 @@ def list_attacks(kind: str) -> None:
 @redteam.command("attack")
 @click.option("--single-turn", "single_turn", is_flag=True, help="Run a single-turn attack.")
 @click.option("--multi-turn", "multi_turn", is_flag=True, help="Run a multi-turn attack.")
-@click.option("--technique", required=True, help="Attack technique id or name.")
-@click.option("--target", required=True, help="Target model identifier / integration id.")
-@click.option("--prompt", help="Seed prompt (single-turn) or objective (multi-turn).")
-@click.option("--poll-interval", default=2.0, help="Seconds between run status polls.")
-@click.option("--max-wait", default=300.0, help="Max seconds to wait for the run to finish.")
+@click.option(
+    "--technique",
+    required=True,
+    help="Single-turn: attack technique key. Multi-turn: MR jailbreak technique UUID.",
+)
+@click.option(
+    "--target",
+    required=True,
+    help="Single-turn: application id (target_config.application_id). "
+    "Multi-turn: app-integration template as JSON literal or @file.",
+)
+@click.option("--pack", "pack_ids", multiple=True, help="Single-turn: prompt pack id (repeatable).")
+@click.option(
+    "--validator", "validators", multiple=True, help="Single-turn: validator name (repeatable)."
+)
+@click.option(
+    "--prompt", "prompts", multiple=True, help="Multi-turn: target prompt (repeatable, 1..10)."
+)
+@click.option("--app-description", default="", help="Multi-turn: short app description.")
+@click.option(
+    "--max-depth", default=5, type=click.IntRange(1, 10), help="Multi-turn: conversation depth."
+)
+@click.option("--poll-interval", default=2.0, help="Seconds between status polls.")
+@click.option("--max-wait", default=300.0, help="Max seconds to wait for completion.")
 def attack(
     single_turn: bool,
     multi_turn: bool,
     technique: str,
     target: str,
-    prompt: str | None,
+    pack_ids: tuple[str, ...],
+    validators: tuple[str, ...],
+    prompts: tuple[str, ...],
+    app_description: str,
+    max_depth: int,
     poll_interval: float,
     max_wait: float,
 ) -> None:
@@ -112,36 +203,54 @@ def attack(
         raise click.UsageError("pass exactly one of --single-turn or --multi-turn")
 
     if multi_turn:
-        body = {"technique": technique, "target": target, "objective": prompt or ""}
-        result = _http.request("POST", "/api/v1/mr-jailbreak/batch-automate", json_body=body)
-        echo_json(result)
+        if not 1 <= len(prompts) <= 10:
+            raise click.UsageError("--multi-turn needs 1..10 --prompt values")
+        template = _load_json_body(target)
+        missing = [
+            k for k in ("name", "base_url", "integration_type", "send_step") if k not in template
+        ]
+        if missing:
+            raise click.UsageError(f"--target template is missing {missing}")
+        # api/mr_jailbreak_batch_automation.go BatchAutomateJailbreakRequest / JailbreakJobConfig.
+        body = {
+            "target_prompts": list(prompts),
+            "app_integration_template": template,
+            "jailbreak_config": {
+                "project_id": os.environ.get(ENV_PROJECT_ID, ""),
+                "job_name_prefix": "cli",
+                "app_name": template["name"],
+                "app_description_short": app_description or f"{template['name']} (disseqt CLI)",
+                "app_type": "chatbot",
+                "max_depth": max_depth,
+                "orchestration_mode": "single",
+                "technique_id": technique,
+            },
+            "ecid_prefix": "cli",
+            "ecid_start_number": 1,
+        }
+        batch = _http.request("POST", "/api/v1/mr-jailbreak/batch-automate", json_body=body)
+        results = (batch or {}).get("results") if isinstance(batch, dict) else None
+        jobs = [
+            _wait_terminal(f"/api/v1/mr-jailbreak/jobs/{r['job_id']}", poll_interval, max_wait)
+            for r in (results or [])
+            if isinstance(r, dict) and r.get("job_id")
+        ]
+        echo_json({"batch": batch, "jobs": jobs})
         return
 
-    # single-turn: create session, create run, poll, fetch results
-    session = _http.request("POST", "/api/v1/testing/sessions", json_body={"target": target})
-    session_id = _resolve_id(session, "id", "session_id")
-    if not session_id:
-        raise click.ClickException(f"could not resolve session id from response: {session!r}")
-
-    run = _http.request(
-        "POST",
-        f"/api/v1/testing/sessions/{session_id}/runs",
-        json_body={"technique": technique, "prompt": prompt or ""},
+    if not pack_ids or not validators:
+        raise click.UsageError("--single-turn needs at least one --pack and one --validator")
+    name = f"cli-{technique}-{int(time.time())}"
+    plan = _testing_plan(list(pack_ids), [technique], list(validators))
+    _, run = _create_session_and_run(
+        _session_body(name, name, "web", {"application_id": target}, plan), name
     )
     run_id = _resolve_id(run, "id", "run_id")
     if not run_id:
         raise click.ClickException(f"could not resolve run id from response: {run!r}")
-
-    deadline = time.monotonic() + max_wait
-    while time.monotonic() < deadline:
-        status = _http.request("GET", f"/api/v1/testing/runs/{run_id}")
-        state = (status or {}).get("status") or (status or {}).get("state") or ""
-        if state.lower() in _TERMINAL_STATES:
-            results = _http.request("GET", f"/api/v1/testing/runs/{run_id}/results")
-            echo_json({"status": status, "results": results})
-            return
-        time.sleep(poll_interval)
-    raise click.ClickException(f"run {run_id} did not finish within {max_wait}s")
+    status = _wait_terminal(f"/api/v1/testing/runs/{run_id}", poll_interval, max_wait)
+    results = _http.request("GET", f"/api/v1/testing/runs/{run_id}/results")
+    echo_json({"status": status, "results": results})
 
 
 @redteam.group("session")
@@ -164,15 +273,24 @@ def session_get(session_id: str) -> None:
 
 @redteam.command("vuln-test")
 @click.option("--vulnerability", "vuln_id", required=True, help="Vulnerability id to test.")
-@click.option("--target", required=True, help="Target model identifier / integration id.")
-def vuln_test(vuln_id: str, target: str) -> None:
-    """Run the polling vuln-test endpoint for one vulnerability."""
-    body = {"target": target}
+@click.option("--target", "app_integration_id", required=True, help="App integration id.")
+@click.option(
+    "--organization-id",
+    envvar="DISSEQT_ORGANIZATION_ID",
+    help="Organization id (query param); omitted when unset.",
+)
+def vuln_test(vuln_id: str, app_integration_id: str, organization_id: str | None) -> None:
+    """POST /api/v1/vulnerabilities/{id}/test/poll (api/vulnerability_types.go
+    VulnerabilityTestRequest; org/project ids travel as query params)."""
+    params = {"project_id": os.environ.get(ENV_PROJECT_ID, "")}
+    if organization_id:
+        params["organization_id"] = organization_id
     echo_json(
         _http.request(
             "POST",
             f"/api/v1/vulnerabilities/{vuln_id}/test/poll",
-            json_body=body,
+            json_body={"app_integration_id": app_integration_id},
+            params=params,
         )
     )
 
@@ -214,24 +332,22 @@ def _expand_env(value: Any) -> Any:
 def _prompt_run_config() -> dict[str, Any]:
     """Interactive fallback when no config file is supplied and stdin is a TTY."""
     click.secho("Interactive red-team run", fg="cyan", bold=True)
-    target = click.prompt("Target model / integration id", type=str)
-    technique = click.prompt("Attack technique", type=str)
-    vulnerability = click.prompt("Vulnerability id (leave blank to skip)", default="", type=str)
     return {
-        "target": {"id": target},
-        "techniques": [technique],
-        "vulnerabilities": [vulnerability] if vulnerability else [],
+        "target": {"application_id": click.prompt("Application id", type=str)},
+        "prompt_packs": [click.prompt("Prompt pack id", type=str)],
+        "techniques": [click.prompt("Attack technique key", type=str)],
+        "validators": [click.prompt("Validator name", type=str)],
     }
 
 
 @redteam.command("run")
 @click.argument("config_path", required=False, type=click.Path(exists=True, dir_okay=False))
-@click.option("--json", "as_json", is_flag=True, help="Emit the raw job payload.")
+@click.option("--json", "as_json", is_flag=True, help="Emit the raw session + run payloads.")
 def run(config_path: str | None, as_json: bool) -> None:
-    """Run a full red-team suite from a YAML CONFIG_PATH.
+    """Create a testing session + run from a YAML CONFIG_PATH.
 
-    With no argument and an interactive TTY, prompts for target +
-    technique + vulnerability and submits a minimal suite.
+    See docs/redteam-example.yaml for the key → request-field mapping. With
+    no argument and an interactive TTY, prompts for the minimal set.
     """
     if config_path:
         cfg = _load_yaml(config_path)
@@ -241,36 +357,33 @@ def run(config_path: str | None, as_json: bool) -> None:
         raise click.UsageError("provide a config path or run in an interactive terminal")
 
     cfg = _expand_env(cfg)
-    target = cfg.get("target") or {}
-    session_payload = {
-        "target": target,
-        "vulnerabilities": cfg.get("vulnerabilities") or [],
-        "personas": cfg.get("personas") or [],
-        "concurrency": cfg.get("concurrency"),
-        "max_depth": cfg.get("max_depth"),
-        "stop_on_first_success": cfg.get("stop_on_first_success"),
-    }
-    session = _http.request("POST", "/api/v1/testing/sessions", json_body=session_payload)
-    session_id = _resolve_id(session, "id", "session_id")
-    if not session_id:
-        raise click.ClickException(f"could not resolve session id from response: {session!r}")
-
-    run_payload = {
-        "techniques": cfg.get("techniques") or [],
-        "personas": cfg.get("personas") or [],
-        "vulnerabilities": cfg.get("vulnerabilities") or [],
-    }
-    launched = _http.request(
-        "POST",
-        f"/api/v1/testing/sessions/{session_id}/runs",
-        json_body=run_payload,
+    name = str(cfg.get("name") or f"cli-run-{int(time.time())}")
+    app = cfg.get("application") or {}
+    plan = _testing_plan(
+        list(cfg.get("prompt_packs") or []),
+        list(cfg.get("techniques") or []),
+        list(cfg.get("validators") or []),
+        stop_on_first_breach=bool(cfg.get("stop_on_first_breach", False)),
+        max_total_prompts=int(cfg.get("max_total_prompts") or 0),
     )
+    session_body = _session_body(
+        name,
+        str(app.get("name") or name),
+        str(app.get("type") or "web"),
+        cfg.get("target") or {},
+        plan,
+    )
+    session, launched = _create_session_and_run(session_body, str(cfg.get("run_name") or name))
     if as_json:
         echo_json({"session": session, "run": launched})
         return
-    run_id = _resolve_id(launched, "id", "run_id") or "?"
-    click.secho(f"session={session_id} run={run_id}", fg="green")
-    click.echo(f"track: disseqt redteam status {run_id}")
+    click.secho(
+        f"session={_resolve_id(session, 'id', 'session_id')} run={_resolve_id(launched, 'id', 'run_id') or '?'}",
+        fg="green",
+    )
+    click.echo(
+        f"track: disseqt redteam status {_resolve_id(launched, 'id', 'run_id') or '<run id>'}"
+    )
 
 
 @redteam.command("validate")
@@ -424,27 +537,26 @@ def _stringify(v: Any) -> str:
 
 
 @redteam.command("report")
-@click.argument("job_id")
+@click.argument("run_id", required=False)
+@click.option("--session", "session_id", help="Session id — required with --format csv.")
 @click.option(
     "--format",
     "fmt",
     type=click.Choice(["json", "csv", "markdown"]),
     default="json",
-    help="Report format. CSV hits the server-side CSV endpoint; others format locally.",
+    help="csv = server-side per-session CSV; json/markdown = per-run results, formatted locally.",
 )
-def report(job_id: str, fmt: str) -> None:
-    """Export a report for a completed job."""
+def report(run_id: str | None, session_id: str | None, fmt: str) -> None:
+    """Export a report for a completed run (json/markdown) or session (csv)."""
     if fmt == "csv":
-        # Server-side CSV renderer if available.
-        payload = _http.request("GET", f"/api/v1/testing/sessions/{job_id}/report/csv")
-        if isinstance(payload, str):
-            click.echo(payload)
-            return
-        # Server returned JSON — flatten locally.
-        click.echo(_results_to_csv(payload))
+        if not session_id:
+            raise click.UsageError("--format csv needs --session <id>")
+        payload = _http.request("GET", f"/api/v1/testing/sessions/{session_id}/report/csv")
+        click.echo(payload if isinstance(payload, str) else _results_to_csv(payload))
         return
-
-    payload = _http.request("GET", f"/api/v1/testing/runs/{job_id}/results")
+    if not run_id:
+        raise click.UsageError("RUN_ID is required for --format json|markdown")
+    payload = _http.request("GET", f"/api/v1/testing/runs/{run_id}/results")
     if fmt == "json":
         echo_json(payload)
     else:  # markdown
@@ -452,11 +564,7 @@ def report(job_id: str, fmt: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Follow-up additions (batch 2):
-#   - analytics [--summary|--prompts-stats]
-#   - recommend {packs,attacks,validators}
-#   - parse-curl / test-connection
-#   - eval-csv / eval-single-turn
+# analytics / recommend / parse-curl / test-connection
 # ---------------------------------------------------------------------------
 
 _JAILBREAK_BASE = "/api/v1/jailbreak"
@@ -522,30 +630,41 @@ _RECOMMEND_PATHS = {
     "attacks": f"{_BOT_BASE}/recommend-attacks",
     "validators": f"{_BOT_BASE}/recommend-validators",
 }
+_MIN_APP_DESCRIPTION = 10  # api/testing_bot_types.go RecommendPacksRequest binding min=10
 
 
 @redteam.command("recommend")
 @click.argument("kind", type=click.Choice(sorted(_RECOMMEND_PATHS)))
-@click.option("--context", "context", help="Free-form context string.")
+@click.option("--app-name", help="Application name (packs only).")
+@click.option("--app-description", help="Application description, at least 10 characters.")
 @click.option(
     "--config",
     "config_path",
     type=click.Path(exists=True, dir_okay=False),
-    help="JSON body to send instead of --context.",
+    help="Full JSON body to send instead of the flags.",
 )
-def recommend(kind: str, context: str | None, config_path: str | None) -> None:
-    """Ask the bot to recommend packs / attacks / validators."""
-    if not context and not config_path:
-        raise click.UsageError("pass --context or --config FILE")
-    if context and config_path:
-        raise click.UsageError("pass exactly one of --context or --config")
+def recommend(
+    kind: str, app_name: str | None, app_description: str | None, config_path: str | None
+) -> None:
+    """Ask the bot to recommend packs / attacks / validators
+    (api/testing_bot_types.go Recommend*Request)."""
     if config_path:
+        if app_name or app_description:
+            raise click.UsageError("pass --config alone, or --app-name/--app-description")
         with open(config_path, encoding="utf-8") as f:
             body = json.load(f)
         if not isinstance(body, dict):
             raise click.ClickException(f"{config_path}: top-level must be a JSON object")
     else:
-        body = {"context": context}
+        if not app_description or len(app_description) < _MIN_APP_DESCRIPTION:
+            raise click.UsageError(
+                f"--app-description of at least {_MIN_APP_DESCRIPTION} characters is required"
+            )
+        body = {"app_description": app_description}
+        if kind == "packs":
+            if not app_name:
+                raise click.UsageError("recommend packs needs --app-name")
+            body["app_name"] = app_name
     echo_json(_http.request("POST", _RECOMMEND_PATHS[kind], json_body=body))
 
 
@@ -564,127 +683,33 @@ def parse_curl(source: str | None, from_stdin: bool) -> None:
     curl_text = curl_text.strip()
     if not curl_text:
         raise click.UsageError("empty curl input")
-    echo_json(_http.request("POST", f"{_BOT_BASE}/parse-curl", json_body={"curl": curl_text}))
+    # api/testing_bot_handlers.go parseCurlForBot binds {"curl_command"}.
+    echo_json(
+        _http.request("POST", f"{_BOT_BASE}/parse-curl", json_body={"curl_command": curl_text})
+    )
 
 
 @redteam.command("test-connection")
 @click.option(
-    "--target",
-    help="Target as provider/model (e.g., openai/gpt-4o). Falls back to active profile.",
+    "--endpoint", default="", help="Target endpoint URL (blank for name-routed providers)."
 )
-@click.option(
-    "--config",
-    "config_path",
-    type=click.Path(exists=True, dir_okay=False),
-    help="JSON body with a full target dict.",
-)
-def test_connection(target: str | None, config_path: str | None) -> None:
-    """Ping the target model through the bot connectivity endpoint."""
-    if config_path:
-        with open(config_path, encoding="utf-8") as f:
-            body = json.load(f)
-        if not isinstance(body, dict):
-            raise click.ClickException(f"{config_path}: top-level must be a JSON object")
-    elif target:
-        if "/" in target:
-            provider, _, model = target.partition("/")
-            body = {"target": {"provider": provider, "model": model}}
-        else:
-            body = {"target": {"id": target}}
-    else:
-        # ponytail: no profile store yet; fall back to env var if set,
-        # otherwise fail with a clear hint. Add a profile lookup when
-        # multi-target profiles ship.
-        env_target = os.environ.get("DISSEQT_REDTEAM_TARGET")
-        if not env_target:
-            raise click.UsageError(
-                "pass --target provider/model, --config FILE, " "or set DISSEQT_REDTEAM_TARGET"
-            )
-        provider, _, model = env_target.partition("/")
-        body = (
-            {"target": {"provider": provider, "model": model}}
-            if model
-            else {"target": {"id": env_target}}
-        )
+@click.option("--provider", default="", help="Provider name, e.g. openai.")
+@click.option("--model", default="", help="Model name, e.g. gpt-4o.")
+@click.option("--api-key", "api_key", help="Target credential (prefer --api-key-env).")
+@click.option("--api-key-env", "api_key_env", help="Env var holding the target credential.")
+def test_connection(
+    endpoint: str, provider: str, model: str, api_key: str | None, api_key_env: str | None
+) -> None:
+    """Ping a target through the bot connectivity endpoint
+    (api/testing_bot_handlers.go testTargetConnectionDirect: flat body, api_key required)."""
+    if api_key_env:
+        api_key = os.environ.get(api_key_env)
+        if not api_key:
+            raise click.UsageError(f"{api_key_env} is not set")
+    if not api_key:
+        raise click.UsageError("pass --api-key or --api-key-env")
+    body = {"endpoint": endpoint, "provider": provider, "model": model, "api_key": api_key}
     echo_json(_http.request("POST", f"{_BOT_BASE}/test-connection", json_body=body))
-
-
-@redteam.command("eval-csv")
-@click.argument("path", type=click.Path(exists=True, dir_okay=False))
-@click.option("--output", "output_path", type=click.Path(dir_okay=False), help="Save results JSON.")
-@click.option("--wait", "wait_for_completion", is_flag=True, help="Poll until the job finishes.")
-@click.option("--poll-interval", default=2.0, help="Seconds between poll requests.")
-@click.option("--max-wait", default=600.0, help="Max seconds to wait for completion.")
-def eval_csv(
-    path: str,
-    output_path: str | None,
-    wait_for_completion: bool,
-    poll_interval: float,
-    max_wait: float,
-) -> None:
-    """Upload a CSV to the bulk-evaluate endpoint and optionally poll for results."""
-    with open(path, "rb") as fh:
-        files = {"file": (os.path.basename(path), fh.read(), "text/csv")}
-    submit = _http.request(
-        "POST",
-        f"{_JAILBREAK_BASE}/evaluate-csv",
-        files=files,
-    )
-    job_id = _resolve_id(submit, "job_id", "id")
-
-    if not wait_for_completion:
-        echo_json(submit)
-        return
-    if not job_id:
-        raise click.ClickException(f"could not resolve job id from response: {submit!r}")
-
-    deadline = time.monotonic() + max_wait
-    last: Any = None
-    while time.monotonic() < deadline:
-        # Poll the CSV-eval job status via jailbreak_routes.go:55:
-        # GET /api/v1/jailbreak/evaluate-csv/:generation_job_id.
-        # /jobs/:id/process is a POST trigger, not a GET status probe.
-        last = _http.request("GET", f"{_JAILBREAK_BASE}/evaluate-csv/{job_id}")
-        state = (last or {}).get("status") or (last or {}).get("state") or ""
-        if str(state).lower() in _TERMINAL_STATES:
-            if output_path:
-                with open(output_path, "w", encoding="utf-8") as out:
-                    json.dump(last, out, indent=2, default=str)
-                click.secho(f"wrote {output_path}", fg="green")
-            else:
-                echo_json(last)
-            return
-        time.sleep(poll_interval)
-    raise click.ClickException(f"job {job_id} did not finish within {max_wait}s")
-
-
-@redteam.command("eval-single-turn")
-@click.option("--input", "input_text", required=True, help="Prompt to evaluate.")
-@click.option("--technique", help="Attack technique to attribute the prompt to.")
-@click.option("--vulnerability", help="Vulnerability to score against.")
-@click.option("--format", "fmt", type=click.Choice(["text", "json"]), default="text")
-def eval_single_turn(
-    input_text: str, technique: str | None, vulnerability: str | None, fmt: str
-) -> None:
-    """Evaluate one prompt against the single-turn jailbreak scorer."""
-    body: dict[str, Any] = {"input": input_text}
-    if technique:
-        body["technique"] = technique
-    if vulnerability:
-        body["vulnerability"] = vulnerability
-    payload = _http.request("POST", f"{_JAILBREAK_BASE}/single-turn-evaluate", json_body=body)
-    if fmt == "json":
-        echo_json(payload)
-        return
-    if isinstance(payload, dict):
-        verdict = payload.get("verdict") or payload.get("decision") or "?"
-        reason = payload.get("reason") or payload.get("rationale") or ""
-        color = "green" if str(verdict).upper() in ("PASS", "SAFE", "OK") else "red"
-        click.secho(f"verdict: {verdict}", fg=color, bold=True)
-        if reason:
-            click.echo(f"reason: {reason}")
-    else:
-        echo_json(payload)
 
 
 # ---------------------------------------------------------------------------

@@ -57,7 +57,6 @@ def request(
     *,
     json_body: dict[str, Any] | None = None,
     params: dict[str, Any] | None = None,
-    files: dict[str, Any] | None = None,
     extra_headers: dict[str, str] | None = None,
     base: str | None = None,
 ) -> Any:
@@ -66,9 +65,6 @@ def request(
     headers = _headers()
     if extra_headers:
         headers.update(extra_headers)
-    # requests picks the right Content-Type for multipart when `files` is set.
-    if files is not None:
-        headers.pop("Content-Type", None)
     try:
         resp = requests.request(
             method,
@@ -76,7 +72,6 @@ def request(
             headers=headers,
             json=json_body,
             params=params,
-            files=files,
             timeout=DEFAULT_TIMEOUT_SECS,
         )
     except requests.RequestException as exc:

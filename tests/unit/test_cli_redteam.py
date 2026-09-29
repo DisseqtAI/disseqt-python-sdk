@@ -191,34 +191,3 @@ def test_analytics_prompts_stats_hits_bare_route(runner: CliRunner, requests_moc
     assert requests_mock.last_request.url.endswith("/prompts-stats")
     assert not requests_mock.last_request.url.endswith("/analytics/prompts-stats")
     assert requests_mock.last_request.method == "GET"
-
-
-def test_eval_csv_polls_evaluate_csv_status_endpoint(
-    runner: CliRunner, requests_mock, tmp_path
-) -> None:
-    # G3 regression (Node parity): CSV-eval status is
-    # GET /api/v1/jailbreak/evaluate-csv/:job_id (jailbreak_routes.go:55).
-    # /jobs/:id/process is a POST trigger, not a GET status probe.
-    submit_body = {"job_id": "j1", "status": "queued"}
-    requests_mock.post(f"{_JAILBREAK}/evaluate-csv", json=submit_body)
-    requests_mock.get(
-        f"{_JAILBREAK}/evaluate-csv/j1",
-        json={"job_id": "j1", "status": "completed"},
-    )
-    csv_path = tmp_path / "prompts.csv"
-    csv_path.write_text("input\nhello\n")
-    result = runner.invoke(
-        cli,
-        [
-            "redteam",
-            "eval-csv",
-            str(csv_path),
-            "--wait",
-            "--poll-interval",
-            "0",
-        ],
-    )
-    assert result.exit_code == 0, result.output
-    poll_reqs = [r for r in requests_mock.request_history if r.url.endswith("/evaluate-csv/j1")]
-    assert poll_reqs, "poll never fired against /evaluate-csv/{job_id}"
-    assert poll_reqs[-1].method == "GET"

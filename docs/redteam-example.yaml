@@ -1,24 +1,31 @@
 # Sample config for `disseqt redteam run <this-file>`.
 # ${VAR} placeholders are expanded from the environment.
+#
+# Every key maps 1:1 onto the POST /api/v1/testing/sessions body
+# (disseqt-dataset-backend-service api/testing_types.go CreateTestingSessionRequest,
+# testing_plan per pkg/testing/pipeline.go TestingPlanConfig). The mapping is
+# noted next to each key; anything not listed here is not sent.
 
-target:
-  provider: openai
-  model: gpt-4
-  api_key: ${OPENAI_API_KEY}
+name: nightly-redteam              # -> name
+run_name: nightly                  # -> POST /sessions/{id}/runs run_name (defaults to name)
 
-techniques:
-  - crescendo
+application:                       # -> application_context {name, type}
+  name: support-bot
+  type: web
+
+target:                            # -> target_config (handler reads application_id [+ api_key])
+  application_id: ${DISSEQT_APPLICATION_ID}
+
+prompt_packs:                      # -> testing_plan.prompt_sources[0] {type: prompt_pack, config.pack_ids}
+  - 11111111-1111-4111-8111-111111111111
+
+techniques:                        # -> testing_plan.attack_strategies[0] {type: single_turn_jailbreak, techniques, config.techniques}
+  - base64_encoding
+  - role_play
+
+validators:                        # -> testing_plan.validators
+  - toxicity
   - prompt_injection
 
-personas:
-  - dan
-  - dev_mode_v2
-
-vulnerabilities:
-  - bias
-  - pii_leakage
-  - hallucination
-
-max_depth: 5
-stop_on_first_success: false
-concurrency: 3
+stop_on_first_breach: false        # -> testing_plan.execution.stop_on_first_breach
+max_total_prompts: 50              # -> testing_plan.execution.max_total_prompts (0 = unlimited)
