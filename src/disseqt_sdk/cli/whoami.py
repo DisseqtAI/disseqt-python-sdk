@@ -14,7 +14,6 @@ import click
 
 ENV_PROJECT_ID = "DISSEQT_PROJECT_ID"
 ENV_API_KEY = "DISSEQT_API_KEY"
-ENV_USER_EMAIL = "DISSEQT_USER_EMAIL"
 ENV_ORGANIZATION_ID = "DISSEQT_ORGANIZATION_ID"
 
 
@@ -46,7 +45,6 @@ def _collect() -> dict[str, str | None]:
     return {
         "project_id": project_id,
         "api_key": _mask_api_key(api_key),
-        "user_email": os.environ.get(ENV_USER_EMAIL),
         "organization_id": os.environ.get(ENV_ORGANIZATION_ID),
         "source": source,
     }

@@ -1,42 +1,30 @@
-"""``disseqt login`` / ``disseqt logout`` — pragmatic PAT-paste auth.
+"""``disseqt login`` / ``disseqt logout`` — pragmatic API-key-paste auth.
 
-No new backend endpoints. Login prompts for a PAT, smoke-tests it against
-the existing ``GET /api/v1/users/me/api-keys`` (cheapest authenticated
-call), and stores it in ``~/.disseqt/config.json`` (``0600``). Logout
-revokes the stored key server-side via ``DELETE /api/v1/users/me/api-keys/:id``
-and clears the local file.
+Login prompts for a project API key + project id, smoke-tests them with the
+cheapest authenticated dataset call (``GET /api/v1/testing/attack-techniques``)
+and stores them in ``~/.disseqt/config.json`` (``0600``). Logout only clears
+that file — the gateway exposes no key-revocation route for API-key callers.
 """
 
 from __future__ import annotations
 
 import json
 import sys
-from typing import Any
 
 import click
 import requests
 
 from .._version import sdk_identity_headers
-from ..auth import (
-    AuthConfigPermissionError,
-)
-from ..auth import (
-    clear as auth_clear,
-)
-from ..auth import (
-    load as auth_load,
-)
-from ..auth import (
-    save as auth_save,
-)
+from ..auth import AuthConfigPermissionError
+from ..auth import clear as auth_clear
+from ..auth import load as auth_load
+from ..auth import save as auth_save
+from . import _http
 from ._common import _fail
 
-# Auth-service endpoints live on the standard SDK gateway.
-_DEFAULT_BASE_URL = "https://api.disseqt.ai/realtime-validations"
-_API_KEYS_PATH = "/api/v1/users/me/api-keys"
+_SMOKE_PATH = "/api/v1/testing/attack-techniques"
 # Public key-management page — printed for humans, never fetched.
 _KEY_MGMT_URL = "https://app.disseqt.ai/settings/api-keys"
-_KEY_PREFIX_LEN = 12
 _TIMEOUT_S = 30
 
 
@@ -47,19 +35,13 @@ def _mask(api_key: str) -> str:
     return f"{api_key[:8]}..."
 
 
-def _auth_headers(api_key: str, project_id: str) -> dict[str, str]:
-    return {
+def _smoke_test(base_url: str, api_key: str, project_id: str) -> requests.Response:
+    headers = {
         "X-API-Key": api_key,
         "X-Project-Id": project_id,
-        "Content-Type": "application/json",
         **sdk_identity_headers(),
     }
-
-
-def _list_api_keys(base_url: str, api_key: str, project_id: str) -> requests.Response:
-    """Smoke-test creds via the cheapest authenticated call."""
-    url = f"{base_url.rstrip('/')}{_API_KEYS_PATH}"
-    return requests.get(url, headers=_auth_headers(api_key, project_id), timeout=_TIMEOUT_S)
+    return requests.get(f"{base_url.rstrip('/')}{_SMOKE_PATH}", headers=headers, timeout=_TIMEOUT_S)
 
 
 @click.command("login")
@@ -69,15 +51,14 @@ def _list_api_keys(base_url: str, api_key: str, project_id: str) -> requests.Res
 )
 @click.option(
     "--base-url",
-    default=_DEFAULT_BASE_URL,
-    show_default=True,
-    help="Gateway base URL (rarely needed).",
+    default=None,
+    help=f"Dataset gateway base URL (default: $DISSEQT_BASE_URL or {_http.DEFAULT_BASE_URL}).",
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit a machine-readable status envelope.")
 def login(
     api_key_flag: str | None,
     project_id_flag: str | None,
-    base_url: str,
+    base_url: str | None,
     as_json: bool,
 ) -> None:
     """Store a Disseqt API key + project id locally, after verifying them."""
@@ -100,18 +81,19 @@ def login(
     if not api_key or not project_id:
         _fail("api key and project id are both required")
 
+    base_url = base_url or _http.base_url()
     try:
-        resp = _list_api_keys(base_url, api_key, project_id)
+        resp = _smoke_test(base_url, api_key, project_id)
     except requests.RequestException as exc:
         # Never include the token in an error path.
-        _fail(f"could not reach {base_url}: {type(exc).__name__}")
+        _fail(f"could not reach {base_url}: {type(exc).__name__}", code=1)
 
-    if resp.status_code == 401 or resp.status_code == 403:
-        _fail("invalid API key or project ID", code=2)
+    if resp.status_code in (401, 403):
+        _fail("invalid API key or project ID")
     if not resp.ok:
-        _fail(f"unexpected HTTP {resp.status_code} verifying credentials", code=2)
+        _fail(f"unexpected HTTP {resp.status_code} verifying credentials", code=1)
 
-    auth_save({"api_key": api_key, "project_id": project_id, "base_url": base_url})
+    auth_save({"api_key": api_key, "project_id": project_id})
 
     if as_json:
         click.echo(
@@ -130,13 +112,8 @@ def login(
 
 
 @click.command("logout")
-@click.option(
-    "--local-only",
-    is_flag=True,
-    help="Only clear ~/.disseqt/config.json; do not revoke the key server-side.",
-)
-def logout(local_only: bool) -> None:
-    """Revoke the stored API key server-side, then clear the local config."""
+def logout() -> None:
+    """Clear the locally stored credentials (~/.disseqt/config.json)."""
     try:
         stored = auth_load()
     except AuthConfigPermissionError as exc:
@@ -144,73 +121,5 @@ def logout(local_only: bool) -> None:
     if stored is None:
         click.echo("not logged in; nothing to do")
         return
-
-    api_key = stored.get("api_key") or ""
-    project_id = stored.get("project_id") or ""
-    base_url = stored.get("base_url") or _DEFAULT_BASE_URL
-
-    if local_only or not (api_key and project_id):
-        auth_clear()
-        click.echo("local config cleared")
-        return
-
-    revoked = _try_revoke(base_url, api_key, project_id)
     auth_clear()
-    if revoked:
-        click.echo("logged out (server-side key revoked, local config cleared)")
-    else:
-        click.echo(
-            "local config cleared; server-side revocation failed "
-            "(key may already be revoked — verify in the dashboard)"
-        )
-
-
-def _try_revoke(base_url: str, api_key: str, project_id: str) -> bool:
-    """Best-effort revoke of the currently-stored key. Returns True on success.
-
-    Failures are non-fatal: we still clear the local config so the CLI
-    stops using the credential.
-    """
-    try:
-        resp = _list_api_keys(base_url, api_key, project_id)
-    except requests.RequestException:
-        return False
-    if not resp.ok:
-        return False
-    try:
-        payload = resp.json()
-    except ValueError:
-        return False
-    entries = _extract_key_list(payload)
-    prefix = api_key[:_KEY_PREFIX_LEN]
-    match_id = None
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        entry_prefix = str(entry.get("key_prefix") or entry.get("prefix") or "")
-        if entry_prefix and prefix.startswith(entry_prefix):
-            match_id = entry.get("id") or entry.get("api_key_id")
-            break
-    if not match_id:
-        return False
-    delete_url = f"{base_url.rstrip('/')}{_API_KEYS_PATH}/{match_id}"
-    try:
-        del_resp = requests.delete(
-            delete_url,
-            headers=_auth_headers(api_key, project_id),
-            timeout=_TIMEOUT_S,
-        )
-    except requests.RequestException:
-        return False
-    return del_resp.ok
-
-
-def _extract_key_list(payload: Any) -> list[Any]:
-    """The list endpoint may return ``[...]`` or ``{"data": [...]}``."""
-    if isinstance(payload, list):
-        return payload
-    if isinstance(payload, dict):
-        data = payload.get("data")
-        if isinstance(data, list):
-            return data
-    return []
+    click.echo("local config cleared")

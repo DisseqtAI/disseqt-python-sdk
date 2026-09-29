@@ -347,12 +347,10 @@ def test_pp_run_add_to_pack(runner: CliRunner, requests_mock) -> None:
 def test_whoami_text_output(runner: CliRunner, monkeypatch) -> None:
     monkeypatch.setenv("DISSEQT_PROJECT_ID", "proj_123")
     monkeypatch.setenv("DISSEQT_API_KEY", "sk_test_abcdef")
-    monkeypatch.setenv("DISSEQT_USER_EMAIL", "u@example.com")
     monkeypatch.delenv("DISSEQT_ORGANIZATION_ID", raising=False)
     result = runner.invoke(cli, ["whoami"])
     assert result.exit_code == 0, result.output
     assert "proj_123" in result.output
-    assert "u@example.com" in result.output
     # API key is masked — never the full value.
     assert "sk_test_abcdef" not in result.output
     assert "sk_...def" in result.output
@@ -362,14 +360,13 @@ def test_whoami_text_output(runner: CliRunner, monkeypatch) -> None:
 def test_whoami_json_output(runner: CliRunner, monkeypatch) -> None:
     monkeypatch.setenv("DISSEQT_PROJECT_ID", "proj_x")
     monkeypatch.setenv("DISSEQT_API_KEY", "sk_test_xyz")
-    monkeypatch.delenv("DISSEQT_USER_EMAIL", raising=False)
     monkeypatch.delenv("DISSEQT_ORGANIZATION_ID", raising=False)
     result = runner.invoke(cli, ["whoami", "--json"])
     assert result.exit_code == 0
     payload = json.loads(result.output)
     assert payload["project_id"] == "proj_x"
     assert payload["api_key"].startswith("sk_") and "..." in payload["api_key"]
-    assert payload["user_email"] is None
+    assert payload["organization_id"] is None
 
 
 # ---------------------------------------------------------------------------
