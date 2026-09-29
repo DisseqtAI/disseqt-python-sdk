@@ -3,7 +3,7 @@ Buffer for batching spans before sending to backend.
 """
 
 import time
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 
 from disseqt_agentic_sdk.models.span import EnrichedSpan
 from disseqt_agentic_sdk.transport import HTTPTransport
@@ -53,6 +53,11 @@ class TraceBuffer:
         self.lock = Lock()
         self._stop_flush_thread = False
         self._flush_thread: Thread | None = None
+        # Set by add_span/add_spans when max_batch_size is crossed, to wake
+        # the background flush thread immediately instead of doing the
+        # network send inline on the caller's own thread. See
+        # _start_flush_thread's flush_worker.
+        self._flush_requested = Event()
 
         # Start background thread for time-based flushing
         self._start_flush_thread()
@@ -61,47 +66,62 @@ class TraceBuffer:
         """
         Add a span to the buffer.
 
-        Automatically flushes if batch size is reached.
+        If this crosses max_batch_size, wakes the background flush thread
+        to send the batch -- this call itself never does network I/O and
+        never blocks on one, regardless of batch size.
 
         Args:
             span: EnrichedSpan to add
         """
         with self.lock:
             self.buffer.append(span)
+            should_flush_now = len(self.buffer) >= self.max_batch_size
 
-            # Flush if batch size reached
-            if len(self.buffer) >= self.max_batch_size:
-                self._flush_locked()
+        if should_flush_now:
+            self._flush_requested.set()
 
     def add_spans(self, spans: list[EnrichedSpan]) -> None:
         """
         Add multiple spans to the buffer.
+
+        If this crosses max_batch_size, wakes the background flush thread
+        to send the batch -- this call itself never does network I/O and
+        never blocks on one, regardless of batch size.
 
         Args:
             spans: List of EnrichedSpan objects
         """
         with self.lock:
             self.buffer.extend(spans)
+            should_flush_now = len(self.buffer) >= self.max_batch_size
 
-            # Flush if batch size reached
-            if len(self.buffer) >= self.max_batch_size:
-                self._flush_locked()
+        if should_flush_now:
+            self._flush_requested.set()
 
     def flush(self) -> None:
         """
         Flush all buffered spans to backend.
+
+        Synchronous: does not return until the send (and any
+        retry/retention bookkeeping) completes. Does NOT hold self.lock
+        during the network call itself -- only while extracting the batch
+        beforehand and merging back whatever failed afterwards -- so
+        add_span/add_spans callers on other threads are never blocked
+        behind this call's I/O, whether this runs on the caller's own
+        thread (an explicit flush()) or the background flush thread (a
+        size- or time-triggered one).
         """
         with self.lock:
-            self._flush_locked()
-
-    def _flush_locked(self) -> None:
-        """Internal flush method (assumes lock is held)"""
-        if not self.buffer:
-            return
-
-        spans_to_send = self.buffer.copy()
-        span_count = len(spans_to_send)
-        self.last_flush_time = time.time()
+            if not self.buffer:
+                return
+            spans_to_send = self.buffer.copy()
+            span_count = len(spans_to_send)
+            self.last_flush_time = time.time()
+            # Optimistically drop the batch we're about to send now, while
+            # still holding the lock, so add_span callers during the
+            # unlocked network call below land after these spans in
+            # self.buffer, not interleaved with them.
+            self.buffer = self.buffer[span_count:]
 
         logger.debug(
             "Flushing spans from buffer",
@@ -119,16 +139,17 @@ class TraceBuffer:
         # re-POSTed on the next flush (round-2 P1 #1.2 — the earlier
         # round-1 fix retained the whole batch, silently double-
         # delivering the succeeded group).
+        # No lock held here -- this is the actual network call (P2).
         failed_spans = self.transport.send_spans_with_failures(spans_to_send)
-        # Rebuild the buffer: drop the sent-and-succeeded prefix from
-        # the front, put the failed spans back (they retain their
-        # relative order for stable retry), then append anything that
-        # was added after the flush started (nothing today under the
-        # lock, but the semantic stays correct if that changes).
-        tail = self.buffer[span_count:]
-        self.buffer = failed_spans + tail
+        if not failed_spans:
+            return
 
-        if failed_spans:
+        with self.lock:
+            # Put the failed spans back at the front (they're older, keep
+            # relative retry order), ahead of anything add_span appended
+            # to self.buffer while the send above was in flight.
+            self.buffer = failed_spans + self.buffer
+
             logger.warning(
                 "Buffer flush partially/fully failed — retaining failed spans for retry",
                 extra={
@@ -168,12 +189,27 @@ class TraceBuffer:
             )
 
     def _start_flush_thread(self) -> None:
-        """Start background thread for time-based flushing"""
+        """Start background thread for time-based AND size-triggered flushing"""
 
         def flush_worker():
             while not self._stop_flush_thread:
-                time.sleep(self.flush_interval)
-                if self.should_flush():
+                # Waits for either: max_batch_size crossed (add_span/
+                # add_spans sets _flush_requested -- wakes immediately,
+                # doesn't wait out the rest of the interval) or a plain
+                # timeout (the existing time-based check below).
+                woken_by_size_trigger = self._flush_requested.wait(timeout=self.flush_interval)
+                if self._stop_flush_thread:
+                    break
+                if woken_by_size_trigger:
+                    self._flush_requested.clear()
+                    logger.debug("Size-triggered flush running on background thread")
+                    try:
+                        self.flush()
+                    except Exception:
+                        logger.exception(
+                            "Size-triggered flush failed unexpectedly — flush thread continuing"
+                        )
+                elif self.should_flush():
                     logger.debug("Time-based flush triggered")
                     try:
                         self.flush()
@@ -206,6 +242,7 @@ class TraceBuffer:
         Should be called during shutdown to ensure all spans are sent.
         """
         self._stop_flush_thread = True
+        self._flush_requested.set()  # wake flush_worker immediately, don't wait out flush_interval
         if self._flush_thread and self._flush_thread.is_alive():
             self._flush_thread.join(timeout=2.0)
         # Final flush of any remaining spans
