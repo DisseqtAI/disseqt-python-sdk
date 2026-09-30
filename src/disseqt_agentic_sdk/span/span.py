@@ -124,6 +124,9 @@ class DisseqtSpan:
         # Guards __exit__'s context-restore step against being run twice
         # (its own idempotency check -- see __exit__).
         self._context_restored = False
+        # True once this span has been handed to the buffer by end(); lets
+        # DisseqtAgenticClient.send_trace skip it instead of delivering twice.
+        self._delivered = False
 
     def set_agent_info(
         self,
@@ -334,6 +337,7 @@ class DisseqtSpan:
             try:
                 enriched_span = self.to_enriched_span()
                 self._client.buffer.add_span(enriched_span)
+                self._delivered = True
             except Exception as e:
                 # Log error but don't fail the span completion
                 logger.warning(

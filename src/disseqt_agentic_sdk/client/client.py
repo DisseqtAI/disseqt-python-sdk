@@ -277,8 +277,11 @@ class DisseqtAgenticClient:
         Args:
             trace: DisseqtTrace instance
         """
-        # Convert trace spans to EnrichedSpan models
-        enriched_spans = trace.to_enriched_spans()
+        # Convert trace spans to EnrichedSpan models. Spans already delivered
+        # incrementally by DisseqtSpan.end() are skipped so nothing is sent twice.
+        enriched_spans = trace.to_enriched_spans(undelivered_only=True)
+        if not enriched_spans:
+            return
 
         logger.debug(
             "Sending trace to buffer",

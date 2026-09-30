@@ -54,6 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   those helpers ends, same as before this migration; only ``__exit__()``
   clears it, matching the pre-existing, unchanged design.
 
+- **``send_trace()`` no longer re-sends spans that ``end()`` already delivered.** A caller using ``with`` blocks (incremental sending) *and* ``send_trace`` used to deliver every span twice with the same ``spanId``. Spans now carry a delivered flag and ``send_trace`` skips them.
 - **SDK audit fixes (agentic + validation SDKs).**
   - ``uninstrument()`` only drops its client reference when every patch was
     actually unwound (a wrapper buried under another library's keeps working),

@@ -529,3 +529,43 @@ class TestRedaction:
             disseqt_logging.disable()
         line = json.loads(buf.getvalue().strip().splitlines()[-1])
         assert "bob@example.com" in line["exception"]
+
+
+class TestSendTraceDoesNotDuplicateDeliveredSpans:
+    """M14: send_trace must skip spans end() already delivered incrementally."""
+
+    def _client(self):
+        from unittest.mock import MagicMock
+
+        from disseqt_agentic_sdk import DisseqtAgenticClient
+
+        client = DisseqtAgenticClient.__new__(DisseqtAgenticClient)
+        client.buffer = MagicMock()
+        return client
+
+    def test_delivered_spans_are_skipped(self):
+
+        from disseqt_agentic_sdk.enums import SpanKind
+        from disseqt_agentic_sdk.trace import DisseqtTrace
+
+        client = self._client()
+        trace = DisseqtTrace(name="t", project_id="p", client=client)
+        with trace.start_span("delivered", SpanKind.AGENT_EXEC):
+            pass
+        assert client.buffer.add_span.call_count == 1
+        pending = trace.start_span("pending", SpanKind.AGENT_EXEC)
+        pending._client = None  # never ended/delivered incrementally
+        client.send_trace(trace)
+        sent = [s.name for c in client.buffer.add_spans.call_args_list for s in c.args[0]]
+        assert sent == ["pending"]
+
+    def test_nothing_sent_when_all_delivered(self):
+        from disseqt_agentic_sdk.enums import SpanKind
+        from disseqt_agentic_sdk.trace import DisseqtTrace
+
+        client = self._client()
+        trace = DisseqtTrace(name="t", project_id="p", client=client)
+        with trace.start_span("only", SpanKind.AGENT_EXEC):
+            pass
+        client.send_trace(trace)
+        client.buffer.add_spans.assert_not_called()
