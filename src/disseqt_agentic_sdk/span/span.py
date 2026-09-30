@@ -4,7 +4,6 @@ DisseqtSpan - Span class for creating and managing spans.
 Handles span lifecycle, attributes, and automatic parent-child relationships.
 """
 
-import json
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -17,7 +16,10 @@ from disseqt_agentic_sdk.models.span import EnrichedSpan
 from disseqt_agentic_sdk.semantics import (
     AgenticAttributes,
 )
-from disseqt_agentic_sdk.utils import calculate_duration_ns, generate_span_id, now_ns
+from disseqt_agentic_sdk.utils import calculate_duration_ns, generate_span_id, get_logger, now_ns
+from disseqt_agentic_sdk.utils.serialization import dumps_attributes
+
+logger = get_logger(__name__)
 
 
 class DisseqtSpan:
@@ -334,10 +336,10 @@ class DisseqtSpan:
                 self._client.buffer.add_span(enriched_span)
             except Exception as e:
                 # Log error but don't fail the span completion
-                import logging
-
-                logger = logging.getLogger(__name__)
-                logger.warning(f"Failed to send span {self.span_id} to buffer: {e}")
+                logger.warning(
+                    "Failed to send span to buffer",
+                    extra={"span_id": self.span_id, "error": str(e)},
+                )
 
         return self
 
@@ -353,7 +355,7 @@ class DisseqtSpan:
         duration_ns = calculate_duration_ns(self.start_time_ns, end_time)
 
         # Serialize attributes to JSON
-        attributes_json = json.dumps(self.attributes) if self.attributes else "{}"
+        attributes_json = dumps_attributes(self.attributes) if self.attributes else "{}"
 
         # Create EnrichedSpan
         return EnrichedSpan(

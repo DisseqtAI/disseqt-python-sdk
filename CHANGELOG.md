@@ -54,6 +54,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   those helpers ends, same as before this migration; only ``__exit__()``
   clears it, matching the pre-existing, unchanged design.
 
+- **SDK audit fixes (agentic + validation SDKs).**
+  - ``uninstrument()`` only drops its client reference when every patch was
+    actually unwound (a wrapper buried under another library's keeps working),
+    and all provider wrappers now fail soft: if the span cannot be opened they
+    call the provider directly instead of raising into the user's LLM call.
+  - Span attributes that are not JSON-serialisable (datetime, set, bytes,
+    circular refs, ...) no longer abort span delivery; the offending attribute
+    is coerced or dropped, never the span.
+  - Trace POSTs are now actually retried on 429/5xx (``POST`` was excluded
+    from urllib3's retry allow-list) and honour ``Retry-After``. Spans the
+    server rejects permanently (4xx other than 408/429) are dropped with one
+    log line instead of being re-POSTed forever. Spans are grouped per POST by
+    full resource identity (project, service name/version, environment,
+    policy) rather than by policy alone.
+  - ``set_capture_content(True)`` can no longer re-enable content capture
+    process-wide after any caller turned it off; it only applies to the calling
+    context.
+  - ``DisseqtAgenticClient.shutdown()`` closes the HTTP session, unregisters its
+    ``atexit`` hook and stops the flush thread promptly.
+  - ``disseqt_sdk.Client`` rejects empty / header-unsafe ``api_key`` and
+    ``project_id`` at construction, wraps ``UnicodeEncodeError`` as
+    ``HTTPError(status_code=0)``, and raises ``ResponseDecodeError`` (an
+    ``HTTPError`` *and* ``ValueError``) for non-object JSON; response bodies are
+    no longer echoed into error messages (a digest is used instead).
+  - ``validate(..., policies=[...])``: when one policy fails after others
+    succeeded, earlier envelopes are kept and the failed policy appears as an
+    error entry (``{"policy_id", "status": "error", "sdk_error": True,
+    "error": {...}}``). ``is_blocking`` / ``any_blocking`` treat it as BLOCK
+    (fail closed); new ``is_error()`` helper. If every policy fails the original
+    exception is still raised. **Behaviour change** for callers that relied on an
+    exception for a partial failure.
+  - Auth-failure stderr banner is throttled (first failure, then exponentially
+    growing intervals, reset on success). Min-version gating uses
+    ``packaging.version`` when available. ``EnrichedSpan`` round-trips
+    ``realtime_policy_id``. Span logging uses the package logger. Log redaction
+    now recurses into dict/list/tuple/set fields and redacts exception text.
 - **``CreateRunRequest.run_name`` now actually reaches the server.** Since
   this SDK's first release, ``to_payload()`` sent the run name under the
   key ``"run_name"``, but the backend has only ever bound

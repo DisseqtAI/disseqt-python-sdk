@@ -36,11 +36,11 @@ from disseqt_agentic_sdk.instrumentation._tool_result import (
     _notify_planned_tool_calls,
 )
 from disseqt_agentic_sdk.instrumentation._utils import (
-    open_llm_span,
     safe_call,
     safe_set,
     set_first_tool_call_attrs,
     set_messages_if_capturing,
+    try_open_llm_span,
 )
 from disseqt_agentic_sdk.instrumentation.base import DisseqtInstrumentor
 from disseqt_agentic_sdk.semantics import (
@@ -441,7 +441,9 @@ def _synthesize_part_from_slot(slot: dict[str, Any]) -> Any | None:
 # ---------------------------------------------------------------------
 def _sync_generate(instrumentor: GeminiInstrumentor) -> Callable[..., Any]:
     def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
-        scope = open_llm_span(instrumentor.client, "gemini.generate_content", SpanKind.MODEL_EXEC)
+        scope = try_open_llm_span(instrumentor, "gemini.generate_content")
+        if scope is None:
+            return wrapped(*args, **kwargs)
         span = scope.span
         safe_call(_set_request_attrs, span, kwargs)
         try:
@@ -460,7 +462,9 @@ def _async_generate(instrumentor: GeminiInstrumentor) -> Callable[..., Any]:
     async def wrapper(
         wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
     ) -> Any:
-        scope = open_llm_span(instrumentor.client, "gemini.generate_content", SpanKind.MODEL_EXEC)
+        scope = try_open_llm_span(instrumentor, "gemini.generate_content")
+        if scope is None:
+            return await wrapped(*args, **kwargs)
         span = scope.span
         safe_call(_set_request_attrs, span, kwargs)
         try:
@@ -666,9 +670,9 @@ class _StreamAccumulator:
 
 def _sync_stream(instrumentor: GeminiInstrumentor) -> Callable[..., Any]:
     def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
-        scope = open_llm_span(
-            instrumentor.client, "gemini.generate_content_stream", SpanKind.MODEL_EXEC
-        )
+        scope = try_open_llm_span(instrumentor, "gemini.generate_content_stream")
+        if scope is None:
+            return wrapped(*args, **kwargs)
         span = scope.span
         safe_call(_set_request_attrs, span, kwargs)
         try:
@@ -691,9 +695,9 @@ def _async_stream(instrumentor: GeminiInstrumentor) -> Callable[..., Any]:
     async def wrapper(
         wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
     ) -> Any:
-        scope = open_llm_span(
-            instrumentor.client, "gemini.generate_content_stream", SpanKind.MODEL_EXEC
-        )
+        scope = try_open_llm_span(instrumentor, "gemini.generate_content_stream")
+        if scope is None:
+            return await wrapped(*args, **kwargs)
         span = scope.span
         safe_call(_set_request_attrs, span, kwargs)
         try:

@@ -20,6 +20,7 @@ from .policy import (
     any_blocking,
     is_async,
     is_blocking,
+    is_error,
 )
 from .policy import parse as parse_policy
 
@@ -37,6 +38,7 @@ __all__ = [
     "get_logger",
     "is_async",
     "is_blocking",
+    "is_error",
     "parse_policy",
     "set_log_level",
 ]

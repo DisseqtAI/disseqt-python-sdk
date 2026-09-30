@@ -304,6 +304,12 @@ class DisseqtAgenticClient:
         Shutdown client - flush all buffered spans and stop background threads.
         """
         logger.info("Shutting down DisseqtAgenticClient")
+        # Drop the atexit hook: it holds a strong ref to this client (leaking
+        # it and its buffer/session for the process lifetime) and would run
+        # shutdown a second time at exit. unregister is a no-op if absent.
+        atexit.unregister(self.shutdown)
         # Stop buffer (will flush remaining spans and stop flush thread)
         self.buffer.stop()
+        # Release the HTTP session / connection pool after the final flush.
+        self.transport.close()
         logger.info("DisseqtAgenticClient shutdown complete")

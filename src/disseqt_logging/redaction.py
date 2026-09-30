@@ -119,23 +119,50 @@ def sensitive_key(name: str) -> bool:
     return any(s in lower for s in _SENSITIVE_KEY_SUBSTRINGS)
 
 
+# Nesting levels redact_field will descend into. Containers deeper than this
+# are replaced wholesale (fail closed) rather than walked, which also bounds
+# work on self-referential structures.
+_MAX_REDACT_DEPTH: Final = 8
+
+
 def redact_field(name: str, value: object) -> object:
-    """Redact a single structured-log field.
+    """Redact a structured-log field, recursing into containers.
 
     A string under a sensitive key becomes :data:`SENSITIVE_VALUE_TOKEN`; any
-    other string is run through :func:`redact_string`; non-string values pass
-    through untouched (mirroring the platform redactor, which only walks string
-    fields).
+    other string is run through :func:`redact_string`. ``dict`` / ``list`` /
+    ``tuple`` / ``set`` values are walked (up to a depth cap) so a secret
+    nested inside a payload is scrubbed too: dict keys are checked with
+    :func:`sensitive_key` at every level, and a sensitive parent key makes every
+    string beneath it sensitive. Containers past the depth cap are replaced with
+    :data:`SENSITIVE_VALUE_TOKEN`. Other non-string values (numbers, the logger's
+    ``_Digest``, arbitrary objects) pass through untouched.
 
     Args:
         name: The field key.
         value: The field value.
 
     Returns:
-        The redacted value (or the original if not a string).
+        The redacted value (sets come back as lists).
     """
-    if not isinstance(value, str):
+    return _redact(name, value, sensitive_key(name), 0)
+
+
+def _redact(name: str, value: object, parent_sensitive: bool, depth: int) -> object:
+    if isinstance(value, str):
+        if parent_sensitive or sensitive_key(name):
+            return SENSITIVE_VALUE_TOKEN
+        return redact_string(value)
+    if not isinstance(value, (dict, list, tuple, set, frozenset)):
         return value
-    if sensitive_key(name):
+    if depth >= _MAX_REDACT_DEPTH:
         return SENSITIVE_VALUE_TOKEN
-    return redact_string(value)
+    sensitive = parent_sensitive or sensitive_key(name)
+    if isinstance(value, dict):
+        return {
+            k: _redact(k if isinstance(k, str) else str(k), v, sensitive, depth + 1)
+            for k, v in value.items()
+        }
+    items = [_redact(name, v, sensitive, depth + 1) for v in value]
+    if isinstance(value, tuple):
+        return tuple(items)
+    return items

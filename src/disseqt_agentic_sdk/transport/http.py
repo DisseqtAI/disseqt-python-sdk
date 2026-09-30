@@ -5,7 +5,9 @@ HTTP transport for sending traces/spans to the backend API.
 import json
 import os
 import sys
-from typing import Any
+import threading
+import time
+from typing import Any, NamedTuple
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -30,6 +32,25 @@ _SILENCE_AUTH_STDERR = os.environ.get("DISSEQT_SDK_SILENCE_AUTH_STDERR", "").str
 )
 
 
+# Latch state for the stderr escalation. A bad API key fails every flush
+# (once a second by default), so an unthrottled write floods stderr. Emit on
+# the first failure, then at most once per exponentially growing interval;
+# any successful send resets the latch so a later regression is loud again.
+_AUTH_STDERR_FIRST_INTERVAL_S = 60.0
+_AUTH_STDERR_MAX_INTERVAL_S = 3600.0
+_auth_stderr_lock = threading.Lock()
+_auth_stderr_next_at: float | None = None  # monotonic time of next allowed emit
+_auth_stderr_interval: float = _AUTH_STDERR_FIRST_INTERVAL_S
+
+
+def _reset_auth_failure_latch() -> None:
+    """Re-arm the stderr auth-failure message (called on first success)."""
+    global _auth_stderr_next_at, _auth_stderr_interval
+    with _auth_stderr_lock:
+        _auth_stderr_next_at = None
+        _auth_stderr_interval = _AUTH_STDERR_FIRST_INTERVAL_S
+
+
 def _write_auth_failure_to_stderr(status_code: int, endpoint: str) -> None:
     """
     Direct stderr write for 401/403 responses. Bypasses the logging
@@ -38,20 +59,50 @@ def _write_auth_failure_to_stderr(status_code: int, endpoint: str) -> None:
     ``configure()`` / ``DISSEQT_LOG_LEVEL`` is set). The
     logger.critical call still runs alongside this for anyone with
     structured logging configured.
+
+    Latched: written on the first failure, then at most once per
+    exponentially growing interval (60s, 120s, ... capped at 1h), and
+    re-armed by the next successful send. Thread-safe.
     """
+    global _auth_stderr_next_at, _auth_stderr_interval
     if _SILENCE_AUTH_STDERR:
         return
+    with _auth_stderr_lock:
+        now = time.monotonic()
+        if _auth_stderr_next_at is not None and now < _auth_stderr_next_at:
+            return
+        _auth_stderr_next_at = now + _auth_stderr_interval
+        _auth_stderr_interval = min(_auth_stderr_interval * 2, _AUTH_STDERR_MAX_INTERVAL_S)
     try:
         sys.stderr.write(
             f"[disseqt-agentic-sdk] CRITICAL: ingest auth rejected "
             f"({status_code}) at {endpoint} — spans will keep failing "
             f"until credentials are fixed. Check DISSEQT_API_KEY / "
             f"X-Application-Id and the traces-auth policy binding. "
+            f"Repeats are throttled. "
             f"Silence this message with DISSEQT_SDK_SILENCE_AUTH_STDERR=1.\n"
         )
         sys.stderr.flush()
     except Exception:  # noqa: BLE001 — never let a stderr write crash the caller
         pass
+
+
+# Per-group send outcomes.
+_OK = "ok"
+_RETRY = "retry"
+_PERMANENT = "permanent"
+
+
+class SendResult(NamedTuple):
+    """Outcome of a send: spans worth retrying vs. spans the server rejected for good."""
+
+    retryable: list[EnrichedSpan]
+    permanent: list[EnrichedSpan]
+
+
+def _is_permanent_status(status_code: int | None) -> bool:
+    """4xx other than 408 (timeout) / 429 (rate limit) will not succeed on retry."""
+    return status_code is not None and 400 <= status_code < 500 and status_code not in (408, 429)
 
 
 class HTTPTransport:
@@ -118,6 +169,12 @@ class HTTPTransport:
             total=max_retries,
             backoff_factor=0.5,
             status_forcelist=[429, 500, 502, 503, 504],
+            # urllib3 excludes POST from retries by default, which made the
+            # status_forcelist above a no-op for this POST-only transport.
+            # Span ingestion is idempotent on span_id server-side, so retrying
+            # POST is safe.
+            allowed_methods=frozenset({"POST"}) | Retry.DEFAULT_ALLOWED_METHODS,
+            respect_retry_after_header=True,
         )
         adapter = HTTPAdapter(max_retries=retry_strategy)
         self.session.mount("http://", adapter)
@@ -140,47 +197,71 @@ class HTTPTransport:
         Returns:
             bool: True if every group sent successfully, False otherwise
         """
-        return not self.send_spans_with_failures(spans)
+        result = self.send_spans_classified(spans)
+        return not result.retryable and not result.permanent
 
     def send_spans_with_failures(self, spans: list[EnrichedSpan]) -> list[EnrichedSpan]:
         """
-        Send spans and return the ones that failed to deliver.
+        Send spans and return the ones that failed to deliver *and are worth retrying*.
 
-        Spans are grouped by their per-trace ``realtime_policy_id`` (with
-        the client default as the fallback) and each distinct group is
-        sent as its own HTTP POST. This is what makes per-trace policy
-        overrides work: traces using different policies in the same
-        batch land in separate payloads, each with the right
-        ``resource.attributes["policy.id"]``. Single-policy batches still
-        produce a single POST so there's no extra HTTP cost in the common
-        case.
+        Spans the server permanently rejected (4xx other than 408/429, or an
+        unsendable header value) are dropped here -- logged once per group --
+        and NOT returned, so the retry buffer doesn't re-POST them forever.
+        Use ``send_spans_classified`` to see them.
+
+        Spans are grouped by full resource identity (project, service name /
+        version, environment and ``realtime_policy_id``, with the client
+        default policy as fallback) and each distinct group is sent as its own
+        HTTP POST, because the payload carries a single ``resource`` block.
+        Single-resource batches still produce a single POST.
 
         Returns:
-            list[EnrichedSpan]: exactly the spans that failed to send.
-            Empty list on full success. The retry buffer uses this so
-            successfully-delivered groups aren't re-POSTed on the next
-            flush after a partial-failure batch (TP-2128 round-2 P1
-            #1.2).
+            list[EnrichedSpan]: exactly the retryable failures. Empty list on
+            full success. The retry buffer uses this so successfully-delivered
+            groups aren't re-POSTed on the next flush.
         """
-        if not spans:
-            return []
+        return self.send_spans_classified(spans).retryable
 
-        # Bucket spans by the policy that should be stamped on their
-        # outgoing resource block. Empty string means "no per-trace
-        # override; use the client default" — which may itself be empty.
-        groups: dict[str, list[EnrichedSpan]] = {}
+    def send_spans_classified(self, spans: list[EnrichedSpan]) -> SendResult:
+        """Like ``send_spans_with_failures`` but also reports permanently-rejected spans."""
+        retryable: list[EnrichedSpan] = []
+        permanent: list[EnrichedSpan] = []
+        if not spans:
+            return SendResult(retryable, permanent)
+
+        # Bucket by full resource identity: the payload has ONE resource
+        # block (taken from the first span), so grouping by policy alone
+        # would stamp the first span's project/service/env on everyone.
+        groups: dict[tuple[str, str, str, str, str], list[EnrichedSpan]] = {}
         for span in spans:
             pid = getattr(span, "realtime_policy_id", "") or self.realtime_policy_id or ""
-            groups.setdefault(pid, []).append(span)
+            d = span.to_dict()
+            key = (
+                str(d.get("project_id", "") or ""),
+                str(d.get("service_name", "") or ""),
+                str(d.get("service_version", "") or ""),
+                str(d.get("environment", "") or ""),
+                pid,
+            )
+            groups.setdefault(key, []).append(span)
 
-        failed: list[EnrichedSpan] = []
-        for pid, group in groups.items():
-            if not self._send_group(pid, group):
-                failed.extend(group)
-        return failed
+        for key, group in groups.items():
+            outcome = self._send_group(key[4], group)
+            if outcome == _RETRY:
+                retryable.extend(group)
+            elif outcome == _PERMANENT:
+                permanent.extend(group)
+        return SendResult(retryable, permanent)
 
-    def _send_group(self, policy_id: str, spans: list[EnrichedSpan]) -> bool:
-        """Send one resource-block's worth of spans (single policy_id)."""
+    def close(self) -> None:
+        """Release the underlying HTTP session (connection pool). Idempotent."""
+        try:
+            self.session.close()
+        except Exception:  # noqa: BLE001 — closing must never raise into shutdown
+            logger.debug("HTTPTransport session close failed", exc_info=True)
+
+    def _send_group(self, policy_id: str, spans: list[EnrichedSpan]) -> str:
+        """Send one resource-block's worth of spans; returns _OK / _RETRY / _PERMANENT."""
         # Group by trace_id within the policy bucket so the wire shape
         # stays {resource, traces: [{traceId, spans}]}.
         traces_dict: dict[str, list[dict[str, Any]]] = {}
@@ -220,6 +301,11 @@ class HTTPTransport:
                     "deployment.environment": span_dict.get("environment", ""),
                     "project.id": span_dict.get("project_id", ""),
                     "ingestion_url": self.endpoint,
+                    # TODO(M06): "api.key" in the body is redundant with the
+                    # X-Api-Key header. Removal is gated on the server-side
+                    # change that stops requiring/echoing it shipping first
+                    # (old-server / new-client compatibility); do not remove
+                    # until that is deployed.
                     "api.key": self.api_key,
                 }
                 # policy.id is the OTel-style resource attribute
@@ -288,7 +374,8 @@ class HTTPTransport:
                         "policy_id": policy_id or None,
                     },
                 )
-                return False
+                # Retrying the same bad value can never succeed.
+                return _PERMANENT
         if self.api_key:
             headers["X-Api-Key"] = self.api_key
         if project_id:
@@ -330,7 +417,7 @@ class HTTPTransport:
                         "status_code": response.status_code,
                     },
                 )
-                return False
+                return _RETRY
             logger.info(
                 "Successfully sent spans to backend",
                 extra={
@@ -340,7 +427,8 @@ class HTTPTransport:
                     "policy_id": policy_id or None,
                 },
             )
-            return True
+            _reset_auth_failure_latch()
+            return _OK
         except requests.exceptions.RequestException as e:
             # Auth failures (401/403) are operator-actionable — a bad
             # API key or missing X-Application-Id will drop every span
@@ -369,6 +457,18 @@ class HTTPTransport:
                 # need to see with default settings, so write a copy
                 # straight to stderr as well. TP-2128 round-2 P1 #1.3.
                 _write_auth_failure_to_stderr(status_code, self.endpoint)
+            elif _is_permanent_status(status_code):
+                # Logged once per dropped group; the buffer never sees these.
+                logger.error(
+                    "Server permanently rejected spans (%s) — dropping them, not retrying",
+                    status_code,
+                    extra={
+                        "endpoint": self.endpoint,
+                        "span_count": len(spans),
+                        "error": str(e),
+                        "status_code": status_code,
+                    },
+                )
             else:
                 logger.error(
                     "Failed to send spans to backend",
@@ -381,7 +481,7 @@ class HTTPTransport:
                     },
                     exc_info=True,
                 )
-            return False
+            return _PERMANENT if _is_permanent_status(status_code) else _RETRY
 
     def send_trace(self, trace_spans: list[EnrichedSpan]) -> bool:
         """

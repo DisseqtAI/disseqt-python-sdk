@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from disseqt_logging.config import LoggerConfig, level_name, parse_level
-from disseqt_logging.redaction import redact_field
+from disseqt_logging.redaction import redact_field, redact_string
 
 # A distribution-specific root so we never capture or block a client's own
 # loggers. A short name like "disseqt" would hijack any "disseqt.*" logger the
@@ -251,8 +251,9 @@ class _DisseqtFormatter(logging.Formatter):
             for key, value in envelope.items():
                 out[key] = redact_field(key, value) if self._redact else value
         if exc_text:
-            # Rendered last and left un-redacted, matching the platform logger.
-            out["exception"] = exc_text
+            # Rendered last. Tracebacks embed exception messages, which can
+            # carry tokens / emails, so scrub content shapes when redaction is on.
+            out["exception"] = redact_string(exc_text) if self._redact else exc_text
 
         if self._mode == "console":
             return self._render_console(out)
