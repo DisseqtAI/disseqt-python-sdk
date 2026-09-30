@@ -285,7 +285,8 @@ def _judge_findings(
         return []
     if score <= 0.0 or score < threshold:
         return []
-    others = data.get("others") if isinstance(data.get("others"), dict) else {}
+    raw_others = data.get("others")
+    others = raw_others if isinstance(raw_others, dict) else {}
     severity = _judge_severity(score, data.get("metric_labels"))
     metric = str(data.get("metric_name") or validator)
     return [

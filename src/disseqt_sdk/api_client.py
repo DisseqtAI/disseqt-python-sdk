@@ -28,7 +28,8 @@ def unwrap_envelope(raw: Any, status_code: int = 200) -> Any:
     if not isinstance(raw, dict):
         return raw
     if raw.get("status") == "error":
-        err = raw.get("error") if isinstance(raw.get("error"), dict) else {}
+        raw_err = raw.get("error")
+        err = raw_err if isinstance(raw_err, dict) else {}
         raise HTTPError(status_code, err.get("external") or "API error", json.dumps(raw)[:512])
     if raw.get("status") == "success" and "data" in raw:
         return raw["data"]
