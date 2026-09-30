@@ -1,11 +1,8 @@
 """AgenticBehaviourRequest carries the union of agentic + LLM text fields.
 
-A realtime policy can mix agentic validators (tool_call_accuracy,
-topic_adherence, …) with text validators (factual_consistency,
-data_leakage, …). validate(request, policies=[...]) sends ONE input bag,
-so the carrier must hold every field the policy's validators read —
-otherwise the text rules skip with missing_input and the policy silently
-under-evaluates.
+The request object holds every field the agentic + text validators read,
+so a single ``AgenticBehaviourRequest`` can be handed to any composite
+validator without a per-domain reshape.
 """
 
 from disseqt_sdk.models.agentic_behaviour import AgenticBehaviourRequest

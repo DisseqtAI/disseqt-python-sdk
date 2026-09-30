@@ -7,6 +7,127 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- ``PacksResource.list_mine()`` and ``disseqt pack list`` now hit
+  ``GET /api/v1/sdk/prompt-packs/my-packs`` (api/server.go
+  ``sdkPromptPackRoutes``), which returns the caller's own packs. The plain
+  ``GET /api/v1/sdk/prompt-packs`` listing is the public marketplace catalogue
+  and returned ``items: []`` for a freshly created pack; it is still reachable
+  via ``PacksResource.list()`` / ``disseqt pack list --marketplace``.
+
+### Changed
+- **Breaking:** ``PacksResource.publish(pack_id)`` is now
+  ``publish(pack_id, sharing_scope="PRIVATE")`` and sends
+  ``{"sharing_scope": ...}``. The handler binds it as
+  ``binding:"required,oneof=PRIVATE PROJECT ORGANIZATION PUBLIC"``
+  (api/prompt_packs_handlers.go ``publishPromptPack``), so the previous
+  bodyless ``PATCH`` always failed with ``400 InvalidInput`` / ``EOF``.
+  The value is validated client-side and upper-cased on the wire. New CLI
+  flag: ``disseqt pack publish <id> --sharing-scope
+  private|project|organization|public`` (default ``private``).
+  ``unpublish`` binds no body and is unchanged.
+- **Breaking:** ``PacksResource.add_prompt(pack_id, prompt)`` is replaced by
+  ``PacksResource.attach_entries(pack_id, entry_ids)``. ``POST
+  .../prompts/add`` attaches *existing* library entries and binds
+  ``entry_ids`` (``required,min=1``, api/prompt_pack_entry_handlers.go
+  ``AddPromptsToPackRequest``), so posting a prompt object always failed with
+  ``400 ValidationFailed``. Creating new prompts is still
+  ``add_prompts()`` / ``disseqt pack add-prompts`` (``/prompts/bulk``).
+
+### Documentation
+- ``PacksResource.create``/``update`` docstrings and ``disseqt pack
+  create``/``update`` help now state that ``severity``,
+  ``interaction_mode`` and ``task_type`` are ignored by the server and
+  aggregated from the pack's prompts
+  (api/prompt_packs_handlers.go ``createPromptPack`` ~:855-870).
+
+## [0.12.0] - 2026-09-29
+
+DeepTeam parity: the ``disseqt`` CLI (``redteam``, ``scan``, resource
+groups, ``login``/``logout``/``whoami``), ``RedTeamer`` / ``red_team()``
+extensions, and ``cost_accumulator``. Every CLI request body is built from
+the dataset-backend Go structs; the file/line is cited next to each builder.
+
+### Added
+- ``disseqt redteam`` verbs: ``attack --single-turn|--multi-turn``, ``run
+  <yaml>``, ``validate``, ``status``, ``cancel``, ``results``, ``report``,
+  ``session``, ``breach``, ``technique``/``prompt``/``generated-prompt`` CRUD,
+  ``analytics``, ``recommend``, ``parse-curl``, ``test-connection``,
+  ``vuln-test``, ``list-attacks``/``list-techniques``/``list-personas``.
+- ``disseqt scan``: code scanner over the ``llm-judge-*`` validators on the
+  SDK validators surface (``DISSEQT_VALIDATORS_BASE_URL``). Validator names
+  are normalised to ``llm-judge-<name>``; the judge's wire envelope
+  (``actual_value`` 0-1, ``metric_labels``, ``threshold_score``,
+  ``others.reasoning``) yields one finding per chunk once the score reaches
+  the judge threshold. Exits 1 when any batch fails or findings remain,
+  stops after the first 401/403. ``--diff BASE..HEAD`` scans only changed
+  files.
+- Resource groups (``target``, ``pack``, ``pp-run``, ``session``, ``plan``,
+  ``plan-run`` with ``--wait --max-wait``, ...), ``disseqt login`` /
+  ``logout`` / ``whoami``.
+- ``Client()`` falls back to ``DISSEQT_PROJECT_ID`` / ``DISSEQT_API_KEY``
+  after ``~/.disseqt/config.json``; an insecure config file now raises
+  ``AuthConfigPermissionError`` instead of being silently ignored.
+- ``DisseqtAPIClient`` resource calls unwrap the backend
+  ``{"status": "success", "data": ...}`` envelope and return ``data``.
+
+### Changed
+- **Auth contract.** The CLI sends only ``X-API-Key`` + ``X-Project-Id``;
+  the gateway injects the internal identity headers. ``DISSEQT_USER_ID`` /
+  ``DISSEQT_USER_EMAIL`` are no longer read.
+- **One base URL.** ``DISSEQT_BASE_URL`` (default
+  ``https://api.disseqt.ai/dataset``) for every dataset route;
+  ``DISSEQT_VALIDATORS_BASE_URL`` (default
+  ``https://api.disseqt.ai/realtime-validations``) for ``scan``.
+- ``redteam attack --single-turn`` takes ``--pack``/``--validator``;
+  ``--multi-turn`` takes ``--prompt`` (1..10) and a template ``--target``.
+  ``recommend`` takes ``--app-name``/``--app-description`` (was
+  ``--context``); ``test-connection`` takes
+  ``--endpoint/--provider/--model/--api-key/--api-key-env`` (was
+  ``--target``); ``report --format csv`` takes ``--session <id>``.
+- CLI exit codes: 1 for HTTP/network failures, 2 for usage/config errors.
+- Every CLI verb resolves credentials as env → ``~/.disseqt/config.json``
+  (from ``disseqt login``); a config file wider than 0600 is refused with
+  the ``chmod 600`` hint instead of being silently ignored (``whoami`` too).
+- ``redteam list-attacks --kind agents`` / ``list-personas`` send the
+  pagination the agents route requires (``page_id=1&page-size=100``; first
+  100 agents).
+- ``disseqt login`` verifies against the dataset gateway and no longer
+  stores ``base_url``; ``logout`` is local-only (``--local-only`` removed).
+- **Prompt packs use the service-key mount.** ``PacksResource`` /
+  ``RunsResource`` / ``OutputValidationsResource``, the ``pack`` /
+  ``pp-run`` / ``output-validation`` CLI groups and
+  ``DisseqtAPIClient._PROMPT_PACKS_BASE`` now target
+  ``/api/v1/sdk/prompt-packs`` (``/api/v1/prompt-packs`` is browser-session
+  only and rejects API keys with ``ErrAuthHeaderRequired``).
+
+### Removed
+- ``client.rag_validations`` / ``RagValidationsResource`` and the
+  ``disseqt rag-validation`` group, ``PacksResource.restore`` /
+  ``import_status`` / ``upload_session_*`` (``pack restore`` /
+  ``import-status``) and ``RunsResource.retrieval_traces``
+  (``pp-run retrieval-traces``): none of these routes exist on the
+  service-key mount, so API-key callers could never reach them.
+- ``disseqt redteam eval-csv`` and ``eval-single-turn`` (the routes need a
+  browser session), the whole ``disseqt policy`` group, and the env vars
+  ``DISSEQT_REDTEAM_BASE_URL`` / ``DISSEQT_DATASET_BASE_URL`` /
+  ``DISSEQT_POLICY_MGMT_BASE_URL``.
+- **Server-side realtime-policy evaluation surface.** The
+  ``Client.validate(request, policies=[...])`` shape (and its
+  ``Client.validate_sync(..., raise_on_async=True)`` companion), the
+  ``Guardrails`` class, the ``BaseGuard`` extension, the ``disseqt
+  validate`` and ``disseqt run`` CLI commands, the ``disseqt_sdk.policy``
+  module (``any_blocking``, ``is_blocking``, ``is_async``,
+  ``parse_policy``, ``BlockedError``, ``PolicyDecision``, ``PolicyRule``,
+  ``PolicyRuleset``, ``DECISION_BLOCK/BORDERLINE/PASS``), and the
+  ``realtime_policy_base_url`` client kwarg + ``DISSEQT_POLICY_BASE_URL``
+  env var have been removed. The runtime evaluate endpoint they targeted
+  (``POST /api/v1/sdk/policies/{id}/evaluate``) is not currently served
+  by any in-scope backend; keeping the shape without a working transport
+  would silently 404 on the first live call. Class-based validators
+  (``Client.validate(SingleValidator(...))`` /
+  ``Client.validate(CompositeScoreEvaluator(...))``) are unaffected.
+
 ### Fixed
 - **``CreateRunRequest.run_name`` now actually reaches the server.** Since
   this SDK's first release, ``to_payload()`` sent the run name under the
