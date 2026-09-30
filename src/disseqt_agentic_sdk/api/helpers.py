@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import inspect
 import json
+import warnings
 from collections.abc import Callable, Iterator
 from functools import wraps
 from typing import Any
@@ -20,7 +21,11 @@ from disseqt_agentic_sdk.instrumentation._utils import (
     safe_set,
     set_messages_if_capturing,
 )
-from disseqt_agentic_sdk.semantics import AgenticAttributes, AgenticOperation
+from disseqt_agentic_sdk.semantics import (
+    PRICING_CLASSIFIED_OPERATIONS,
+    AgenticAttributes,
+    AgenticOperation,
+)
 
 
 def _extract_llm_input_messages(
@@ -456,12 +461,18 @@ def disseqt_trace(
             which means a self-hosted embedding / image / audio model
             silently prices at $0.00 because the registered rate never
             matches. Ignored for non-MODEL_EXEC kinds. Recognised values
-            the backend classifier maps today:
+            the backend classifier maps today (also in
+            :data:`disseqt_agentic_sdk.semantics.PRICING_CLASSIFIED_OPERATIONS`):
             ``embeddings`` | ``image_generation`` / ``image`` |
             ``audio_transcription`` / ``audio_generation`` / ``audio`` |
-            ``chat`` / ``text_completion`` / ``generate_content``. Any
-            other string is stamped but the backend falls back to chat
-            pricing.
+            ``chat`` / ``text_completion`` / ``generate_content``. A
+            value outside that set is stamped as-is (never silently
+            corrected or dropped) but emits a :class:`UserWarning`
+            naming the recognised set, because an unrecognised value
+            (e.g. the singular ``"embedding"``) is otherwise
+            indistinguishable from never having passed ``operation=``
+            at all — the backend falls back to chat pricing either
+            way. Passing nothing stays completely silent, as before.
         **span_attrs: Additional span attributes stamped once at span open.
 
     Example:
@@ -535,34 +546,77 @@ def disseqt_trace(
         # false even on a TOOL_EXEC span.
         is_tool_kind = span_kind == SpanKind.TOOL_EXEC
 
+        # Operation stamp for MODEL_EXEC spans. Precedence (highest first):
+        #   1. explicit ``operation=`` kwarg,
+        #   2. value stamped via ``**span_attrs``,
+        #   3. ``"chat"`` default — only when ``capture_io=True`` so the
+        #      pre-``operation``-kwarg behaviour stays byte-identical for
+        #      existing chat-shaped decorations.
+        # Operation is identity (drives the pricing classifier), not
+        # content, so it's stamped independent of ``capture_io`` whenever
+        # the caller passes something explicit — same rationale as the
+        # ``model`` kwarg (TP-2209 review, "third guardrail"). Without
+        # this, a self-hosted embedding / image / audio model prices at
+        # $0.00 silently because the enricher's default branch treats
+        # empty as ``chat`` (see internal/enrichment/enricher.go:235-248).
+        #
+        # Computed once here (decoration time, like ``is_llm_kind`` above),
+        # not per call: every input (``operation``, ``span_attrs``,
+        # ``capture_io``) is fixed at decoration time already, so
+        # re-deriving it inside ``_prep_span`` on every invocation would be
+        # pure waste — and, more importantly, it's the only way to get the
+        # validation warning below to point at the actual
+        # ``@disseqt_trace(operation=...)`` line. A per-call warning fired
+        # from inside the sync/async wrapper has no single ``stacklevel``
+        # that reaches the right frame for both wrapper shapes (verified:
+        # the async wrapper's caller is separated from the decorated
+        # function's own call site by asyncio's scheduling machinery, at a
+        # depth that varies with how deeply nested the ``await`` is) —
+        # whereas at decoration time, ``decorator(func)`` is always called
+        # directly by Python's own decorator application, one frame above
+        # the line that actually has the typo.
+        resolved_operation: str | None = None
+        if is_llm_kind:
+            explicit_operation = operation or span_attrs.get(AgenticAttributes.OPERATION_NAME)
+            resolved_operation = explicit_operation or (
+                AgenticOperation.CHAT if capture_io else None
+            )
+            # Warn-and-pass-through, not raise, not silently coerce: this
+            # decorator runs inside customer application code, and breaking
+            # their call over a pricing hint would be worse than a wrong
+            # price. Only fires for an EXPLICIT value that misses the
+            # backend's known set — never on the plain "no operation
+            # passed" path, which must stay exactly as silent as it is
+            # today (TP-2209 round-3 review). A typo here (e.g. "embedding"
+            # instead of "embeddings") is otherwise indistinguishable from
+            # never having passed ``operation=`` at all — same silent
+            # $0.00-or-mispriced-as-chat failure this kwarg exists to
+            # prevent.
+            #
+            # "Warn, don't raise" describes what THIS code does, not a
+            # guarantee about the caller: like any ``warnings.warn`` call,
+            # this escalates to a real exception under a caller's strict
+            # warning filter (``-W error`` / ``filterwarnings("error")``,
+            # e.g. common pytest configs). That's the caller's own policy
+            # choice applying uniformly to all warnings, not something this
+            # decorator can or should suppress.
+            if explicit_operation and explicit_operation not in PRICING_CLASSIFIED_OPERATIONS:
+                warnings.warn(
+                    f"disseqt_trace(operation={explicit_operation!r}) is not one of the "
+                    f"values the backend pricing classifier recognizes "
+                    f"({', '.join(sorted(PRICING_CLASSIFIED_OPERATIONS))}); the span will be "
+                    "priced as chat until this is corrected.",
+                    stacklevel=2,
+                )
+
         def _prep_span(span: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
             """Stamp static + I/O attributes at span open."""
             # Static attrs — honor content-capture gate for content-shaped keys
             # (TP-2128 round-2 P0 #0.2).
             for key, value in span_attrs.items():
                 safe_set(span, key, value)
-            # Operation stamp for MODEL_EXEC spans. Precedence (highest first):
-            #   1. explicit ``operation=`` kwarg,
-            #   2. value stamped via ``**span_attrs`` (which was applied above,
-            #      so we're overwriting our own no-op),
-            #   3. ``"chat"`` default — only when ``capture_io=True`` so the
-            #      pre-``operation``-kwarg behaviour stays byte-identical for
-            #      existing chat-shaped decorations.
-            # Operation is identity (drives the pricing classifier), not
-            # content, so it's stamped independent of ``capture_io`` whenever
-            # the caller passes something explicit — same rationale as the
-            # ``model`` kwarg (TP-2209 review, "third guardrail"). Without
-            # this, a self-hosted embedding / image / audio model prices at
-            # $0.00 silently because the enricher's default branch treats
-            # empty as ``chat`` (see internal/enrichment/enricher.go:235-248).
-            if is_llm_kind:
-                resolved_operation = (
-                    operation
-                    or span_attrs.get(AgenticAttributes.OPERATION_NAME)
-                    or (AgenticOperation.CHAT if capture_io else None)
-                )
-                if resolved_operation:
-                    safe_set(span, AgenticAttributes.OPERATION_NAME, resolved_operation)
+            if resolved_operation:
+                safe_set(span, AgenticAttributes.OPERATION_NAME, resolved_operation)
             if capture_io and is_llm_kind:
                 input_messages = _extract_llm_input_messages(func, args, kwargs)
                 if input_messages is not None:

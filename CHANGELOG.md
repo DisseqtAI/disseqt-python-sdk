@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- ``disseqt_trace(operation=...)`` now warns (``UserWarning``) when the
+  value isn't one of the nine strings the backend pricing classifier
+  recognizes (``chat`` / ``text_completion`` / ``generate_content`` /
+  ``embeddings`` / ``image_generation`` / ``image`` /
+  ``audio_transcription`` / ``audio_generation`` / ``audio`` — also
+  available as ``disseqt_agentic_sdk.semantics.PRICING_CLASSIFIED_OPERATIONS``).
+  Previously an unrecognized value (e.g. the singular ``"embedding"``,
+  the natural typo) was stamped and silently priced as chat — identical
+  to never having passed ``operation=`` at all, with zero feedback. The
+  value is still stamped as-is (never corrected, never dropped). The
+  decorator itself never raises, but — like any ``warnings.warn`` call —
+  a caller running under a strict warning filter (``-W error`` /
+  ``filterwarnings("error")``) will see this escalate to an exception at
+  decoration time. Calls that don't pass ``operation=`` remain completely
+  silent, as before.
+- ``test_operation_kwarg_ignored_when_kind_not_model_exec`` now uses
+  ``kind=SpanKind.AGENT_EXEC`` instead of ``TOOL_EXEC``. The TOOL_EXEC
+  branch unconditionally re-stamps ``operation.name=execute_tool``
+  regardless of the guard this test exists to protect, so the test
+  passed whether or not that guard was actually implemented correctly.
 - **``CreateRunRequest.run_name`` now actually reaches the server.** Since
   this SDK's first release, ``to_payload()`` sent the run name under the
   key ``"run_name"``, but the backend has only ever bound
