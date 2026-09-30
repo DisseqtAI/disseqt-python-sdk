@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- ``PacksResource.list_mine()`` and ``disseqt pack list`` now hit
+  ``GET /api/v1/sdk/prompt-packs/my-packs`` (api/server.go
+  ``sdkPromptPackRoutes``), which returns the caller's own packs. The plain
+  ``GET /api/v1/sdk/prompt-packs`` listing is the public marketplace catalogue
+  and returned ``items: []`` for a freshly created pack; it is still reachable
+  via ``PacksResource.list()`` / ``disseqt pack list --marketplace``.
+
+### Changed
+- **Breaking:** ``PacksResource.publish(pack_id)`` is now
+  ``publish(pack_id, sharing_scope="PRIVATE")`` and sends
+  ``{"sharing_scope": ...}``. The handler binds it as
+  ``binding:"required,oneof=PRIVATE PROJECT ORGANIZATION PUBLIC"``
+  (api/prompt_packs_handlers.go ``publishPromptPack``), so the previous
+  bodyless ``PATCH`` always failed with ``400 InvalidInput`` / ``EOF``.
+  The value is validated client-side and upper-cased on the wire. New CLI
+  flag: ``disseqt pack publish <id> --sharing-scope
+  private|project|organization|public`` (default ``private``).
+  ``unpublish`` binds no body and is unchanged.
+- **Breaking:** ``PacksResource.add_prompt(pack_id, prompt)`` is replaced by
+  ``PacksResource.attach_entries(pack_id, entry_ids)``. ``POST
+  .../prompts/add`` attaches *existing* library entries and binds
+  ``entry_ids`` (``required,min=1``, api/prompt_pack_entry_handlers.go
+  ``AddPromptsToPackRequest``), so posting a prompt object always failed with
+  ``400 ValidationFailed``. Creating new prompts is still
+  ``add_prompts()`` / ``disseqt pack add-prompts`` (``/prompts/bulk``).
+
+### Documentation
+- ``PacksResource.create``/``update`` docstrings and ``disseqt pack
+  create``/``update`` help now state that ``severity``,
+  ``interaction_mode`` and ``task_type`` are ignored by the server and
+  aggregated from the pack's prompts
+  (api/prompt_packs_handlers.go ``createPromptPack`` ~:855-870).
+
 ## [0.12.0] - 2026-09-29
 
 DeepTeam parity: the ``disseqt`` CLI (``redteam``, ``scan``, resource

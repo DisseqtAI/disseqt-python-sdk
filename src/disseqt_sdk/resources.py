@@ -21,6 +21,10 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from .api_client import DisseqtAPIClient
 
+# Server-side enum for pack publishing (api/prompt_packs_handlers.go
+# publishPromptPack: binding:"required,oneof=PRIVATE PROJECT ORGANIZATION PUBLIC").
+PACK_SHARING_SCOPES = ("PRIVATE", "PROJECT", "ORGANIZATION", "PUBLIC")
+
 
 class _Base:
     """Shared plumbing: hold the parent client, forward to its ``_request_abs``."""
@@ -153,15 +157,31 @@ class PacksResource(_Base):
     _BASE = "/api/v1/sdk/prompt-packs"
 
     def create(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Create a pack.
+
+        ``severity``, ``interaction_mode`` and ``task_type`` are ignored by the
+        server — it aggregates them from the pack's prompts and blanks whatever
+        you send (api/prompt_packs_handlers.go createPromptPack ~:855-870).
+        """
         return self._req("POST", self._BASE, json_payload=payload)
 
     def list(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        """List the public marketplace catalogue. For your own packs use :meth:`list_mine`."""
         return self._req("GET", self._BASE, params=params)
+
+    def list_mine(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        """List packs owned by the caller (``/my-packs``, api/server.go sdkPromptPackRoutes)."""
+        return self._req("GET", f"{self._BASE}/my-packs", params=params)
 
     def get(self, pack_id: str) -> dict[str, Any]:
         return self._req("GET", f"{self._BASE}/{pack_id}")
 
     def update(self, pack_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Update a pack.
+
+        As with :meth:`create`, ``severity``, ``interaction_mode`` and
+        ``task_type`` are ignored — they are aggregated from the pack's prompts.
+        """
         return self._req("PATCH", f"{self._BASE}/{pack_id}", json_payload=payload)
 
     def delete(self, pack_id: str) -> dict[str, Any]:
@@ -176,15 +196,28 @@ class PacksResource(_Base):
             "POST", f"{self._BASE}/{pack_id}/prompts/bulk", json_payload={"prompts": prompts}
         )
 
-    def add_prompt(self, pack_id: str, prompt: dict[str, Any]) -> dict[str, Any]:
-        """Add a single prompt (uses /prompts/add)."""
-        return self._req("POST", f"{self._BASE}/{pack_id}/prompts/add", json_payload=prompt)
+    def attach_entries(self, pack_id: str, entry_ids: builtins.list[str]) -> dict[str, Any]:
+        """Attach existing library entries to a pack by id (/prompts/add).
+
+        To create brand-new prompts use :meth:`add_prompts` instead.
+        """
+        return self._req(
+            "POST", f"{self._BASE}/{pack_id}/prompts/add", json_payload={"entry_ids": entry_ids}
+        )
 
     def duplicate(self, pack_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         return self._req("POST", f"{self._BASE}/{pack_id}/duplicate", json_payload=payload or {})
 
-    def publish(self, pack_id: str) -> dict[str, Any]:
-        return self._req("PATCH", f"{self._BASE}/{pack_id}/publish")
+    def publish(self, pack_id: str, sharing_scope: str = "PRIVATE") -> dict[str, Any]:
+        """Publish a pack. ``sharing_scope`` is required by the backend."""
+        scope = sharing_scope.upper()
+        if scope not in PACK_SHARING_SCOPES:
+            raise ValueError(
+                f"sharing_scope must be one of {', '.join(PACK_SHARING_SCOPES)}; got {sharing_scope!r}"
+            )
+        return self._req(
+            "PATCH", f"{self._BASE}/{pack_id}/publish", json_payload={"sharing_scope": scope}
+        )
 
     def unpublish(self, pack_id: str) -> dict[str, Any]:
         return self._req("PATCH", f"{self._BASE}/{pack_id}/unpublish")

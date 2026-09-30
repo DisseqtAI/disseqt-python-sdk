@@ -20,6 +20,7 @@ from typing import Any
 import click
 
 from ..api_client import DisseqtAPIClient
+from ..resources import PACK_SHARING_SCOPES
 from . import _http
 from ._common import _fail, echo_json, require_credentials
 
@@ -208,12 +209,20 @@ def pack() -> None:
 @pack.command("create")
 @_json_option()
 def pack_create(json_body: str | None) -> None:
+    """Create a pack.
+
+    'severity', 'interaction_mode' and 'task_type' are ignored by the server:
+    it aggregates them from the pack's prompts, so don't expect them back.
+    """
     _post("/api/v1/sdk/prompt-packs", _load_json_body(json_body))
 
 
 @pack.command("list")
-def pack_list() -> None:
-    _get("/api/v1/sdk/prompt-packs")
+@click.option("--marketplace", is_flag=True, help="List the public marketplace catalogue instead.")
+def pack_list(marketplace: bool) -> None:
+    """List your own packs (use --marketplace for the public catalogue)."""
+    suffix = "" if marketplace else "/my-packs"
+    _get(f"/api/v1/sdk/prompt-packs{suffix}")
 
 
 @pack.command("get")
@@ -226,6 +235,11 @@ def pack_get(pack_id: str) -> None:
 @click.argument("pack_id")
 @_json_option()
 def pack_update(pack_id: str, json_body: str | None) -> None:
+    """Update a pack.
+
+    'severity', 'interaction_mode' and 'task_type' are ignored by the server:
+    they are aggregated from the pack's prompts.
+    """
     _patch(f"/api/v1/sdk/prompt-packs/{pack_id}", _load_json_body(json_body))
 
 
@@ -260,8 +274,19 @@ def pack_duplicate(pack_id: str, json_body: str | None) -> None:
 
 @pack.command("publish")
 @click.argument("pack_id")
-def pack_publish(pack_id: str) -> None:
-    _patch(f"/api/v1/sdk/prompt-packs/{pack_id}/publish", {})
+@click.option(
+    "--sharing-scope",
+    type=click.Choice([s.lower() for s in PACK_SHARING_SCOPES], case_sensitive=False),
+    default="private",
+    show_default=True,
+    help="Visibility to publish the pack with (required by the backend).",
+)
+def pack_publish(pack_id: str, sharing_scope: str) -> None:
+    """Publish a pack at the given sharing scope."""
+    _patch(
+        f"/api/v1/sdk/prompt-packs/{pack_id}/publish",
+        {"sharing_scope": sharing_scope.upper()},
+    )
 
 
 @pack.command("unpublish")

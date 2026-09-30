@@ -129,6 +129,12 @@ class TestPacksResource:
         requests_mock.get(self.PATH, json={"data": []})
         assert client.packs.list() == {"data": []}
 
+    def test_list_mine_hits_my_packs(self, requests_mock, client: DisseqtAPIClient) -> None:
+        # F3: the base listing is the marketplace catalogue; owners need /my-packs.
+        requests_mock.get(f"{self.PATH}/my-packs", json={"data": [{"id": "p1"}]})
+        assert client.packs.list_mine() == {"data": [{"id": "p1"}]}
+        assert requests_mock.last_request.path.endswith("/prompt-packs/my-packs")
+
     def test_get(self, requests_mock, client: DisseqtAPIClient) -> None:
         requests_mock.get(f"{self.PATH}/p1", json={"id": "p1"})
         assert client.packs.get("p1") == {"id": "p1"}
@@ -142,6 +148,12 @@ class TestPacksResource:
         result = client.packs.add_prompts("p1", [{"text": "a"}, {"text": "b"}])
         assert result == {"added": 2}
 
+    def test_attach_entries_sends_entry_ids(self, requests_mock, client: DisseqtAPIClient) -> None:
+        # F2: /prompts/add binds entry_ids (required,min=1), not a prompt object.
+        requests_mock.post(f"{self.PATH}/p1/prompts/add", json={"added": 2})
+        assert client.packs.attach_entries("p1", ["e1", "e2"]) == {"added": 2}
+        assert requests_mock.last_request.json() == {"entry_ids": ["e1", "e2"]}
+
     def test_publish_uses_patch(self, requests_mock, client: DisseqtAPIClient) -> None:
         # G3 regression: backend registers PATCH at
         # PATCH /api/v1/sdk/prompt-packs/:id/publish; POST is a 404.
@@ -149,6 +161,18 @@ class TestPacksResource:
         assert client.packs.publish("p1") == {"published": True}
         assert requests_mock.last_request.method == "PATCH"
         assert requests_mock.last_request.url.endswith("/p1/publish")
+
+    def test_publish_sends_sharing_scope(self, requests_mock, client: DisseqtAPIClient) -> None:
+        # F1: sharing_scope is binding:"required,oneof=..."; no body => 400 EOF.
+        requests_mock.patch(f"{self.PATH}/p1/publish", json={"published": True})
+        client.packs.publish("p1")
+        assert requests_mock.last_request.json() == {"sharing_scope": "PRIVATE"}
+        client.packs.publish("p1", sharing_scope="public")
+        assert requests_mock.last_request.json() == {"sharing_scope": "PUBLIC"}
+
+    def test_publish_rejects_unknown_scope(self, client: DisseqtAPIClient) -> None:
+        with pytest.raises(ValueError, match="sharing_scope must be one of"):
+            client.packs.publish("p1", sharing_scope="everyone")
 
     def test_unpublish_uses_patch(self, requests_mock, client: DisseqtAPIClient) -> None:
         # G3 regression: PATCH at server.go:2238, 2461.

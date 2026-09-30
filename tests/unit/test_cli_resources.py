@@ -144,10 +144,19 @@ def test_mcp_target_list(runner: CliRunner, requests_mock) -> None:
     assert result.exit_code == 0
 
 
-def test_pack_list(runner: CliRunner, requests_mock) -> None:
-    requests_mock.get(f"{DATASET_BASE}/api/v1/sdk/prompt-packs", json={"data": []})
+def test_pack_list_defaults_to_my_packs(runner: CliRunner, requests_mock) -> None:
+    # F3: the plain listing is the marketplace; "list my packs" must hit /my-packs.
+    requests_mock.get(f"{DATASET_BASE}/api/v1/sdk/prompt-packs/my-packs", json={"data": []})
     result = runner.invoke(cli, ["pack", "list"])
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
+    assert requests_mock.last_request.path.endswith("/prompt-packs/my-packs")
+
+
+def test_pack_list_marketplace_flag(runner: CliRunner, requests_mock) -> None:
+    requests_mock.get(f"{DATASET_BASE}/api/v1/sdk/prompt-packs", json={"data": []})
+    result = runner.invoke(cli, ["pack", "list", "--marketplace"])
+    assert result.exit_code == 0, result.output
+    assert requests_mock.last_request.path.endswith("/prompt-packs")
 
 
 def test_pack_publish_uses_patch(runner: CliRunner, requests_mock) -> None:
@@ -161,6 +170,22 @@ def test_pack_publish_uses_patch(runner: CliRunner, requests_mock) -> None:
     assert '"published": true' in result.output
     assert requests_mock.last_request.method == "PATCH"
     assert requests_mock.last_request.url.endswith("/p1/publish")
+    # F1: sharing_scope is required by the handler; default PRIVATE, upper-cased.
+    assert requests_mock.last_request.json() == {"sharing_scope": "PRIVATE"}
+
+
+def test_pack_publish_sharing_scope_flag(runner: CliRunner, requests_mock) -> None:
+    requests_mock.patch(
+        f"{DATASET_BASE}/api/v1/sdk/prompt-packs/p1/publish", json={"published": True}
+    )
+    result = runner.invoke(cli, ["pack", "publish", "p1", "--sharing-scope", "organization"])
+    assert result.exit_code == 0, result.output
+    assert requests_mock.last_request.json() == {"sharing_scope": "ORGANIZATION"}
+
+
+def test_pack_publish_rejects_unknown_scope(runner: CliRunner) -> None:
+    result = runner.invoke(cli, ["pack", "publish", "p1", "--sharing-scope", "everyone"])
+    assert result.exit_code != 0
 
 
 def test_pack_unpublish_uses_patch(runner: CliRunner, requests_mock) -> None:
@@ -267,7 +292,7 @@ def test_invalid_json_fails_fast(runner: CliRunner) -> None:
 def test_dataset_base_env_override(runner: CliRunner, requests_mock, monkeypatch) -> None:
     """DISSEQT_BASE_URL routes calls to a different host."""
     monkeypatch.setenv("DISSEQT_BASE_URL", "https://custom.example")
-    requests_mock.get("https://custom.example/api/v1/sdk/prompt-packs", json={"data": []})
+    requests_mock.get("https://custom.example/api/v1/sdk/prompt-packs/my-packs", json={"data": []})
     result = runner.invoke(cli, ["pack", "list"])
     assert result.exit_code == 0
 
