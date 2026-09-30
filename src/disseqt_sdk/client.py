@@ -8,6 +8,9 @@ from collections.abc import Mapping
 from typing import Any, Protocol, cast, runtime_checkable
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.exceptions import MaxRetryError, ResponseError
+from urllib3.util.retry import Retry
 
 from disseqt_logging import digest, get_logger
 from disseqt_logging.header_validation import validate_header_value
@@ -21,6 +24,50 @@ from .validators.base import BaseValidator, ThemesClassifierValidator
 from .validators.composite.evaluate import CompositeScoreEvaluator
 
 logger = get_logger(__name__)
+
+
+# Longest server-requested ``Retry-After`` (seconds) we will sit out. validate()
+# runs on the caller's inference path, so a long wait is worse than surfacing
+# the 429 immediately and letting the caller decide.
+_MAX_RETRY_AFTER_S = 5.0
+
+
+class _RateLimitRetry(Retry):
+    """Retry policy for the validator client: HTTP 429 only, bounded wait.
+
+    Connection errors and read timeouts are never retried (a request that may
+    have reached the server could be billed twice), and a ``Retry-After``
+    longer than ``_MAX_RETRY_AFTER_S`` is not waited out -- the 429 is
+    returned to the caller instead.
+    """
+
+    def increment(self, method=None, url=None, response=None, error=None, _pool=None, _stacktrace=None):  # type: ignore[no-untyped-def]
+        if response is not None and response.status == 429:
+            header = response.headers.get("Retry-After")
+            wait = self.parse_retry_after(header) if header else None
+            if wait is not None and wait > _MAX_RETRY_AFTER_S:
+                raise MaxRetryError(_pool, url, ResponseError("Retry-After exceeds cap"))
+        return super().increment(method, url, response, error, _pool, _stacktrace)
+
+
+def _build_session(max_retries: int) -> requests.Session:
+    """One pooled session per Client; retries only HTTP 429 (see _RateLimitRetry)."""
+    session = requests.Session()
+    retry = _RateLimitRetry(
+        total=max_retries,
+        connect=0,
+        read=0,
+        status=max_retries,
+        backoff_factor=0.5,
+        status_forcelist=[429],
+        allowed_methods=frozenset({"POST"}),
+        respect_retry_after_header=True,
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=32)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
 
 
 @runtime_checkable
@@ -216,6 +263,7 @@ class Client:
         application_name: str | None = None,
         realtime_policy_base_url: str = "https://api.disseqt.ai/realtime-validations",
         policies: list[str] | None = None,
+        max_retries: int = 2,
     ) -> None:
         """Initialize the Disseqt SDK client.
 
@@ -225,6 +273,11 @@ class Client:
             base_url: Base URL for the individual-validator API (the
                 ``/sdk/validators/...`` endpoints).
             timeout: Request timeout in seconds
+            max_retries: How many times an HTTP 429 (rate limited) response is
+                retried, honouring ``Retry-After`` (waits longer than a few
+                seconds are not retried). Connection errors, timeouts and 5xx
+                are never retried, so a validator run is never billed twice.
+                ``0`` disables retrying.
             application_name: Logical name of the calling application
                 (e.g. ``"checkout-bot"``). REQUIRED to evaluate policies
                 (a client-level ``policies`` default or per-call
@@ -290,9 +343,22 @@ class Client:
         self.api_key = api_key
         self.base_url = base_url
         self.timeout = timeout
+        if not isinstance(max_retries, int) or isinstance(max_retries, bool) or max_retries < 0:
+            raise ValueError(f"max_retries must be a non-negative int (got {max_retries!r})")
+        self._session = _build_session(max_retries)
         self.application_name = application_name
         self.realtime_policy_base_url = realtime_policy_base_url
         self.policies = default_policies
+
+    def close(self) -> None:
+        """Release the pooled HTTP connections. Safe to call more than once."""
+        self._session.close()
+
+    def __enter__(self) -> Client:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
 
     def _build_headers(self) -> dict[str, str]:
         """Build HTTP headers for API requests.
@@ -592,7 +658,7 @@ class Client:
         started = time.monotonic()
         try:
             # Make the API request
-            response = requests.post(
+            response = self._session.post(
                 url,
                 json=payload,
                 headers=headers,
@@ -719,7 +785,7 @@ class Client:
 
         started = time.monotonic()
         try:
-            http_resp = requests.post(url, json=payload, headers=headers, timeout=self.timeout)
+            http_resp = self._session.post(url, json=payload, headers=headers, timeout=self.timeout)
         except (requests.RequestException, UnicodeEncodeError) as e:
             logger.error(
                 "policy.network_error",
