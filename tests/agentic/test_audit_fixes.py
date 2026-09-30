@@ -255,6 +255,78 @@ class TestResourceGrouping:
         assert {h["X-Project-Id"] for _, h in posts} == {"p1", "p2"}
 
 
+class TestClientOnlySendsItsOwnProject:
+    """M07: a client may only deliver its own project's spans."""
+
+    def _transport(self, project_id="p"):
+        t = HTTPTransport("http://x/v1/traces", api_key="k", project_id=project_id)
+        posts = []
+
+        def fake_post(url, json=None, headers=None, **kw):
+            posts.append((json, headers))
+            r = Mock()
+            r.status_code = 200
+            r.raise_for_status.return_value = None
+            return r
+
+        t.session.post = fake_post
+        return t, posts
+
+    def test_foreign_project_span_is_refused_not_sent(self):
+        t, posts = self._transport("p")
+        result = t.send_spans_classified([_span("own", project_id="p"), _span("x", project_id="q")])
+        assert [s.span_id for s in result.permanent] == ["x"]
+        assert result.retryable == []
+        assert len(posts) == 1
+        assert posts[0][0]["resource"]["attributes"]["project.id"] == "p"
+        assert "q" not in str(posts[0][0])
+
+    def test_all_foreign_makes_no_request(self):
+        t, posts = self._transport("p")
+        result = t.send_spans_classified([_span("x", project_id="q")])
+        assert len(result.permanent) == 1
+        assert posts == []
+        assert t.send_spans([_span("y", project_id="q")]) is False
+
+    def test_foreign_spans_are_not_retained_for_retry(self):
+        t, _ = self._transport("p")
+        assert t.send_spans_with_failures([_span("x", project_id="q")]) == []
+
+    def test_empty_span_project_is_not_foreign(self):
+        t, posts = self._transport("p")
+        assert t.send_spans([_span("e", project_id="")]) is True
+        assert len(posts) == 1
+
+    def test_no_client_project_means_no_check(self):
+        t, posts = self._transport(None)
+        assert t.send_spans([_span("a", project_id="q")]) is True
+        assert len(posts) == 1
+
+    def test_refusal_logged_once_per_foreign_project(self, caplog):
+        import logging
+
+        t, _ = self._transport("p")
+        with caplog.at_level(logging.ERROR):
+            t.send_spans_classified([_span("x1", project_id="q")])
+            t.send_spans_classified([_span("x2", project_id="q")])
+        assert len(t._foreign_projects_logged) == 1
+
+    def test_client_passes_its_project_to_the_transport(self):
+        from disseqt_agentic_sdk import DisseqtAgenticClient
+
+        client = DisseqtAgenticClient(
+            endpoint="http://localhost:1/v1/traces",
+            service_name="svc",
+            api_key="k",
+            project_id="proj-own",
+            application_id="7ce57144-9df6-4fa4-8aad-8cbc1ffdb558",
+        )
+        try:
+            assert client.transport.project_id == "proj-own"
+        finally:
+            client.shutdown()
+
+
 # ---------------------------------------------------------------------------
 # M08: one-way process-wide capture_content
 # ---------------------------------------------------------------------------

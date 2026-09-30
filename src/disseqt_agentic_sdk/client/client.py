@@ -236,6 +236,7 @@ class DisseqtAgenticClient:
             max_retries=max_retries,
             realtime_policy_id=realtime_policy_id,
             application_id=self.application_id,
+            project_id=self.project_id,
         )
 
         # Initialize buffer

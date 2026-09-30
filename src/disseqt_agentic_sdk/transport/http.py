@@ -125,6 +125,7 @@ class HTTPTransport:
         verify_ssl: bool = True,
         realtime_policy_id: str | None = None,
         application_id: str | None = None,
+        project_id: str | None = None,
     ):
         """
         Initialize HTTP transport.
@@ -145,6 +146,11 @@ class HTTPTransport:
                 Kong's traces-auth plugin verifies the header against
                 policy-management before forwarding. When None, the
                 header is not sent (project-only scope, backwards-compat).
+            project_id: The owning client's project. When set, spans whose own
+                ``project_id`` is non-empty and different are never sent: a
+                client may only deliver its own project's spans. They are
+                reported as permanent failures (dropped, not retried) and
+                logged once per foreign project id.
         """
         self.endpoint = endpoint.rstrip("/")
         self.api_key = api_key
@@ -152,6 +158,8 @@ class HTTPTransport:
         self.verify_ssl = verify_ssl
         self.realtime_policy_id = realtime_policy_id
         self.application_id = application_id
+        self.project_id = project_id or None
+        self._foreign_projects_logged: set[str] = set()
         # api_key/application_id don't vary after construction (unlike
         # project_id, validated per-send below in _send_group), so fail
         # fast here. This is the layer that catches a value that reached
@@ -228,6 +236,30 @@ class HTTPTransport:
         permanent: list[EnrichedSpan] = []
         if not spans:
             return SendResult(retryable, permanent)
+
+        # A client may only send its own project's spans. Anything else is a
+        # caller bug (or an attempt to write into another tenant's data), so
+        # it is refused here rather than stamped with, or rewritten to, some
+        # other project. Empty project_id is not "another project".
+        if self.project_id:
+            own: list[EnrichedSpan] = []
+            for span in spans:
+                span_project = str(span.to_dict().get("project_id", "") or "")
+                if span_project and span_project != self.project_id:
+                    permanent.append(span)
+                    if span_project not in self._foreign_projects_logged:
+                        self._foreign_projects_logged.add(span_project)
+                        logger.error(
+                            "Refusing to send span(s): project_id does not match this "
+                            "client's project. A client can only send its own project's "
+                            "spans; these are dropped.",
+                            extra={"span_project_id_len": len(span_project)},
+                        )
+                else:
+                    own.append(span)
+            spans = own
+            if not spans:
+                return SendResult(retryable, permanent)
 
         # Bucket by full resource identity: the payload has ONE resource
         # block (taken from the first span), so grouping by policy alone

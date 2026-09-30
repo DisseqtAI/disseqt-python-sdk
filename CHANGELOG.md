@@ -54,6 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   those helpers ends, same as before this migration; only ``__exit__()``
   clears it, matching the pre-existing, unchanged design.
 
+- **A client only delivers its own project's spans.** ``DisseqtAgenticClient`` now passes its ``project_id`` to the transport; a span carrying a different, non-empty ``project_id`` is refused (logged once per foreign project, dropped, never retried) instead of being sent under another project's identity.
 - **The API key is no longer sent in the trace POST body** (``resource.attributes["api.key"]``). It authenticates via the ``X-Api-Key`` header only. **Requires a server/gateway that authenticates from headers** — deploy the llm-monitoring ingest change first.
 - **``send_trace()`` no longer re-sends spans that ``end()`` already delivered.** A caller using ``with`` blocks (incremental sending) *and* ``send_trace`` used to deliver every span twice with the same ``spanId``. Spans now carry a delivered flag and ``send_trace`` skips them.
 - **SDK audit fixes (agentic + validation SDKs).**
