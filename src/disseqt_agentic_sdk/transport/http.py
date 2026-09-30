@@ -301,12 +301,9 @@ class HTTPTransport:
                     "deployment.environment": span_dict.get("environment", ""),
                     "project.id": span_dict.get("project_id", ""),
                     "ingestion_url": self.endpoint,
-                    # TODO(M06): "api.key" in the body is redundant with the
-                    # X-Api-Key header. Removal is gated on the server-side
-                    # change that stops requiring/echoing it shipping first
-                    # (old-server / new-client compatibility); do not remove
-                    # until that is deployed.
-                    "api.key": self.api_key,
+                    # The API key is deliberately NOT placed in the body: it
+                    # authenticates via the X-Api-Key header only. A body copy
+                    # would be stored/logged as trace resource metadata.
                 }
                 # policy.id is the OTel-style resource attribute
                 # llm-monitoring's validation consumer keys on to route
@@ -392,10 +389,8 @@ class HTTPTransport:
                 # NOT stripped, so a compromised/misconfigured endpoint
                 # that answers with a 301/302/303 to a different host
                 # would otherwise leak the live API key to that host in
-                # plaintext (the JSON body, and its
-                # resource.attributes["api.key"] copy, IS dropped on that
-                # same redirect class -- headers were the one channel the
-                # body-only design never exposed here). This POST is
+                # plaintext (the JSON body is dropped on that same
+                # redirect class, but the header is not). This POST is
                 # internal machine-to-machine trace ingestion; there's no
                 # product reason it should ever need to follow a redirect.
                 allow_redirects=False,

@@ -2,6 +2,7 @@
 Additional tests to achieve 100% coverage.
 """
 
+import json
 import time
 from datetime import datetime, timezone
 from unittest.mock import Mock, patch
@@ -530,9 +531,9 @@ class TestTransportCoverage:
             assert spans[0]["attributes"]["gen_ai.test"] == "value"
             assert spans[0]["attributes"]["agentic.test"] == "value2"
 
-            # Check that API key is in resource attributes
-            assert "api.key" in payload["resource"]["attributes"]
-            assert payload["resource"]["attributes"]["api.key"] == "test-api-key"
+            # The API key authenticates via header only -- never in the body
+            assert "api.key" not in payload["resource"]["attributes"]
+            assert "test-api-key" not in json.dumps(payload)
 
     def test_transport_error_handling(self):
         """Test error handling in send_spans."""

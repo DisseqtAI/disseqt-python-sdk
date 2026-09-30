@@ -54,6 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   those helpers ends, same as before this migration; only ``__exit__()``
   clears it, matching the pre-existing, unchanged design.
 
+- **The API key is no longer sent in the trace POST body** (``resource.attributes["api.key"]``). It authenticates via the ``X-Api-Key`` header only. **Requires a server/gateway that authenticates from headers** — deploy the llm-monitoring ingest change first.
 - **``send_trace()`` no longer re-sends spans that ``end()`` already delivered.** A caller using ``with`` blocks (incremental sending) *and* ``send_trace`` used to deliver every span twice with the same ``spanId``. Spans now carry a delivered flag and ``send_trace`` skips them.
 - **SDK audit fixes (agentic + validation SDKs).**
   - ``uninstrument()`` only drops its client reference when every patch was
