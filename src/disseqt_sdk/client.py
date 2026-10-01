@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Mapping
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from typing import Any, Protocol, cast, runtime_checkable
 
 import requests
@@ -25,6 +26,11 @@ from .validators.composite.evaluate import CompositeScoreEvaluator
 
 logger = get_logger(__name__)
 
+
+# Most policy evaluations run at once. Each one is a separate request that
+# draws from the server's per-API-key rate-limit bucket (burst 20), so this is
+# kept well under that burst. Total request count is unchanged by parallelism.
+_MAX_PARALLEL_POLICIES = 4
 
 # Longest server-requested ``Retry-After`` (seconds) we will sit out. validate()
 # runs on the caller's inference path, so a long wait is worse than surfacing
@@ -581,16 +587,15 @@ class Client:
         )
         envelopes: list[dict[str, Any]] = []
         first_error: Exception | None = None
-        for policy_id in policy_ids:
-            try:
-                envelopes.append(
-                    self._post_policy_evaluate(
-                        policy_id, input_data, application_name, config_input=config_input
-                    )
-                )
-            except SDKVersionBlockedError:
-                raise  # upgrade-required is never a per-policy condition
-            except (HTTPError, ValueError) as exc:
+        for policy_id, (envelope, exc) in zip(
+            policy_ids,
+            self._evaluate_policies(policy_ids, input_data, application_name, config_input),
+            strict=True,
+        ):
+            if exc is None:
+                assert envelope is not None
+                envelopes.append(envelope)
+            else:
                 first_error = first_error or exc
                 envelopes.append(_policy_error_entry(policy_id, exc))
         if first_error is not None and all(_is_error_entry(e) for e in envelopes):
@@ -608,6 +613,78 @@ class Client:
             with_validator=validation is not None,
         )
         return {"validation": validation, "policies": envelopes}
+
+    def _evaluate_policies(
+        self,
+        policy_ids: list[str],
+        input_data: dict[str, Any],
+        application_name: str,
+        config_input: dict[str, Any] | None,
+    ) -> list[tuple[dict[str, Any] | None, Exception | None]]:
+        """Evaluate every policy, up to ``_MAX_PARALLEL_POLICIES`` at a time.
+
+        Returns one ``(envelope, error)`` pair per policy, in the same order as
+        ``policy_ids``. All policies share one overall deadline of
+        ``self.timeout`` seconds (the longest a single call may already take);
+        a policy still running or not yet started when it expires gets a
+        timeout error entry instead of blocking the caller. An upgrade-required
+        (426) from any policy, or an unexpected non-SDK exception, is re-raised.
+        """
+
+        def run(pid: str) -> dict[str, Any]:
+            return self._post_policy_evaluate(
+                pid, input_data, application_name, config_input=config_input
+            )
+
+        results: list[tuple[dict[str, Any] | None, Exception | None]] = [(None, None)] * len(
+            policy_ids
+        )
+
+        if len(policy_ids) == 1:
+            try:
+                results[0] = (run(policy_ids[0]), None)
+            except SDKVersionBlockedError:
+                raise
+            except (HTTPError, ValueError) as exc:
+                results[0] = (None, exc)
+            return results
+
+        deadline = time.monotonic() + self.timeout
+        pool = ThreadPoolExecutor(
+            max_workers=min(_MAX_PARALLEL_POLICIES, len(policy_ids)),
+            thread_name_prefix="disseqt-policy",
+        )
+        try:
+            futures = {pool.submit(run, pid): i for i, pid in enumerate(policy_ids)}
+            pending = set(futures)
+            while pending:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                done, pending = wait(pending, timeout=remaining, return_when=FIRST_COMPLETED)
+                for fut in done:
+                    i = futures[fut]
+                    try:
+                        results[i] = (fut.result(), None)
+                    except SDKVersionBlockedError:
+                        raise
+                    except (HTTPError, ValueError) as exc:
+                        results[i] = (None, exc)
+            for fut in pending:
+                fut.cancel()
+                results[futures[fut]] = (
+                    None,
+                    HTTPError(
+                        status_code=0,
+                        message=f"Policy evaluation exceeded the {self.timeout}s overall deadline",
+                        response_body="",
+                    ),
+                )
+        finally:
+            # Never wait on stragglers: each in-flight request is already bounded
+            # by its own per-request timeout.
+            pool.shutdown(wait=False, cancel_futures=True)
+        return results
 
     def _run_validator(
         self, request: BaseValidator | ThemesClassifierValidator | CompositeScoreEvaluator
