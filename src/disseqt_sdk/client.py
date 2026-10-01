@@ -5,11 +5,16 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Mapping
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from typing import Any, Protocol, cast, runtime_checkable
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.exceptions import MaxRetryError, ResponseError
+from urllib3.util.retry import Retry
 
 from disseqt_logging import digest, get_logger
+from disseqt_logging.header_validation import validate_header_value
 
 from ._version import check_version_notice, sdk_identity_headers
 from .models.composite_score import CompositeScoreRequest
@@ -20,6 +25,55 @@ from .validators.base import BaseValidator, ThemesClassifierValidator
 from .validators.composite.evaluate import CompositeScoreEvaluator
 
 logger = get_logger(__name__)
+
+
+# Most policy evaluations run at once. Each one is a separate request that
+# draws from the server's per-API-key rate-limit bucket (burst 20), so this is
+# kept well under that burst. Total request count is unchanged by parallelism.
+_MAX_PARALLEL_POLICIES = 4
+
+# Longest server-requested ``Retry-After`` (seconds) we will sit out. validate()
+# runs on the caller's inference path, so a long wait is worse than surfacing
+# the 429 immediately and letting the caller decide.
+_MAX_RETRY_AFTER_S = 5.0
+
+
+class _RateLimitRetry(Retry):
+    """Retry policy for the validator client: HTTP 429 only, bounded wait.
+
+    Connection errors and read timeouts are never retried (a request that may
+    have reached the server could be billed twice), and a ``Retry-After``
+    longer than ``_MAX_RETRY_AFTER_S`` is not waited out -- the 429 is
+    returned to the caller instead.
+    """
+
+    def increment(self, method=None, url=None, response=None, error=None, _pool=None, _stacktrace=None):  # type: ignore[no-untyped-def]
+        if response is not None and response.status == 429:
+            header = response.headers.get("Retry-After")
+            wait = self.parse_retry_after(header) if header else None
+            if wait is not None and wait > _MAX_RETRY_AFTER_S:
+                raise MaxRetryError(_pool, url, ResponseError("Retry-After exceeds cap"))
+        return super().increment(method, url, response, error, _pool, _stacktrace)
+
+
+def _build_session(max_retries: int) -> requests.Session:
+    """One pooled session per Client; retries only HTTP 429 (see _RateLimitRetry)."""
+    session = requests.Session()
+    retry = _RateLimitRetry(
+        total=max_retries,
+        connect=0,
+        read=0,
+        status=max_retries,
+        backoff_factor=0.5,
+        status_forcelist=[429],
+        allowed_methods=frozenset({"POST"}),
+        respect_retry_after_header=True,
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=32)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
 
 
 @runtime_checkable
@@ -47,6 +101,16 @@ class HTTPError(Exception):
         self.message = message
         self.response_body = response_body
         super().__init__(f"HTTP {status_code}: {message}")
+
+
+class ResponseDecodeError(HTTPError, ValueError):
+    """The server answered 2xx but the body was not a usable JSON object.
+
+    Subclasses both :class:`HTTPError` (so ``except HTTPError`` catches every
+    failed call) and ``ValueError`` (what this path raised before, so existing
+    handlers keep working). The message names the problem and, where useful,
+    the JSON *type* received -- never the body, which may echo user content.
+    """
 
 
 class SDKVersionBlockedError(HTTPError):
@@ -88,6 +152,19 @@ class SDKVersionBlockedError(HTTPError):
         self.latest = latest
         self.notice = notice
         self.sunset = sunset
+
+
+def _policy_error_entry(policy_id: str, exc: Exception) -> dict[str, Any]:
+    """Per-policy error entry placed in ``policies`` when one evaluation fails."""
+    error: dict[str, Any] = {"type": type(exc).__name__, "message": str(exc)}
+    status_code = getattr(exc, "status_code", None)
+    if status_code is not None:
+        error["status_code"] = status_code
+    return {"policy_id": policy_id, "status": "error", "sdk_error": True, "error": error}
+
+
+def _is_error_entry(envelope: dict[str, Any]) -> bool:
+    return envelope.get("sdk_error") is True
 
 
 def _version_blocked_error(
@@ -192,6 +269,7 @@ class Client:
         application_name: str | None = None,
         realtime_policy_base_url: str = "https://api.disseqt.ai/realtime-validations",
         policies: list[str] | None = None,
+        max_retries: int = 2,
     ) -> None:
         """Initialize the Disseqt SDK client.
 
@@ -201,6 +279,11 @@ class Client:
             base_url: Base URL for the individual-validator API (the
                 ``/sdk/validators/...`` endpoints).
             timeout: Request timeout in seconds
+            max_retries: How many times an HTTP 429 (rate limited) response is
+                retried, honouring ``Retry-After`` (waits longer than a few
+                seconds are not retried). Connection errors, timeouts and 5xx
+                are never retried, so a validator run is never billed twice.
+                ``0`` disables retrying.
             application_name: Logical name of the calling application
                 (e.g. ``"checkout-bot"``). REQUIRED to evaluate policies
                 (a client-level ``policies`` default or per-call
@@ -236,9 +319,10 @@ class Client:
                 caller's list does not affect the client.
 
         Raises:
-            ValueError: When ``policies`` is set without an
-                ``application_name``, or contains a blank / non-string
-                entry.
+            ValueError: When ``project_id`` or ``api_key`` is empty or not
+                safe to send as an HTTP header, when ``policies`` is set
+                without an ``application_name``, or when it contains a blank /
+                non-string entry.
         """
         default_policies: list[str] | None = None
         if policies:
@@ -254,13 +338,33 @@ class Client:
                     "set — the Decisions ledger attributes each decision to "
                     "the calling application"
                 )
+        for _name, _value in (("project_id", project_id), ("api_key", api_key)):
+            if not isinstance(_value, str) or not _value.strip():
+                raise ValueError(f"Client requires a non-empty {_name} (got {_value!r})")
+            # Both travel as HTTP headers. Characters outside Latin-1 make
+            # http.client raise UnicodeEncodeError on every call; newlines are
+            # a header-injection risk. Fail at construction, not at first send.
+            validate_header_value(_value, _name)
         self.project_id = project_id
         self.api_key = api_key
         self.base_url = base_url
         self.timeout = timeout
+        if not isinstance(max_retries, int) or isinstance(max_retries, bool) or max_retries < 0:
+            raise ValueError(f"max_retries must be a non-negative int (got {max_retries!r})")
+        self._session = _build_session(max_retries)
         self.application_name = application_name
         self.realtime_policy_base_url = realtime_policy_base_url
         self.policies = default_policies
+
+    def close(self) -> None:
+        """Release the pooled HTTP connections. Safe to call more than once."""
+        self._session.close()
+
+    def __enter__(self) -> Client:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
 
     def _build_headers(self) -> dict[str, str]:
         """Build HTTP headers for API requests.
@@ -401,6 +505,21 @@ class Client:
 
         Every client-side rule is checked — and raises ``ValueError`` —
         BEFORE any network call is made.
+
+        Partial failure: if one policy's evaluation fails after others
+        succeeded, the earlier envelopes are NOT discarded. The result keeps
+        the stable ``{"validation", "policies"}`` shape and the failed policy
+        appears in ``"policies"`` (in order) as an error entry::
+
+            {"policy_id": "...", "status": "error", "sdk_error": True,
+             "error": {"type": "HTTPError", "status_code": 500, "message": "..."}}
+
+        :func:`disseqt_sdk.policy.is_blocking` / ``any_blocking`` treat an
+        error entry as blocking (fail closed) and ``parse`` returns ``None``
+        for it; use :func:`disseqt_sdk.policy.is_error` to tell it apart from a
+        real BLOCK. If *every* policy fails the original exception is raised
+        (with the ``{"validation", "policies"}`` dict on ``.partial_result``),
+        and :class:`SDKVersionBlockedError` (HTTP 426) always raises.
         """
         # Normalize first: a one-shot iterable (generator) would otherwise
         # be exhausted by validation and silently evaluate zero policies.
@@ -466,18 +585,106 @@ class Client:
         validation: dict[str, Any] | None = (
             self._run_validator(request) if isinstance(request, BaseValidator) else None
         )
-        envelopes = [
-            self._post_policy_evaluate(
-                policy_id, input_data, application_name, config_input=config_input
-            )
-            for policy_id in policy_ids
-        ]
+        envelopes: list[dict[str, Any]] = []
+        first_error: Exception | None = None
+        for policy_id, (envelope, exc) in zip(
+            policy_ids,
+            self._evaluate_policies(policy_ids, input_data, application_name, config_input),
+            strict=True,
+        ):
+            if exc is None:
+                assert envelope is not None
+                envelopes.append(envelope)
+            else:
+                first_error = first_error or exc
+                envelopes.append(_policy_error_entry(policy_id, exc))
+        if first_error is not None and all(_is_error_entry(e) for e in envelopes):
+            # Nothing succeeded, so there is no decision to preserve: keep the
+            # historical behaviour of raising. The validator result (if any)
+            # rides along so it is not lost either.
+            first_error.partial_result = {  # type: ignore[attr-defined]
+                "validation": validation,
+                "policies": envelopes,
+            }
+            raise first_error
         logger.info(
             "validation.policies",
             policy_count=len(envelopes),
             with_validator=validation is not None,
         )
         return {"validation": validation, "policies": envelopes}
+
+    def _evaluate_policies(
+        self,
+        policy_ids: list[str],
+        input_data: dict[str, Any],
+        application_name: str,
+        config_input: dict[str, Any] | None,
+    ) -> list[tuple[dict[str, Any] | None, Exception | None]]:
+        """Evaluate every policy, up to ``_MAX_PARALLEL_POLICIES`` at a time.
+
+        Returns one ``(envelope, error)`` pair per policy, in the same order as
+        ``policy_ids``. All policies share one overall deadline of
+        ``self.timeout`` seconds (the longest a single call may already take);
+        a policy still running or not yet started when it expires gets a
+        timeout error entry instead of blocking the caller. An upgrade-required
+        (426) from any policy, or an unexpected non-SDK exception, is re-raised.
+        """
+
+        def run(pid: str) -> dict[str, Any]:
+            return self._post_policy_evaluate(
+                pid, input_data, application_name, config_input=config_input
+            )
+
+        results: list[tuple[dict[str, Any] | None, Exception | None]] = [(None, None)] * len(
+            policy_ids
+        )
+
+        if len(policy_ids) == 1:
+            try:
+                results[0] = (run(policy_ids[0]), None)
+            except SDKVersionBlockedError:
+                raise
+            except (HTTPError, ValueError) as exc:
+                results[0] = (None, exc)
+            return results
+
+        deadline = time.monotonic() + self.timeout
+        pool = ThreadPoolExecutor(
+            max_workers=min(_MAX_PARALLEL_POLICIES, len(policy_ids)),
+            thread_name_prefix="disseqt-policy",
+        )
+        try:
+            futures = {pool.submit(run, pid): i for i, pid in enumerate(policy_ids)}
+            pending = set(futures)
+            while pending:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                done, pending = wait(pending, timeout=remaining, return_when=FIRST_COMPLETED)
+                for fut in done:
+                    i = futures[fut]
+                    try:
+                        results[i] = (fut.result(), None)
+                    except SDKVersionBlockedError:
+                        raise
+                    except (HTTPError, ValueError) as exc:
+                        results[i] = (None, exc)
+            for fut in pending:
+                fut.cancel()
+                results[futures[fut]] = (
+                    None,
+                    HTTPError(
+                        status_code=0,
+                        message=f"Policy evaluation exceeded the {self.timeout}s overall deadline",
+                        response_body="",
+                    ),
+                )
+        finally:
+            # Never wait on stragglers: each in-flight request is already bounded
+            # by its own per-request timeout.
+            pool.shutdown(wait=False, cancel_futures=True)
+        return results
 
     def _run_validator(
         self, request: BaseValidator | ThemesClassifierValidator | CompositeScoreEvaluator
@@ -528,13 +735,13 @@ class Client:
         started = time.monotonic()
         try:
             # Make the API request
-            response = requests.post(
+            response = self._session.post(
                 url,
                 json=payload,
                 headers=headers,
                 timeout=self.timeout,
             )
-        except requests.RequestException as e:
+        except (requests.RequestException, UnicodeEncodeError) as e:
             latency_ms = round((time.monotonic() - started) * 1000, 1)
             logger.error(
                 "validation.network_error",
@@ -578,9 +785,6 @@ class Client:
         # Parse JSON response
         try:
             server_response_raw = response.json()
-            if server_response_raw is None:
-                raise ValueError("Server returned null/empty JSON response")
-            server_response = cast(dict[str, Any], server_response_raw)
         except json.JSONDecodeError as e:
             logger.error(
                 "validation.decode_error",
@@ -590,9 +794,25 @@ class Client:
                 latency_ms=latency_ms,
                 exc_info=True,
             )
-            raise ValueError(
-                f"Failed to decode JSON response: {e}. Response text: {response.text[:200]}"
+            # The body may echo user prompts / PII: log and report only a digest.
+            raise ResponseDecodeError(
+                status_code=response.status_code,
+                message=(
+                    f"Failed to decode JSON response: {e}. "
+                    f"Response body: {digest(response.text or '')}"
+                ),
+                response_body="",
             ) from e
+        if not isinstance(server_response_raw, dict):
+            raise ResponseDecodeError(
+                status_code=response.status_code,
+                message=(
+                    "Server returned an unexpected JSON "
+                    f"{type(server_response_raw).__name__} response; expected an object"
+                ),
+                response_body="",
+            )
+        server_response = cast(dict[str, Any], server_response_raw)
 
         logger.info(
             "validation.response",
@@ -642,8 +862,8 @@ class Client:
 
         started = time.monotonic()
         try:
-            http_resp = requests.post(url, json=payload, headers=headers, timeout=self.timeout)
-        except requests.RequestException as e:
+            http_resp = self._session.post(url, json=payload, headers=headers, timeout=self.timeout)
+        except (requests.RequestException, UnicodeEncodeError) as e:
             logger.error(
                 "policy.network_error",
                 policy_id=policy_id,
@@ -678,9 +898,23 @@ class Client:
         try:
             data = http_resp.json()
         except json.JSONDecodeError as e:
-            raise ValueError(
-                f"Failed to decode policy response: {e}. Body: {http_resp.text[:200]}"
+            raise ResponseDecodeError(
+                status_code=http_resp.status_code,
+                message=(
+                    f"Failed to decode policy response: {e}. "
+                    f"Response body: {digest(http_resp.text or '')}"
+                ),
+                response_body="",
             ) from e
+        if not isinstance(data, dict):
+            raise ResponseDecodeError(
+                status_code=http_resp.status_code,
+                message=(
+                    "Server returned an unexpected JSON "
+                    f"{type(data).__name__} policy response; expected an object"
+                ),
+                response_body="",
+            )
         logger.info(
             "policy.response",
             policy_id=policy_id,

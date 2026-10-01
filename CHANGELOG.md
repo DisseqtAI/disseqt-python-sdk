@@ -54,6 +54,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   those helpers ends, same as before this migration; only ``__exit__()``
   clears it, matching the pre-existing, unchanged design.
 
+- **``disseqt_sdk.Client`` reuses one pooled ``requests.Session`` and retries HTTP 429.** ``validate()`` previously made a fresh connection per call and never retried. It now retries only 429 (default 2 retries, ``max_retries=0`` disables), honouring ``Retry-After`` up to 5 s -- a longer wait is not sat out and the 429 is raised. Connection errors, timeouts and 5xx are never retried, so a validator run cannot be billed twice. Added ``Client.close()`` and ``with Client(...)`` support.
+- **``DisseqtAPIClient`` no longer lets a non-object JSON body through or echoes the response body in errors.** A 2xx whose body is a list/number/string (e.g. a gateway error page) used to be returned as if it were the response; it now raises ``ResponseDecodeError`` naming the type received. A body that fails to decode no longer puts up to 200 characters of the raw text (which may contain user data) into the exception message -- a digest is reported instead. ``ResponseDecodeError`` (an ``HTTPError`` *and* ``ValueError``, so existing handlers keep working) is now exported from ``disseqt_sdk``.
+- **``validate(..., policies=[...])`` evaluates policies in parallel, under one deadline.** Policies were evaluated one after another (N policies = N sequential round trips, with no overall bound). They now run up to 4 at a time (kept under the server's per-API-key rate-limit burst; total request count is unchanged), results stay in the order of ``policies``, and the whole evaluation shares a single deadline equal to the client ``timeout`` -- a policy still running or not yet started when it expires becomes an error entry (``status_code`` 0, fail-closed) instead of blocking the caller.
+- **A client only delivers its own project's spans.** ``DisseqtAgenticClient`` now passes its ``project_id`` to the transport; a span carrying a different, non-empty ``project_id`` is refused (logged once per foreign project, dropped, never retried) instead of being sent under another project's identity.
+- **The API key is no longer sent in the trace POST body** (``resource.attributes["api.key"]``). It authenticates via the ``X-Api-Key`` header only. **Requires a server/gateway that authenticates from headers** — deploy the llm-monitoring ingest change first.
+- **``send_trace()`` no longer re-sends spans that ``end()`` already delivered.** A caller using ``with`` blocks (incremental sending) *and* ``send_trace`` used to deliver every span twice with the same ``spanId``. Spans now carry a delivered flag and ``send_trace`` skips them.
+- **SDK audit fixes (agentic + validation SDKs).**
+  - ``uninstrument()`` only drops its client reference when every patch was
+    actually unwound (a wrapper buried under another library's keeps working),
+    and all provider wrappers now fail soft: if the span cannot be opened they
+    call the provider directly instead of raising into the user's LLM call.
+  - Span attributes that are not JSON-serialisable (datetime, set, bytes,
+    circular refs, ...) no longer abort span delivery; the offending attribute
+    is coerced or dropped, never the span.
+  - Trace POSTs are now actually retried on 429/5xx (``POST`` was excluded
+    from urllib3's retry allow-list) and honour ``Retry-After``. Spans the
+    server rejects permanently (4xx other than 408/429) are dropped with one
+    log line instead of being re-POSTed forever. Spans are grouped per POST by
+    full resource identity (project, service name/version, environment,
+    policy) rather than by policy alone.
+  - ``set_capture_content(True)`` can no longer re-enable content capture
+    process-wide after any caller turned it off; it only applies to the calling
+    context.
+  - ``DisseqtAgenticClient.shutdown()`` closes the HTTP session, unregisters its
+    ``atexit`` hook and stops the flush thread promptly.
+  - ``disseqt_sdk.Client`` rejects empty / header-unsafe ``api_key`` and
+    ``project_id`` at construction, wraps ``UnicodeEncodeError`` as
+    ``HTTPError(status_code=0)``, and raises ``ResponseDecodeError`` (an
+    ``HTTPError`` *and* ``ValueError``) for non-object JSON; response bodies are
+    no longer echoed into error messages (a digest is used instead).
+  - ``validate(..., policies=[...])``: when one policy fails after others
+    succeeded, earlier envelopes are kept and the failed policy appears as an
+    error entry (``{"policy_id", "status": "error", "sdk_error": True,
+    "error": {...}}``). ``is_blocking`` / ``any_blocking`` treat it as BLOCK
+    (fail closed); new ``is_error()`` helper. If every policy fails the original
+    exception is still raised. **Behaviour change** for callers that relied on an
+    exception for a partial failure.
+  - Auth-failure stderr banner is throttled (first failure, then exponentially
+    growing intervals, reset on success). Min-version gating uses
+    ``packaging.version`` when available. ``EnrichedSpan`` round-trips
+    ``realtime_policy_id``. Span logging uses the package logger. Log redaction
+    now recurses into dict/list/tuple/set fields and redacts exception text.
 - **``CreateRunRequest.run_name`` now actually reaches the server.** Since
   this SDK's first release, ``to_payload()`` sent the run name under the
   key ``"run_name"``, but the backend has only ever bound

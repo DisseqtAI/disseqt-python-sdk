@@ -8,7 +8,6 @@ agent actions, and tool calls.
 import asyncio
 import contextlib
 import inspect
-import json
 from collections.abc import Callable, Iterator
 from functools import wraps
 from typing import Any
@@ -21,6 +20,7 @@ from disseqt_agentic_sdk.instrumentation._utils import (
     set_messages_if_capturing,
 )
 from disseqt_agentic_sdk.semantics import AgenticAttributes, AgenticOperation
+from disseqt_agentic_sdk.utils.serialization import json_safe as _json_safe
 
 
 def _extract_llm_input_messages(
@@ -78,26 +78,6 @@ def _extract_tool_args(
     if not bound.arguments:
         return None
     return dict(bound.arguments)
-
-
-def _json_safe(value: Any) -> Any:
-    """
-    Coerce arbitrary tool return values into something the span's
-    ``attributes_json`` serializer can handle. Pass primitives / lists
-    / dicts through; fall back to ``str()`` for objects that don't
-    round-trip through ``json.dumps`` (pydantic models, ORM rows,
-    custom classes). Never raises — worst case yields ``repr()``.
-    """
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    try:
-        json.dumps(value)
-        return value
-    except (TypeError, ValueError):
-        try:
-            return str(value)
-        except Exception:
-            return repr(value)
 
 
 def _extract_llm_output_messages(

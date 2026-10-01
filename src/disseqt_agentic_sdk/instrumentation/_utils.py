@@ -171,11 +171,20 @@ def set_capture_content(enabled: bool) -> None:
     (model, tokens, duration, tool names/ids, finish reasons) is always
     captured regardless.
 
+    Privacy is one-way at process scope: once ANY caller has set ``False``
+    (or ``DISSEQT_SDK_CAPTURE_CONTENT`` is off), a later ``True`` only takes
+    effect in the context that made the call — a fresh thread / task that
+    never called this itself keeps reading ``False``. Capturing content is
+    the riskier direction, so a stray ``set_capture_content(True)`` must not
+    silently re-enable it process-wide. Re-enabling process-wide requires a
+    restart (or the env var).
+
     Scope: writes into BOTH the current ``contextvars`` context (so two
     concurrent, opposing callers stay isolated from each other — each
     keeps reading its own explicitly-set value no matter what another
-    thread/task sets) AND a process-wide fallback default that any
-    thread/task which never calls this itself will read.
+    thread/task sets) AND a process-wide fallback default (see the
+    one-way rule above) that any thread/task which never calls this itself
+    will read.
 
     What that fallback does and does NOT cover — read this before relying
     on it for a compliance-critical deployment:
@@ -212,7 +221,10 @@ def set_capture_content(enabled: bool) -> None:
     _capture_content.set(enabled)
     with _capture_content_default_lock:
         global _capture_content_default
-        _capture_content_default = enabled
+        # One-way for privacy: a process-wide "off" is never lifted by a
+        # later set_capture_content(True) elsewhere (another module, a
+        # library, a test helper). Only the calling context honors that True.
+        _capture_content_default = _capture_content_default and enabled
 
 
 def get_capture_content() -> bool:
@@ -222,9 +234,9 @@ def get_capture_content() -> bool:
     Reads the current context's own explicitly-set value if
     ``set_capture_content()`` was ever called on this context (or one it
     was copied/derived from); otherwise falls back to the process-wide
-    default most recently set by any caller, so a fresh thread/task that
-    never called ``set_capture_content()`` itself still honors a toggle
-    configured elsewhere (e.g. at startup).
+    process-wide default (off once anyone turned it off), so a fresh
+    thread/task that never called ``set_capture_content()`` itself still
+    honors a toggle configured elsewhere (e.g. at startup).
     """
     value = _capture_content.get(_UNSET)
     if isinstance(value, bool):
@@ -331,6 +343,27 @@ def open_llm_span(
     trace, owns_trace = _get_or_bootstrap_trace(client, name)
     span = trace.start_span(name, kind)
     return _SpanScope(span=span, trace=trace, owns_trace=owns_trace)
+
+
+def try_open_llm_span(
+    instrumentor: Any,
+    name: str,
+    kind: SpanKind | str = SpanKind.MODEL_EXEC,
+) -> _SpanScope | None:
+    """
+    Fail-soft variant of ``open_llm_span`` for provider wrappers.
+
+    Resolves ``instrumentor.client`` (which raises once the instrumentor
+    was uninstrumented but a wrapper is still live in the call chain) and
+    opens the span, all under ``try``. On any failure returns ``None`` and
+    the wrapper must call the wrapped function directly, so telemetry
+    problems never break the user's LLM call.
+    """
+    try:
+        return open_llm_span(instrumentor.client, name, kind)
+    except Exception as e:
+        _logger.debug(f"could not open span {name!r}; calling provider directly: {e}")
+        return None
 
 
 def read(obj: Any, name: str) -> Any:
