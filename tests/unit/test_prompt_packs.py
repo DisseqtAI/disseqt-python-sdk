@@ -755,3 +755,48 @@ class TestDisseqtAPIClientErrors:
             api_client.generate_prompt_pack(generate_request)
 
         assert len(exc_info.value.response_body) == 512
+
+
+class TestMalformedResponseHandling:
+    """M12: wrong-shaped / undecodable 2xx bodies raise a clear SDK error and
+    never echo the raw body into the exception message."""
+
+    @pytest.mark.parametrize(
+        "body,type_name",
+        [('["service", "unavailable"]', "list"), ("42", "int"), ('"ok"', "str")],
+    )
+    def test_non_object_json_raises_instead_of_leaking_through(
+        self, requests_mock, api_client, generate_request, body, type_name
+    ):
+        from disseqt_sdk import HTTPError, ResponseDecodeError
+
+        requests_mock.post(f"{PREFIX}/generate", text=body)
+
+        with pytest.raises(ResponseDecodeError) as ei:
+            api_client.generate_prompt_pack(generate_request)
+
+        assert type_name in str(ei.value)
+        # Catchable the old way (ValueError) and as the SDK's own HTTPError.
+        assert isinstance(ei.value, ValueError) and isinstance(ei.value, HTTPError)
+        assert ei.value.status_code == 200
+
+    def test_decode_error_does_not_echo_response_body(
+        self, requests_mock, api_client, generate_request
+    ):
+        from disseqt_sdk import ResponseDecodeError
+
+        leaked = "patient Jane Doe jane.doe@example.com MRN 48213"
+        requests_mock.post(f"{PREFIX}/generate", text=f"<html>Error for {leaked}</html>")
+
+        with pytest.raises(ResponseDecodeError) as ei:
+            api_client.generate_prompt_pack(generate_request)
+
+        message = str(ei.value)
+        assert "Failed to decode JSON response" in message
+        for fragment in ("Jane Doe", "jane.doe@example.com", "48213"):
+            assert fragment not in message
+        assert ei.value.response_body == ""
+
+    def test_valid_object_still_returned(self, requests_mock, api_client, generate_request):
+        requests_mock.post(f"{PREFIX}/generate", json={"id": "pack-1"})
+        assert api_client.generate_prompt_pack(generate_request) == {"id": "pack-1"}
