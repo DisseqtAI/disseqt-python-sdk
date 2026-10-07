@@ -7,22 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed (breaking, agentic SDK only)
-- **`DisseqtAgenticClient` no longer accepts `project_id`.** Kong resolves
-  the owning project (plus org + user) server-side from `api_key` alone
-  via auth-svc's `validate-api-key` endpoint (`user_api_keys` has a
-  `UNIQUE (api_key_hash)` index — the api_key is a deterministic pointer
-  to exactly one project). Passing `project_id=` now raises
-  `TypeError: unexpected keyword argument 'project_id'`.
-  - Removed the `project.id` resource attribute from the OTLP payload.
+### Changed (agentic SDK only, backward-compatible)
+- **`project_id` on `DisseqtAgenticClient` is now optional.** Kong 2.1.1+
+  resolves the owning project (plus org + user) server-side from
+  `api_key` alone via auth-svc's `validate-api-key` endpoint
+  (`user_api_keys` has a `UNIQUE (api_key_hash)` index — the api_key is a
+  deterministic pointer to exactly one project), so new call sites can
+  omit `project_id=`. Deployments on older Kong plugin versions that
+  still require `project.id` in the OTLP body keep working unchanged:
+  pass `project_id=...` and it is stamped onto every payload as the
+  `project.id` resource attribute and the `X-Project-Id` request header,
+  exactly as before.
   - `DisseqtTrace`, `DisseqtSpan`, and `EnrichedSpan` no longer carry a
-    `project_id` field.
-  - Migration: delete the `project_id=` line from your
-    `DisseqtAgenticClient(...)` call site. No other change needed —
-    `application_id`, `api_key`, `service_name`, `realtime_policy_id`
-    still work exactly as before. Old span data in the backend is
-    unaffected; new spans arrive with project_id stamped by Kong at
-    ingest.
+    per-span `project_id` field — those were never read anywhere beyond
+    the resource-level stamp; the client-level kwarg is the single
+    source of truth.
+  - No code change required at any existing call site. New call sites
+    may choose to drop `project_id=` once their deployment runs
+    Kong 2.1.1+.
 
 ### Fixed
 - **``CreateRunRequest.run_name`` now actually reaches the server.** Since

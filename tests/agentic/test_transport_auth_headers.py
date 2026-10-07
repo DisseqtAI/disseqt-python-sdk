@@ -171,3 +171,24 @@ class TestHeaderFirstIdentity:
         _, kwargs = _post_call(transport)
 
         assert "X-Api-Key" not in kwargs["headers"]
+
+    def test_project_id_stamps_header_and_body_when_supplied(self):
+        """
+        A caller running on a pre-2.1.1 Kong plugin can still pass
+        ``project_id=...`` to the transport, and when they do, it
+        appears both as the ``X-Project-Id`` request header AND the
+        ``project.id`` resource attribute — the shape those older
+        plugin versions require. This locks in the forward-compat
+        shim so the "optional project_id" rollout can't silently
+        regress to the dropped-entirely form.
+        """
+        transport = HTTPTransport(
+            endpoint="https://api.disseqt.ai/agentic-monitoring/api/v1/traces",
+            api_key="secret-key-42",
+            application_id="7ce57144-9df6-4fa4-8aad-8cbc1ffdb558",
+            project_id="proj-stamp-me",
+        )
+        _, kwargs = _post_call(transport)
+
+        assert kwargs["headers"]["X-Project-Id"] == "proj-stamp-me"
+        assert kwargs["json"]["resource"]["attributes"]["project.id"] == "proj-stamp-me"

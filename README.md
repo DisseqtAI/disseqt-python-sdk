@@ -74,6 +74,7 @@ client = DisseqtAgenticClient(
     service_name="my-service",
     endpoint="http://localhost:8080/v1/traces",
     application_id="your-application-uuid",
+    # project_id="proj_456",  # optional — only needed on pre-2.1.1 Kong
 )
 
 # Create a trace with multiple spans

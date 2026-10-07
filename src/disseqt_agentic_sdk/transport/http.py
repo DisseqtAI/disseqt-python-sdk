@@ -74,6 +74,7 @@ class HTTPTransport:
         verify_ssl: bool = True,
         realtime_policy_id: str | None = None,
         application_id: str | None = None,
+        project_id: str | None = None,
     ):
         """
         Initialize HTTP transport.
@@ -94,6 +95,11 @@ class HTTPTransport:
                 Kong's traces-auth plugin verifies the header against
                 policy-management before forwarding. When None, the
                 header is not sent (project-only scope, backwards-compat).
+            project_id: Optional project UUID. When set, stamped onto
+                every payload as the ``project.id`` resource attribute
+                and the ``X-Project-Id`` request header — the shape
+                pre-Kong-2.1.1 plugins require. When None, neither is
+                sent (current Kong resolves project from ``api_key``).
         """
         self.endpoint = endpoint.rstrip("/")
         self.api_key = api_key
@@ -101,15 +107,19 @@ class HTTPTransport:
         self.verify_ssl = verify_ssl
         self.realtime_policy_id = realtime_policy_id
         self.application_id = application_id
-        # api_key/application_id don't vary after construction, so fail
-        # fast here. This is the layer that catches a value that reached
-        # HTTPTransport WITHOUT going through DisseqtAgenticClient's own
-        # (earlier, friendlier) validation -- e.g. HTTPTransport
-        # constructed directly, as this module's own test suite does.
+        self.project_id = project_id
+        # api_key/application_id/project_id don't vary after construction,
+        # so fail fast here. This is the layer that catches a value that
+        # reached HTTPTransport WITHOUT going through
+        # DisseqtAgenticClient's own (earlier, friendlier) validation --
+        # e.g. HTTPTransport constructed directly, as this module's own
+        # test suite does.
         if self.api_key:
             validate_header_value(self.api_key, "api_key")
         if self.application_id:
             validate_header_value(self.application_id, "application_id")
+        if self.project_id:
+            validate_header_value(self.project_id, "project_id")
 
         # Setup session with retry strategy
         self.session = requests.Session()
@@ -220,6 +230,12 @@ class HTTPTransport:
                     "ingestion_url": self.endpoint,
                     "api.key": self.api_key,
                 }
+                # project.id is only required by pre-2.1.1 Kong plugin
+                # versions. Current Kong resolves the project from
+                # api_key, so new clients can omit it; we still stamp it
+                # when supplied so old-plugin deployments keep working.
+                if self.project_id:
+                    resource_attrs["project.id"] = self.project_id
                 # policy.id is the OTel-style resource attribute
                 # llm-monitoring's validation consumer keys on to route
                 # the span through policy-driven evaluation. Only emit
@@ -262,6 +278,11 @@ class HTTPTransport:
         # above is unaffected — that's the existing body-side contract.
         if self.api_key:
             headers["X-Api-Key"] = self.api_key
+        # X-Project-Id: only sent when the caller explicitly supplied a
+        # project_id (pre-Kong-2.1.1 compatibility shim). Current Kong
+        # resolves it from X-Api-Key — don't send an empty header value.
+        if self.project_id:
+            headers["X-Project-Id"] = self.project_id
         try:
             response = self.session.post(
                 self.endpoint,

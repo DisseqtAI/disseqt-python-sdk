@@ -120,6 +120,7 @@ class DisseqtAgenticClient:
         realtime_policy_id: str | None = None,
         *,
         application_id: str = _MISSING_APPLICATION_ID,  # type: ignore[assignment]
+        project_id: str | None = None,
     ):
         """
         Initialize SDK client.
@@ -128,7 +129,9 @@ class DisseqtAgenticClient:
             api_key: API key for authentication (required). Kong resolves
                 the owning project + org + user from this alone via
                 auth-svc's validate-api-key endpoint (user_api_keys has
-                UNIQUE (api_key_hash)); no project_id needs to be passed.
+                UNIQUE (api_key_hash)); ``project_id`` is only needed on
+                deployments running a Kong plugin version that still
+                requires it in the OTLP body.
             service_name: Service name (required)
             endpoint: Backend API endpoint URL (required, default: https://api.disseqt.ai/agentic-monitoring/api/v1/traces)
             service_version: Service version
@@ -147,6 +150,15 @@ class DisseqtAgenticClient:
                 / empty / whitespace-only raises ``ValueError``
                 immediately at construction rather than silently
                 dropping every telemetry POST at flush time.
+            project_id: Optional project UUID. Pre-Kong-2.1.1 the OTLP
+                ``resource.attributes["project.id"]`` was mandatory and
+                this kwarg was required; current Kong resolves the
+                project from ``api_key`` server-side, so this is now
+                optional. When supplied, it is stamped onto every
+                outgoing payload (as the ``project.id`` resource
+                attribute and the ``X-Project-Id`` request header) so
+                older Kong plugin versions keep working. When omitted,
+                neither is sent.
             realtime_policy_id: Optional realtime-policy UUID. When set,
                 every span emitted by this client carries it as the
                 ``policy.id`` resource attribute, which is the contract
@@ -205,6 +217,10 @@ class DisseqtAgenticClient:
         self.service_version = service_version
         self.environment = environment
         self.realtime_policy_id = realtime_policy_id
+        # Treat empty / whitespace-only project_id as unset — don't
+        # validate, don't send. The validated-and-stamped path only
+        # fires when the caller explicitly provides a non-empty value.
+        self.project_id: str | None = project_id.strip() if project_id and project_id.strip() else None
         self.application_id = application_id.strip()
         # Fail-fast on a value whose characters would break HTTP header
         # encoding at send time (CRLF injection risk, non-Latin-1 codepoints
@@ -220,6 +236,8 @@ class DisseqtAgenticClient:
         # fail-fast-and-loud layer for the common path, not the only layer.
         _validate_header_value(self.api_key, "api_key")
         _validate_header_value(self.application_id, "application_id")
+        if self.project_id:
+            _validate_header_value(self.project_id, "project_id")
 
         # Initialize transport
         self.transport = HTTPTransport(
@@ -228,6 +246,7 @@ class DisseqtAgenticClient:
             max_retries=max_retries,
             realtime_policy_id=realtime_policy_id,
             application_id=self.application_id,
+            project_id=self.project_id,
         )
 
         # Initialize buffer
