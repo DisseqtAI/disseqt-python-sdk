@@ -1,0 +1,15 @@
+# Secret-scanning config for gitleaks. Extends the built-in rule set; add
+# allowlist paths only for verified NON-secret fixtures/examples.
+#
+# NOTE: gitleaks 8.24.x (pinned in .github/workflows/gitleaks.yml) silently
+# ignores the plural `[[allowlists]]` array-of-tables syntax when combined with
+# an extended default config. Only the singular `[allowlist]` block reliably
+# takes effect. Keep this consolidated until CI upgrades to 8.30+.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known non-secret example/template env files."
+paths = [
+  '''(^|/)[^/]*\.env\.(example|sample|template)$''',
+]

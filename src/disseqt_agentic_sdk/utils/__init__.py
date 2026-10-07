@@ -15,6 +15,7 @@ from .time import (
     to_timestamp_ms,
     to_timestamp_ns,
 )
+from .validation import validate_header_value
 
 __all__ = [
     "generate_trace_id",
@@ -28,4 +29,5 @@ __all__ = [
     "calculate_duration_ns",
     "get_logger",
     "set_log_level",
+    "validate_header_value",
 ]

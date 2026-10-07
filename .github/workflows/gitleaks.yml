@@ -1,0 +1,52 @@
+name: gitleaks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # Weekly full-history backstop. The incremental scan below only ever
+    # looks at new commits — nothing here re-checks history a broken or
+    # skipped incremental run might have missed.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+jobs:
+  gitleaks:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz | tar xz
+          sudo mv gitleaks /usr/local/bin/
+      - name: Run gitleaks
+        run: |
+          EVENT="${{ github.event_name }}"
+          if [ "$EVENT" = "pull_request" ]; then
+            RANGE="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+          elif [ "$EVENT" = "schedule" ] || [ "$EVENT" = "workflow_dispatch" ]; then
+            RANGE=""
+          else
+            BEFORE="${{ github.event.before }}"
+            if [[ "$BEFORE" =~ ^0+$ ]]; then
+              # New ref, no prior push to diff against (e.g. main recreated
+              # after a history rewrite). A self-diff against the branch we
+              # just pushed would always be empty and silently "pass" —
+              # scan the whole ref instead.
+              RANGE=""
+            else
+              RANGE="${BEFORE}..${{ github.sha }}"
+            fi
+          fi
+          if [ -n "$RANGE" ]; then
+            echo "Scanning range: $RANGE"
+            gitleaks detect --source . --redact --no-banner --config .gitleaks.toml --log-opts="$RANGE"
+          else
+            echo "Scanning full history"
+            gitleaks detect --source . --redact --no-banner --config .gitleaks.toml
+          fi
