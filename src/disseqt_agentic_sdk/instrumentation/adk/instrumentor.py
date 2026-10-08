@@ -84,21 +84,49 @@ class AdkInstrumentor(DisseqtInstrumentor):
             "BaseAgent.run_async",
             agent_run_async(self),
         )
-        self._wrap(
-            "google.adk.tools.base_tool",
-            "BaseTool.run_async",
-            tool_run_async(self),
-        )
-        self._wrap(
-            "google.adk.models.base_llm",
-            "BaseLlm.generate_content_async",
-            llm_generate_content_async(self),
-        )
-        self._wrap(
-            "google.adk.memory.base_memory_service",
-            "BaseMemoryService.search_memory",
-            memory_search_memory(self),
-        )
+        # Base-class patches alone miss every concrete subclass that
+        # OVERRIDES the method — FunctionTool.run_async, AgentTool.run_async,
+        # Gemini.generate_content_async, LiteLlm.generate_content_async,
+        # InMemoryMemoryService.search_memory all override and so the
+        # base BaseTool.run_async / BaseLlm.generate_content_async /
+        # BaseMemoryService.search_memory wrappers never fire against a
+        # real InMemoryRunner. Patch each concrete class the shipping
+        # ADK exposes alongside the base so the common path is covered;
+        # the base patch stays as a backstop for custom subclasses that
+        # DO call ``super()``. TP-2128 round-3 PR #33 review.
+        tool_wrapper = tool_run_async(self)
+        for module, attr in (
+            ("google.adk.tools.base_tool", "BaseTool.run_async"),
+            ("google.adk.tools.function_tool", "FunctionTool.run_async"),
+            ("google.adk.tools.agent_tool", "AgentTool.run_async"),
+            ("google.adk.tools.long_running_tool", "LongRunningFunctionTool.run_async"),
+        ):
+            self._wrap(module, attr, tool_wrapper)
+
+        llm_wrapper = llm_generate_content_async(self)
+        for module, attr in (
+            ("google.adk.models.base_llm", "BaseLlm.generate_content_async"),
+            ("google.adk.models.google_llm", "Gemini.generate_content_async"),
+            ("google.adk.models.lite_llm", "LiteLlm.generate_content_async"),
+            ("google.adk.models.anthropic_llm", "Claude.generate_content_async"),
+        ):
+            self._wrap(module, attr, llm_wrapper)
+
+        memory_wrapper = memory_search_memory(self)
+        for module, attr in (
+            ("google.adk.memory.base_memory_service", "BaseMemoryService.search_memory"),
+            ("google.adk.memory.in_memory_memory_service", "InMemoryMemoryService.search_memory"),
+            (
+                "google.adk.memory.vertex_ai_rag_memory_service",
+                "VertexAiRagMemoryService.search_memory",
+            ),
+            (
+                "google.adk.memory.vertex_ai_memory_bank_service",
+                "VertexAiMemoryBankService.search_memory",
+            ),
+        ):
+            self._wrap(module, attr, memory_wrapper)
+
         self._wrap(
             "google.adk.agents.remote_a2a_agent",
             "RemoteA2aAgent._run_async_impl",

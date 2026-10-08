@@ -3,6 +3,15 @@ Context management for active traces and spans.
 
 Uses thread-local storage to track the current trace and span,
 enabling automatic parent-child relationships.
+
+Note: for ADK-style concurrent asyncio workloads (two
+``asyncio.gather(runner_a.run_async(), runner_b.run_async())``
+calls on one event loop), the ADK instrumentor captures parent
+trace/span EXPLICITLY at wrap-call time and parents its own
+spans off that captured snapshot — see
+``disseqt_agentic_sdk.instrumentation.adk.patch._capture_parent``.
+That avoids rewiring the entire SDK off threading.local, which is
+intentionally the "root" story for sync non-async callers.
 """
 
 import threading

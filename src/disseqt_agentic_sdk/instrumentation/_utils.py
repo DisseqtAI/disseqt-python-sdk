@@ -105,7 +105,17 @@ _CONTENT_ATTR_KEYS: frozenset[str] = frozenset(
         GenAIAttributes.COMPLETION,
         GenAIAttributes.TOOL_CALLS,
         GenAIAttributes.TOOL_ARGS,
+        # TOOL_RESULT was missing from the GenAI side of the opt-out
+        # (the AgenticAttributes mirror was there) — the ADK
+        # instrumentor emits gen_ai.tool.result on TOOL_EXEC spans, so
+        # a deployment with set_capture_content(False) still shipped
+        # tool output text. TP-2128 round-3 PR #33 review.
+        GenAIAttributes.TOOL_RESULT,
         GenAIAttributes.REQUEST_TOOLS,
+        # ADK's memory_search_memory wrapper records the raw user
+        # query here, which is typically free text (PII likely). Must
+        # honor the content-capture opt-out. TP-2128 round-3 PR #33.
+        "agentic.rag.query",
     }
 )
 

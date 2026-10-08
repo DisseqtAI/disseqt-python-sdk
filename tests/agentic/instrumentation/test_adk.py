@@ -574,6 +574,13 @@ class TestAgentGenScope:
         wrapped = _AgentGenScope(agen=agen, scope=scope, span=scope.span, install_agg=False)
 
         async def _drive():
+            # Enter the generator body (first yield) so aclose() exercises
+            # the finally branch; the _AgentGenScope rewrite as a native
+            # async generator (TP-2128 round-3 PR #33 review for the
+            # async-for-break leak) means aclose() on a never-started gen
+            # is a no-op, matching CPython asyncgen semantics.
+            agen_iter = aiter(wrapped)
+            await anext(agen_iter)
             await wrapped.aclose()
             await wrapped.aclose()  # second must be a no-op
 
@@ -595,6 +602,162 @@ class TestAgentGenScope:
 
         _run(_drain())
         find_span(recording_client, "adk.agent.y")
+
+    def test_async_for_break_finalizes_span(self, recording_client):
+        """
+        TP-2128 round-3 PR #33 review: ``async for ... break`` must still
+        finalize the scope. The old plain-class implementation never ran
+        _afinalize on break (the asyncgen finalizer only runs for native
+        async generators), so the AGENT_EXEC span never emitted and the
+        aggregator stayed set in the ContextVar. The native-asyncgen
+        rewrite relies on CPython's loop shutdown closing suspended
+        asyncgens — in a real app ``asyncio.run()`` does this; the
+        test driver below calls ``shutdown_asyncgens()`` explicitly.
+        """
+        from disseqt_agentic_sdk.enums import SpanKind
+        from disseqt_agentic_sdk.instrumentation._utils import open_llm_span
+
+        scope = open_llm_span(recording_client, "adk.agent.brk", SpanKind.AGENT_EXEC)
+        agen = _AsyncGen([SimpleNamespace(id="a"), SimpleNamespace(id="b")])
+        wrapped = _AgentGenScope(agen=agen, scope=scope, span=scope.span, install_agg=True)
+
+        async def _drive():
+            async for _ in wrapped:
+                break  # mimics ADK quickstart's `if is_final_response(): break`
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(_drive())
+            # asyncio.run() would call this before closing the loop; do
+            # it explicitly so the suspended asyncgen's finally runs
+            # before our assertion.
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        finally:
+            loop.close()
+        # Span must have been emitted — _finalize_agent_scope ran via
+        # the async-gen's `finally` on the break.
+        find_span(recording_client, "adk.agent.brk")
+        # Aggregator must have been reset, so a later run doesn't see
+        # a stale one.
+        assert _current_agg.get() is None
+
+
+class TestContentOptOut:
+    """TP-2128 round-3 PR #33 review: tool.result + rag.query honor opt-out."""
+
+    def test_tool_result_dropped_when_capture_disabled(self, recording_client):
+        from disseqt_agentic_sdk.enums import SpanKind
+        from disseqt_agentic_sdk.instrumentation._utils import (
+            get_capture_content,
+            open_llm_span,
+            set_capture_content,
+        )
+        from disseqt_agentic_sdk.instrumentation.adk.patch import _set_tool_result_attrs
+        from disseqt_agentic_sdk.semantics import AgenticAttributes, GenAIAttributes
+
+        scope = open_llm_span(recording_client, "adk.tool.x", SpanKind.TOOL_EXEC)
+        prior = get_capture_content()
+        set_capture_content(False)
+        try:
+            _set_tool_result_attrs(scope.span, result={"secret": "s3cret"})
+        finally:
+            set_capture_content(prior)
+            scope.__exit__(None, None, None)
+        span = find_span(recording_client, "adk.tool.x")
+        attrs = json.loads(span.attributes_json)
+        # Neither the AgenticAttributes nor the GenAIAttributes mirror
+        # should ship when capture is disabled.
+        assert AgenticAttributes.TOOL_RESULT not in attrs
+        assert GenAIAttributes.TOOL_RESULT not in attrs
+
+    def test_rag_query_dropped_when_capture_disabled(self, recording_client):
+        from disseqt_agentic_sdk.enums import SpanKind
+        from disseqt_agentic_sdk.instrumentation._utils import (
+            get_capture_content,
+            open_llm_span,
+            set_capture_content,
+        )
+        from disseqt_agentic_sdk.instrumentation.adk.patch import _set_memory_search_attrs
+
+        scope = open_llm_span(recording_client, "adk.memory.search", SpanKind.RAG_EXEC)
+        prior = get_capture_content()
+        set_capture_content(False)
+        try:
+            _set_memory_search_attrs(
+                scope.span,
+                instance=SimpleNamespace(),
+                kwargs={"query": "my SSN is 123-45-6789", "app_name": "a", "user_id": "u"},
+            )
+        finally:
+            set_capture_content(prior)
+            scope.__exit__(None, None, None)
+        span = find_span(recording_client, "adk.memory.search")
+        attrs = json.loads(span.attributes_json)
+        assert "agentic.rag.query" not in attrs
+        # Non-content keys still land (backend, app, user).
+        assert "agentic.rag.backend" in attrs
+        assert "agentic.app.name" in attrs
+
+    def test_tool_args_with_non_json_native_type_serializes(self, recording_client):
+        """Datetime / UUID / Path on tool args used to crash span serialization."""
+        import datetime as dt
+
+        from disseqt_agentic_sdk.enums import SpanKind
+        from disseqt_agentic_sdk.instrumentation._utils import open_llm_span
+        from disseqt_agentic_sdk.instrumentation.adk.patch import _set_tool_request_attrs
+        from disseqt_agentic_sdk.semantics import AgenticAttributes
+
+        scope = open_llm_span(recording_client, "adk.tool.x", SpanKind.TOOL_EXEC)
+        _set_tool_request_attrs(
+            scope.span,
+            instance=SimpleNamespace(name="t", description=None),
+            tool_args={"when": dt.datetime(2026, 1, 1)},
+            tool_context=None,
+        )
+        scope.__exit__(None, None, None)
+        span = find_span(recording_client, "adk.tool.x")
+        attrs = json.loads(span.attributes_json)
+        # The attr landed as a string (not a raw datetime), so a later
+        # json.dumps of the whole attributes bag won't crash.
+        assert isinstance(attrs[AgenticAttributes.TOOL_ARGS], str)
+        assert "2026" in attrs[AgenticAttributes.TOOL_ARGS]
+
+
+class TestProviderDetection:
+    """TP-2128 round-3 PR #33 review: LiteLlm models aren't all Gemini."""
+
+    def test_litellm_openai_tagged_as_openai(self):
+        from disseqt_agentic_sdk.instrumentation.adk.patch import _detect_provider
+        from disseqt_agentic_sdk.semantics import AgenticProvider, GenAISystem
+
+        agentic, gen_ai = _detect_provider(
+            instance=SimpleNamespace(),
+            llm_request=SimpleNamespace(model="openai/gpt-4o"),
+        )
+        assert agentic == AgenticProvider.OPENAI
+        assert gen_ai == GenAISystem.OPENAI
+
+    def test_litellm_anthropic_tagged_as_anthropic(self):
+        from disseqt_agentic_sdk.instrumentation.adk.patch import _detect_provider
+        from disseqt_agentic_sdk.semantics import AgenticProvider, GenAISystem
+
+        agentic, gen_ai = _detect_provider(
+            instance=SimpleNamespace(),
+            llm_request=SimpleNamespace(model="anthropic/claude-3-5-sonnet"),
+        )
+        assert agentic == AgenticProvider.ANTHROPIC
+        assert gen_ai == GenAISystem.ANTHROPIC
+
+    def test_bare_gemini_still_tagged_as_google(self):
+        from disseqt_agentic_sdk.instrumentation.adk.patch import _detect_provider
+        from disseqt_agentic_sdk.semantics import AgenticProvider, GenAISystem
+
+        agentic, gen_ai = _detect_provider(
+            instance=SimpleNamespace(),
+            llm_request=SimpleNamespace(model="gemini-2.0-flash"),
+        )
+        assert agentic == AgenticProvider.GOOGLE
+        assert gen_ai == GenAISystem.GEMINI
 
 
 # ---------------------------------------------------------------------
