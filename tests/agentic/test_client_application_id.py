@@ -78,12 +78,17 @@ class TestApplicationIdRequired:
         ``application_id`` sits after a ``*`` in the signature so a
         caller can't accidentally position-pass some other value into
         it. This test locks that in.
+
+        project_id was restored to its original 2nd positional slot in
+        the "optional, non-breaking" rework, so the overflow case now
+        needs 11 positional args to reach the kwonly barrier.
         """
         with pytest.raises(TypeError, match="positional"):
-            # Passing 10 positional args tries to fill application_id
+            # Passing 11 positional args tries to fill application_id
             # positionally — the kwonly barrier should refuse.
             DisseqtAgenticClient(
                 "k",  # api_key
+                "p",  # project_id
                 "s",  # service_name
                 "http://x/v1",  # endpoint
                 "1.0.0",  # service_version

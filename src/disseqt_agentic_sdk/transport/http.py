@@ -98,7 +98,7 @@ class HTTPTransport:
             project_id: Optional project UUID. When set, stamped onto
                 every payload as the ``project.id`` resource attribute
                 and the ``X-Project-Id`` request header — the shape
-                pre-Kong-2.1.1 plugins require. When None, neither is
+                pre-2.2.1 Kong traces-auth plugins require. When None, neither is
                 sent (current Kong resolves project from ``api_key``).
         """
         self.endpoint = endpoint.rstrip("/")
@@ -230,7 +230,7 @@ class HTTPTransport:
                     "ingestion_url": self.endpoint,
                     "api.key": self.api_key,
                 }
-                # project.id is only required by pre-2.1.1 Kong plugin
+                # project.id is only required by pre-2.2.1 Kong traces-auth plugin
                 # versions. Current Kong resolves the project from
                 # api_key, so new clients can omit it; we still stamp it
                 # when supplied so old-plugin deployments keep working.
@@ -279,8 +279,9 @@ class HTTPTransport:
         if self.api_key:
             headers["X-Api-Key"] = self.api_key
         # X-Project-Id: only sent when the caller explicitly supplied a
-        # project_id (pre-Kong-2.1.1 compatibility shim). Current Kong
-        # resolves it from X-Api-Key — don't send an empty header value.
+        # project_id (pre-2.2.1 Kong traces-auth plugin compatibility
+        # shim). Current Kong resolves it from X-Api-Key — don't send
+        # an empty header value.
         if self.project_id:
             headers["X-Project-Id"] = self.project_id
         try:

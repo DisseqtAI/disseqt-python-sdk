@@ -110,6 +110,13 @@ class DisseqtAgenticClient:
     def __init__(
         self,
         api_key: str = _MISSING_API_KEY,  # type: ignore[assignment]
+        # project_id keeps its pre-#31 2nd-positional slot so a caller
+        # that previously passed it positionally
+        # (``DisseqtAgenticClient("key", "proj", "svc", ...)``) still
+        # routes "proj" to project_id, not silently into service_name.
+        # Making it `None`-defaulted keeps every downstream positional
+        # arg optional-callable while the slot stays reserved.
+        project_id: str | None = None,
         service_name: str = _MISSING_SERVICE_NAME,  # type: ignore[assignment]
         endpoint: str = "https://api.disseqt.ai/agentic-monitoring/api/v1/traces",
         service_version: str = "1.0.0",
@@ -120,7 +127,6 @@ class DisseqtAgenticClient:
         realtime_policy_id: str | None = None,
         *,
         application_id: str = _MISSING_APPLICATION_ID,  # type: ignore[assignment]
-        project_id: str | None = None,
     ):
         """
         Initialize SDK client.
@@ -150,7 +156,8 @@ class DisseqtAgenticClient:
                 / empty / whitespace-only raises ``ValueError``
                 immediately at construction rather than silently
                 dropping every telemetry POST at flush time.
-            project_id: Optional project UUID. Pre-Kong-2.1.1 the OTLP
+            project_id: Optional project UUID. On pre-2.2.1 Kong
+                traces-auth plugins the OTLP
                 ``resource.attributes["project.id"]`` was mandatory and
                 this kwarg was required; current Kong resolves the
                 project from ``api_key`` server-side, so this is now
