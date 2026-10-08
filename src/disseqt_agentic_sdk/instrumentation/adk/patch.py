@@ -60,6 +60,47 @@ PROVIDER = AgenticProvider.GOOGLE
 
 
 # ---------------------------------------------------------------------
+# Provider detection
+# ---------------------------------------------------------------------
+def _detect_provider(instance: Any, llm_request: Any) -> tuple[str, str]:
+    """Return (agentic_provider, gen_ai_system) for an ADK BaseLlm call.
+
+    ADK can route LLM calls through google-genai (native Gemini) or
+    LiteLLM, which itself fronts OpenAI / Anthropic / Cohere / Mistral /
+    etc. Previously we hardcoded ("google", "gemini") which skewed
+    pricing + model lookups whenever the model was actually OpenAI
+    or Claude. Prefer the model string's LiteLLM-style provider prefix,
+    fall back to the class name of the ``BaseLlm`` subclass (``Gemini``,
+    ``LiteLlm``, ``AnthropicLlm``, …), fall back to Gemini for backward
+    compat.
+    """
+    model = read(llm_request, "model") or ""
+    if isinstance(model, str) and "/" in model:
+        prefix = model.split("/", 1)[0].lower()
+        if prefix in {"openai", "azure", "openrouter"}:
+            return (AgenticProvider.OPENAI, GenAISystem.OPENAI)
+        if prefix in {"anthropic", "claude"}:
+            return (AgenticProvider.ANTHROPIC, GenAISystem.ANTHROPIC)
+        if prefix in {"gemini", "google", "vertex_ai", "vertex"}:
+            return (AgenticProvider.GOOGLE, GenAISystem.GEMINI)
+        # Any other LiteLLM-known prefix (bedrock, cohere, mistral, …):
+        # tag it as LiteLLM so backend pricing doesn't apply Gemini
+        # rates, and the response.model carries the underlying backend.
+        return (AgenticProvider.LITELLM, GenAISystem.LITELLM)
+    cls_name = type(instance).__name__.lower() if instance is not None else ""
+    if "litellm" in cls_name:
+        return (AgenticProvider.LITELLM, GenAISystem.LITELLM)
+    if "anthropic" in cls_name or "claude" in cls_name:
+        return (AgenticProvider.ANTHROPIC, GenAISystem.ANTHROPIC)
+    if "openai" in cls_name or "gpt" in cls_name:
+        return (AgenticProvider.OPENAI, GenAISystem.OPENAI)
+    # Default to Google/Gemini — the common path through ADK — so a
+    # genuine Gemini call doesn't silently lose its provider tag when
+    # the model string is a bare short name like "gemini-2.0-flash".
+    return (AgenticProvider.GOOGLE, GenAISystem.GEMINI)
+
+
+# ---------------------------------------------------------------------
 # Content normalization
 # ---------------------------------------------------------------------
 def _normalize_contents(contents: Any) -> list[dict[str, Any]]:
@@ -154,15 +195,18 @@ def _extract_tool_calls(content: Any, response_id: str | None) -> list[dict[str,
 # ---------------------------------------------------------------------
 # LLM request/response attribute writers
 # ---------------------------------------------------------------------
-def _set_llm_request_attrs(span: DisseqtSpan, llm_request: Any, stream: bool) -> None:
+def _set_llm_request_attrs(
+    span: DisseqtSpan, llm_request: Any, stream: bool, instance: Any = None
+) -> None:
     model = read(llm_request, "model") or ""
-    span.set_model_info(model, PROVIDER)
+    agentic_provider, gen_ai_system = _detect_provider(instance, llm_request)
+    span.set_model_info(model, agentic_provider)
     span.set_operation(AgenticOperation.GENERATE_CONTENT)
-    # Provider tag mirrors Gemini's — the underlying model is Google's,
-    # regardless of whether ADK routes through google-genai, LiteLLM, or
-    # Anthropic. Downstream consumers wanting the concrete backend can
-    # read gen_ai.response.model.
-    safe_set(span, GenAIAttributes.SYSTEM, GenAISystem.GEMINI)
+    # Provider derived from the model string (LiteLLM-style prefix) or
+    # the BaseLlm subclass. A LiteLlm("openai/gpt-4o") call lands as
+    # ("litellm", "openai"), not as a Google/Gemini span, so backend
+    # pricing + model lookups aren't skewed. TP-2128 round-3 PR #33.
+    safe_set(span, GenAIAttributes.SYSTEM, gen_ai_system)
     safe_set(span, GenAIAttributes.REQUEST_MODEL, model)
     safe_set(span, GenAIAttributes.OPERATION_NAME, GenAIOperation.GENERATE_CONTENT)
     safe_set(span, GenAIAttributes.REQUEST_IS_STREAM, bool(stream))
@@ -193,16 +237,39 @@ def _set_llm_request_attrs(span: DisseqtSpan, llm_request: Any, stream: bool) ->
         set_messages_if_capturing(span, input_messages=normalized)
         safe_set(span, GenAIAttributes.PROMPT, normalized)
 
-    # ADK stores registered tool schemas on ``tools_dict`` (dict[name, BaseTool]);
-    # ``config.tools`` may also carry the google-genai style tool declarations.
-    tools = read(llm_request, "tools_dict")
-    if not tools and config is not None:
-        tools = read(config, "tools")
-    if tools:
+    # ADK registered tool schemas:
+    #   * config.tools carries google-genai FunctionDeclarations with
+    #     model_dump(mode="json") giving a real schema. Prefer those.
+    #   * tools_dict maps names -> BaseTool INSTANCES — json.dumps with
+    #     default=str would yield "<FunctionTool object at 0x…>" and
+    #     throw away the schema. Fall back to the tool NAMES instead so
+    #     the span at least carries which tools were offered.
+    tools_json: str | None = None
+    cfg_tools = read(config, "tools") if config is not None else None
+    if cfg_tools:
+        serialized: list[Any] = []
+        for t in cfg_tools:
+            dump = getattr(t, "model_dump", None)
+            if callable(dump):
+                try:
+                    serialized.append(dump(mode="json"))
+                    continue
+                except Exception:
+                    pass
+            serialized.append(str(t))
         try:
-            tools_json = json.dumps(tools, default=str)
+            tools_json = json.dumps(serialized, default=str)
         except (TypeError, ValueError):
-            tools_json = str(tools)
+            tools_json = None
+    if tools_json is None:
+        tools_dict = read(llm_request, "tools_dict")
+        if tools_dict:
+            try:
+                names = list(tools_dict.keys()) if hasattr(tools_dict, "keys") else list(tools_dict)
+                tools_json = json.dumps(names)
+            except (TypeError, ValueError):
+                tools_json = None
+    if tools_json:
         safe_set(span, AgenticAttributes.REQUEST_TOOLS, tools_json)
         safe_set(span, GenAIAttributes.REQUEST_TOOLS, tools_json)
 
@@ -325,7 +392,11 @@ def _extract_runner_metadata(instance: Any, kwargs: dict[str, Any]) -> dict[str,
 
 def _set_runner_attrs(span: DisseqtSpan, meta: dict[str, Any]) -> None:
     span.set_operation(AgenticOperation.INVOKE_AGENT)
-    safe_set(span, GenAIAttributes.SYSTEM, GenAISystem.GEMINI)
+    # gen_ai.system was previously hardcoded to "gemini" on the AGENT_EXEC
+    # span even for runs that routed through LiteLLM / Anthropic. The
+    # runner span isn't an LLM call anyway, so dropping the tag beats
+    # mislabeling it; the per-LLM MODEL_EXEC span derives its own
+    # gen_ai.system via _detect_provider.
     safe_set(span, GenAIAttributes.OPERATION_NAME, AgenticOperation.INVOKE_AGENT)
     if meta.get("agent_name"):
         # set_agent_info stamps agentic.agent.name; also mirror app_name
@@ -443,15 +514,38 @@ def _set_tool_request_attrs(
         safe_set(span, AgenticAttributes.TOOL_CALL_ID, str(call_id))
         safe_set(span, GenAIAttributes.TOOL_CALL_ID, str(call_id))
     if tool_args is not None:
-        safe_set(span, AgenticAttributes.TOOL_ARGS, tool_args)
-        safe_set(span, GenAIAttributes.TOOL_ARGS, tool_args)
+        # Serialize now with default=str so a tool-arg containing a
+        # non-JSON-native type (e.g. datetime, UUID, Path, bytes) can't
+        # make the span's later json.dumps call blow up and drop the
+        # whole TOOL_EXEC span. Mirrors what _extract_tool_calls does.
+        serialized = _safe_json(tool_args)
+        safe_set(span, AgenticAttributes.TOOL_ARGS, serialized)
+        safe_set(span, GenAIAttributes.TOOL_ARGS, serialized)
 
 
 def _set_tool_result_attrs(span: DisseqtSpan, result: Any) -> None:
     if result is None:
         return
-    safe_set(span, AgenticAttributes.TOOL_RESULT, result)
-    safe_set(span, GenAIAttributes.TOOL_RESULT, result)
+    serialized = _safe_json(result)
+    safe_set(span, AgenticAttributes.TOOL_RESULT, serialized)
+    safe_set(span, GenAIAttributes.TOOL_RESULT, serialized)
+
+
+def _safe_json(value: Any) -> str:
+    """json.dumps with default=str so one odd type can't drop the span.
+
+    The span buffer later runs ``json.dumps(self.attributes)`` with no
+    ``default`` fallback; a raw tool arg or result containing a
+    ``datetime`` / ``UUID`` / ``Path`` / ``bytes`` would otherwise crash
+    serialization and the whole span is silently dropped. Pre-serializing
+    here guarantees every value we hand off is a plain string.
+    """
+    try:
+        if isinstance(value, (str, bytes)):
+            return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value
+        return json.dumps(value, default=str)
+    except Exception:
+        return str(value)
 
 
 def _record_tool_outcome(
@@ -525,7 +619,7 @@ def llm_generate_content_async(instrumentor: AdkInstrumentor) -> Callable[..., A
         model = read(llm_request, "model") or read(instance, "model") or "adk.llm"
         scope = open_llm_span(instrumentor.client, f"adk.llm.{model}", SpanKind.MODEL_EXEC)
         span = scope.span
-        safe_call(_set_llm_request_attrs, span, llm_request, bool(stream))
+        safe_call(_set_llm_request_attrs, span, llm_request, bool(stream), instance)
 
         try:
             agen = wrapped(*args, **kwargs)
@@ -669,106 +763,59 @@ def a2a_run_async_impl(instrumentor: AdkInstrumentor) -> Callable[..., Any]:
 # ---------------------------------------------------------------------
 # AGENT_EXEC async-generator scope
 # ---------------------------------------------------------------------
-class _AgentGenScope:
+async def _AgentGenScope(  # noqa: N802 — kept PascalCase for API compat
+    agen: Any,
+    scope: _SpanScope,
+    span: DisseqtSpan,
+    install_agg: bool,
+) -> Any:
     """
-    Wraps an async generator returned by ``Runner.run_async`` /
-    ``BaseAgent.run_async`` so the enclosing AGENT_EXEC scope stays open
-    for the lifetime of iteration and flushes the tool-call aggregator
-    onto the span before ending.
+    Native async-generator wrapper around the ADK runner / agent /
+    A2A async generators.
 
-    Distinct from ``AsyncStreamWrapper`` because we don't need per-chunk
-    absorption for agent events — the child spans (MODEL_EXEC, TOOL_EXEC,
-    nested AGENT_EXEC) that fire during iteration already emit their own
-    attributes, and the aggregator collects tool_calls from them. All
-    this wrapper does is keep the span open and flush on exhaustion /
-    cancellation / early aclose().
+    PREVIOUSLY a plain class with ``__anext__`` / ``__aexit__``, which
+    looked right but didn't play well with ``async for ... break``: the
+    event loop's asyncgen finalizer only runs for NATIVE async
+    generators, so a plain-class wrapper that got abandoned on break
+    had its finalize path skipped — the AGENT_EXEC root span never
+    emitted, the tool-call aggregator stayed set in the ContextVar,
+    and the next run nested into the stale trace (ADK's quickstart
+    does exactly ``async for ev in agen: if is_final_response(): break``).
+
+    Rewriting as a real ``async def ... yield`` function means CPython's
+    asyncgen hooks guarantee ``finally`` runs on:
+      * normal exhaustion (StopAsyncIteration)
+      * caller ``break`` / ``return`` inside ``async for``
+      * caller ``aclose()`` or explicit cancellation
+      * GC / event-loop shutdown via ``set_asyncgen_hooks``
 
     Deferred aggregator install:
-      Callers request ``install_agg=True``; the actual ``_current_agg.set``
-      runs on first ``__anext__`` so the Token is bound to the SAME
-      asyncio Context (a Task's copied context, when the wrapper was
-      called from sync code above ``asyncio.run``) that ``_afinalize``
-      later resets from. Setting in the caller's context and resetting
-      in the task's context is the adk-python#949 "Token created in a
-      different Context" leak — a real bug caught by the unit tests.
-
-    Concurrency notes:
-      * ``self._closed`` gates finalize against double-invocation
-        (StopAsyncIteration + aclose + __aexit__ can all race).
-      * No lock — Python's ``asyncio`` runs one task at a time on an
-        event loop, so a bool flag is sufficient for single-thread
-        idempotency. Concurrent iteration of the SAME generator from
-        two tasks is a programming error in asyncio and out of scope.
-      * ``_finalize_agent_scope`` swallows aggregator/scope-exit errors
-        so observability failures never propagate into the caller loop.
+      ``_install_aggregator_if_absent()`` is called INSIDE this
+      generator's own body, which runs inside the task's own copied
+      Context — avoids the adk-python#949 "Token created in a different
+      Context" leak that would happen if the install ran in the
+      caller's context and the reset ran in the task's.
     """
-
-    def __init__(
-        self,
-        agen: Any,
-        scope: _SpanScope,
-        span: DisseqtSpan,
-        install_agg: bool,
-    ) -> None:
-        self._agen = agen
-        self._scope = scope
-        self._span = span
-        self._install_agg = install_agg
-        # Populated on first __anext__ if _install_aggregator_if_absent
-        # actually installed one (outer scope may already have installed).
-        self._agg_token: Any = None
-        self._closed = False
-
-    def __aiter__(self) -> _AgentGenScope:
-        return self
-
-    async def __anext__(self) -> Any:
-        # Deferred install — see class docstring. Only on first
-        # __anext__ (guarded by _install_agg flag flipping to False).
-        if self._install_agg and not self._closed:
-            self._install_agg = False
-            self._agg_token = _install_aggregator_if_absent()
-        try:
-            return await self._agen.__anext__()
-        except StopAsyncIteration:
-            await self._afinalize(None)
-            raise
-        except BaseException as exc:
-            # CancelledError / GeneratorExit / KeyboardInterrupt reach
-            # here on client disconnect or shutdown — finalize so the
-            # span isn't left dangling.
-            await self._afinalize(exc)
-            raise
-
-    async def __aenter__(self) -> _AgentGenScope:
-        return self
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: Any,
-    ) -> None:
-        await self._afinalize(exc_val)
-
-    async def aclose(self) -> None:
-        await self._afinalize(None)
-
-    async def _afinalize(self, exc: BaseException | None) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        # Forward aclose to the wrapped async generator so ADK's internal
-        # cleanup runs (contextvar reset, invocation-scope cleanup, etc.).
-        # Missing this on early exit is the #1 source of ADK "leaked
-        # context" bugs (adk-python#949).
-        aclose = getattr(self._agen, "aclose", None)
-        if callable(aclose):
+    agg_token: Any = _install_aggregator_if_absent() if install_agg else None
+    exc_seen: BaseException | None = None
+    try:
+        async for item in agen:
+            yield item
+    except BaseException as exc:
+        # CancelledError / GeneratorExit / KeyboardInterrupt land here.
+        exc_seen = exc
+        raise
+    finally:
+        # Forward aclose to the inner generator so ADK's own cleanup
+        # (contextvar reset, invocation-scope teardown) still runs on
+        # every exit path.
+        inner_aclose = getattr(agen, "aclose", None)
+        if callable(inner_aclose):
             try:
-                await aclose()
+                await inner_aclose()
             except BaseException:  # noqa: BLE001 — never propagate cleanup failure
                 pass
-        _finalize_agent_scope(self._scope, self._span, agg_token=self._agg_token, exc=exc)
+        _finalize_agent_scope(scope, span, agg_token=agg_token, exc=exc_seen)
 
 
 def _finalize_agent_scope(
