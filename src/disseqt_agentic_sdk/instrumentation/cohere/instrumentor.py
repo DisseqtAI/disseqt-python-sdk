@@ -17,7 +17,6 @@ import json
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from disseqt_agentic_sdk.enums import SpanKind
 from disseqt_agentic_sdk.instrumentation._kwargs import KW_MESSAGES, KW_MODEL, KW_TOOLS
 from disseqt_agentic_sdk.instrumentation._oai_compat import read
 from disseqt_agentic_sdk.instrumentation._stream import AsyncStreamWrapper, SyncStreamWrapper
@@ -26,12 +25,12 @@ from disseqt_agentic_sdk.instrumentation._tool_result import (
     _notify_planned_tool_calls,
 )
 from disseqt_agentic_sdk.instrumentation._utils import (
-    open_llm_span,
     safe_call,
     safe_set,
     serialize_messages,
     set_first_tool_call_attrs,
     set_messages_if_capturing,
+    try_open_llm_span,
 )
 from disseqt_agentic_sdk.instrumentation.base import DisseqtInstrumentor
 from disseqt_agentic_sdk.semantics import (
@@ -179,7 +178,9 @@ def _extract_message_text(message: Any) -> str:
 # ---------------------------------------------------------------------
 def _sync_chat(instrumentor: CohereInstrumentor) -> Callable[..., Any]:
     def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
-        scope = open_llm_span(instrumentor.client, "cohere.chat", SpanKind.MODEL_EXEC)
+        scope = try_open_llm_span(instrumentor, "cohere.chat")
+        if scope is None:
+            return wrapped(*args, **kwargs)
         span = scope.span
         safe_call(_set_request_attrs, span, kwargs, is_stream=False)
         try:
@@ -198,7 +199,9 @@ def _async_chat(instrumentor: CohereInstrumentor) -> Callable[..., Any]:
     async def wrapper(
         wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
     ) -> Any:
-        scope = open_llm_span(instrumentor.client, "cohere.chat", SpanKind.MODEL_EXEC)
+        scope = try_open_llm_span(instrumentor, "cohere.chat")
+        if scope is None:
+            return await wrapped(*args, **kwargs)
         span = scope.span
         safe_call(_set_request_attrs, span, kwargs, is_stream=False)
         try:
@@ -365,7 +368,9 @@ class _StreamAccumulator:
 
 def _sync_stream(instrumentor: CohereInstrumentor) -> Callable[..., Any]:
     def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
-        scope = open_llm_span(instrumentor.client, "cohere.chat_stream", SpanKind.MODEL_EXEC)
+        scope = try_open_llm_span(instrumentor, "cohere.chat_stream")
+        if scope is None:
+            return wrapped(*args, **kwargs)
         span = scope.span
         safe_call(_set_request_attrs, span, kwargs, is_stream=True)
         try:
@@ -395,7 +400,9 @@ def _async_stream(instrumentor: CohereInstrumentor) -> Callable[..., Any]:
     # so returning the AsyncStreamWrapper directly (which is itself an
     # async iterator) preserves `async for chunk in client.chat_stream(...)`.
     def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
-        scope = open_llm_span(instrumentor.client, "cohere.chat_stream", SpanKind.MODEL_EXEC)
+        scope = try_open_llm_span(instrumentor, "cohere.chat_stream")
+        if scope is None:
+            return wrapped(*args, **kwargs)
         span = scope.span
         safe_call(_set_request_attrs, span, kwargs, is_stream=True)
         try:

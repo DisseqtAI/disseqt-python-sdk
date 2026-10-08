@@ -10,9 +10,11 @@ payload just to decide auth — the read path that landed next to the
 The transport now stamps ``api.key`` and ``project.id`` as HTTP headers
 (``X-Api-Key``, ``X-Project-Id``) on every outgoing POST so a
 header-aware Kong plugin can authenticate before touching any body.
-``resource.attributes`` are still populated so this SDK version keeps
-working against Kong plugin versions that only look in the body — the
-migration is safe old-server / new-client.
+``project.id`` and ``policy.id`` are still populated in
+``resource.attributes``; ``api.key`` is NOT — the key travels in the
+``X-Api-Key`` header only, so it is never stored or logged as trace
+resource metadata. This requires a server/Kong version that authenticates
+from headers (deploy the server change first).
 
 ``X-Realtime-Policy-Id`` was deliberately NOT added as a header
 alongside the other two: nothing server-side reads it yet, so shipping
@@ -23,6 +25,7 @@ unaffected — see ``test_resource_attributes_still_carry_identity_for_backward_
 
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
@@ -154,7 +157,9 @@ class TestHeaderFirstIdentity:
         _, kwargs = _post_call(transport)
 
         attrs = kwargs["json"]["resource"]["attributes"]
-        assert attrs["api.key"] == "secret-key-42"
+        assert "api.key" not in attrs
+        assert "secret-key-42" not in json.dumps(kwargs["json"])
+        assert kwargs["headers"]["X-Api-Key"] == "secret-key-42"
         assert attrs["project.id"] == "proj-123"
         assert attrs["policy.id"] == "pol-default"
 

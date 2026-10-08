@@ -115,6 +115,18 @@ def _unwrap_envelope(response: dict[str, Any]) -> dict[str, Any]:
     return response
 
 
+def is_error(response: dict[str, Any]) -> bool:
+    """Return True for a per-policy *error entry* produced by the SDK.
+
+    ``client.validate(..., policies=[...])`` places
+    ``{"policy_id", "status": "error", "sdk_error": True, "error": {...}}``
+    in ``"policies"``
+    when one policy's evaluation failed while others succeeded. It carries
+    no verdict; :func:`is_blocking` treats it as BLOCK (fail closed).
+    """
+    return isinstance(response, dict) and response.get("sdk_error") is True
+
+
 def parse(response: dict[str, Any]) -> PolicyDecision | None:
     """Turn a /policies/:id/evaluate response into a PolicyDecision.
 
@@ -122,6 +134,8 @@ def parse(response: dict[str, Any]) -> PolicyDecision | None:
     Returns None when the response doesn't carry a policy verdict (e.g.
     server returned an error envelope with no policy_id).
     """
+    if is_error(response):
+        return None
     payload = _unwrap_envelope(response)
     if not payload.get("policy_id"):
         return None
@@ -168,8 +182,11 @@ def is_blocking(response: dict[str, Any]) -> bool:
     Accepts either the full DSQ envelope or the unwrapped ``data`` dict.
     Convenience for the common "do not pass this output downstream"
     check. Reads ``decision``, which is the actual verdict — independent
-    of sync/async.
+    of sync/async. An SDK error entry (:func:`is_error`: the policy could
+    not be evaluated) counts as blocking — fail closed.
     """
+    if is_error(response):
+        return True
     payload = _unwrap_envelope(response)
     return str(payload.get("decision", "")) == DECISION_BLOCK
 

@@ -35,6 +35,11 @@ def reset_sdk():
     test's leftover trace/span implicitly "current".
     """
     clear_context()
+    # The stderr auth-failure banner is latched process-wide; re-arm it so
+    # one test's 401 doesn't silence another test's assertion on it.
+    from disseqt_agentic_sdk.transport.http import _reset_auth_failure_latch
+
+    _reset_auth_failure_latch()
     yield
     clear_context()
 
