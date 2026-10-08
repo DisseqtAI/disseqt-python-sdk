@@ -385,6 +385,8 @@ class Client:
             BaseValidator | ThemesClassifierValidator | CompositeScoreEvaluator | SupportsInputData
         ),
         policies: list[str] | None = None,
+        *,
+        partial_ok: bool = False,
     ) -> dict[str, Any]:
         """Run a validator, one or more realtime policies, or both.
 
@@ -462,7 +464,7 @@ class Client:
                 composite/themes) or an undecodable response body.
         """
         if policies is not None:
-            return self._validate_with_policies(request, policies)
+            return self._validate_with_policies(request, policies, partial_ok=partial_ok)
         if self.policies is not None:
             # Composite/themes can't be policy-evaluated. An explicit
             # per-call combination raises (caller error), but a client-wide
@@ -483,7 +485,7 @@ class Client:
                     request_type=type(request).__name__,
                 )
             else:
-                return self._validate_with_policies(request, self.policies)
+                return self._validate_with_policies(request, self.policies, partial_ok=partial_ok)
         if not isinstance(
             request, (BaseValidator, ThemesClassifierValidator, CompositeScoreEvaluator)
         ):
@@ -500,16 +502,27 @@ class Client:
             BaseValidator | ThemesClassifierValidator | CompositeScoreEvaluator | SupportsInputData
         ),
         policies: list[str],
+        *,
+        partial_ok: bool = False,
     ) -> dict[str, Any]:
         """Orchestrate shape 2/3 of :meth:`validate` (``policies=[...]``).
 
         Every client-side rule is checked — and raises ``ValueError`` —
         BEFORE any network call is made.
 
-        Partial failure: if one policy's evaluation fails after others
-        succeeded, the earlier envelopes are NOT discarded. The result keeps
-        the stable ``{"validation", "policies"}`` shape and the failed policy
-        appears in ``"policies"`` (in order) as an error entry::
+        Partial failure: by default we fail closed — if ANY policy errors
+        we raise the original ``HTTPError`` carrying the full
+        ``{"validation", "policies"}`` envelope on ``.partial_result``.
+        That keeps the documented ``except HTTPError: return False``
+        pattern working, and keeps ``parse(decision)`` safe to call on
+        every element of the returned ``"policies"`` list (no "error
+        entry" items the caller must branch on).
+
+        Opt in with ``partial_ok=True`` to get the earlier envelopes back
+        alongside error entries for the failed ones (the per-policy loop
+        then needs ``is_error`` to tell errors apart from BLOCKs). The
+        shape is still ``{"validation", "policies"}``; a failed policy
+        appears in ``"policies"`` as::
 
             {"policy_id": "...", "status": "error", "sdk_error": True,
              "error": {"type": "HTTPError", "status_code": 500, "message": "..."}}
@@ -517,9 +530,10 @@ class Client:
         :func:`disseqt_sdk.policy.is_blocking` / ``any_blocking`` treat an
         error entry as blocking (fail closed) and ``parse`` returns ``None``
         for it; use :func:`disseqt_sdk.policy.is_error` to tell it apart from a
-        real BLOCK. If *every* policy fails the original exception is raised
-        (with the ``{"validation", "policies"}`` dict on ``.partial_result``),
-        and :class:`SDKVersionBlockedError` (HTTP 426) always raises.
+        real BLOCK.
+
+        :class:`SDKVersionBlockedError` (HTTP 426) always raises, regardless
+        of ``partial_ok``.
         """
         # Normalize first: a one-shot iterable (generator) would otherwise
         # be exhausted by validation and silently evaluate zero policies.
@@ -598,10 +612,19 @@ class Client:
             else:
                 first_error = first_error or exc
                 envelopes.append(_policy_error_entry(policy_id, exc))
-        if first_error is not None and all(_is_error_entry(e) for e in envelopes):
-            # Nothing succeeded, so there is no decision to preserve: keep the
-            # historical behaviour of raising. The validator result (if any)
-            # rides along so it is not lost either.
+        if first_error is not None and (
+            not partial_ok or all(_is_error_entry(e) for e in envelopes)
+        ):
+            # Default: ANY policy failure raises, carrying every envelope
+            # we did manage to collect on ``.partial_result``. Keeps the
+            # documented ``except HTTPError: return False`` fail-closed
+            # pattern working and keeps ``parse(decision)`` safe to call
+            # on every item of the returned ``"policies"`` list (no error
+            # entries the caller must branch on).
+            #
+            # Opt-in partial mode: only raise when nothing succeeded, so a
+            # caller that explicitly asked for mixed returns always gets
+            # them whenever at least one policy decided.
             first_error.partial_result = {  # type: ignore[attr-defined]
                 "validation": validation,
                 "policies": envelopes,
@@ -624,11 +647,13 @@ class Client:
         """Evaluate every policy, up to ``_MAX_PARALLEL_POLICIES`` at a time.
 
         Returns one ``(envelope, error)`` pair per policy, in the same order as
-        ``policy_ids``. All policies share one overall deadline of
-        ``self.timeout`` seconds (the longest a single call may already take);
-        a policy still running or not yet started when it expires gets a
-        timeout error entry instead of blocking the caller. An upgrade-required
-        (426) from any policy, or an unexpected non-SDK exception, is re-raised.
+        ``policy_ids``. The overall deadline is
+        ``self.timeout * ceil(len(policy_ids) / _MAX_PARALLEL_POLICIES)``,
+        so each worker-slot gets a full ``self.timeout`` to serve its
+        policy; a policy still running or not yet started when the deadline
+        expires gets a timeout error entry instead of blocking the caller.
+        An upgrade-required (426) from any policy, or an unexpected non-SDK
+        exception, is re-raised.
         """
 
         def run(pid: str) -> dict[str, Any]:
@@ -649,7 +674,17 @@ class Client:
                 results[0] = (None, exc)
             return results
 
-        deadline = time.monotonic() + self.timeout
+        # Deadline scales with the number of policies divided by the
+        # worker cap: with up to _MAX_PARALLEL_POLICIES in flight at
+        # once, the Nth batch runs ceil(N/cap) "slots" deep, so give the
+        # overall deadline that many self.timeout budgets. Otherwise with
+        # >4 policies the 5th-onward wait for a free worker but share a
+        # single self.timeout and a policy that finishes within its own
+        # per-request timeout can still be reported as an error.
+        import math as _math  # local to keep the import list honest
+
+        slots = _math.ceil(len(policy_ids) / _MAX_PARALLEL_POLICIES)
+        deadline = time.monotonic() + self.timeout * slots
         pool = ThreadPoolExecutor(
             max_workers=min(_MAX_PARALLEL_POLICIES, len(policy_ids)),
             thread_name_prefix="disseqt-policy",

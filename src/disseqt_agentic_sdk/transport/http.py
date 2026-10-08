@@ -105,6 +105,31 @@ def _is_permanent_status(status_code: int | None) -> bool:
     return status_code is not None and 400 <= status_code < 500 and status_code not in (408, 429)
 
 
+# Hard cap on any single retry backoff — including a gateway-supplied
+# Retry-After header. Kong rate-limit windows routinely send 60s or
+# 3600s; the flush thread blocks on the sleep, and shutdown() /
+# atexit's stop() -> flush() calls are synchronous, so an uncapped
+# header can hang process exit for minutes-to-hours. Spans stay
+# buffered; the next flush retries.
+_RETRY_BACKOFF_MAX_SECONDS = 5.0
+
+
+class _CappedRetry(Retry):
+    """urllib3 Retry that caps a server-supplied Retry-After header.
+
+    Retry's own ``respect_retry_after_header=True`` honors the
+    gateway's value verbatim with no upper bound; this subclass clamps
+    it to ``backoff_max`` so the SDK's flush thread can never sleep
+    for the full window Kong hands out when it rate-limits.
+    """
+
+    def get_retry_after(self, response: Any) -> float | None:
+        value = super().get_retry_after(response)
+        if value is None:
+            return None
+        return min(value, float(self.backoff_max))
+
+
 class HTTPTransport:
     """
     HTTP transport for sending spans to the backend API.
@@ -173,9 +198,21 @@ class HTTPTransport:
 
         # Setup session with retry strategy
         self.session = requests.Session()
-        retry_strategy = Retry(
+        retry_strategy = _CappedRetry(
             total=max_retries,
             backoff_factor=0.5,
+            # Jitter spreads concurrent SDK instances that all retried in
+            # lockstep off the same server event — a shared Retry-After
+            # otherwise lines them up to all hit again at the exact same
+            # instant. urllib3 adds a uniform [0, backoff_jitter] on top.
+            backoff_jitter=0.5,
+            # Cap any single backoff — including gateway-supplied
+            # Retry-After — so a Kong rate-limit header of 60s / 3600s
+            # can't block the flush thread (and, since shutdown() /
+            # atexit calls stop() -> flush() synchronously, process
+            # exit) for minutes-to-hours. The spans stay buffered;
+            # the next flush gets another shot.
+            backoff_max=_RETRY_BACKOFF_MAX_SECONDS,
             status_forcelist=[429, 500, 502, 503, 504],
             # urllib3 excludes POST from retries by default, which made the
             # status_forcelist above a no-op for this POST-only transport.

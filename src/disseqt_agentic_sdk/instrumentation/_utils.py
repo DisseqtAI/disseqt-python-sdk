@@ -358,7 +358,20 @@ def try_open_llm_span(
     opens the span, all under ``try``. On any failure returns ``None`` and
     the wrapper must call the wrapped function directly, so telemetry
     problems never break the user's LLM call.
+
+    Explicitly treats ``not instrumentor._is_instrumented`` as "nothing
+    to record" — a buried wrapper left live after ``uninstrument()``
+    passes straight through to the provider and does NOT capture
+    content. The ``_client is None`` guard inside ``open_llm_span``
+    historically covered this, but we also want to be safe when
+    uninstrument chose to keep the client reference (because another
+    library's wrapper is stacked on top of ours); checking
+    ``_is_instrumented`` makes that case explicit and lets a later
+    ``instrument()`` not accidentally stack a second active layer.
     """
+    is_on = getattr(instrumentor, "_is_instrumented", True)
+    if not is_on:
+        return None
     try:
         return open_llm_span(instrumentor.client, name, kind)
     except Exception as e:

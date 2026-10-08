@@ -175,7 +175,10 @@ class TestErrorPropagation:
         requests_mock.post(TOX_URL, json=VALIDATOR_RESPONSE)
         requests_mock.post(P1_URL, json=P1_BLOCK)
         requests_mock.post(P2_URL, status_code=500, text="boom")
-        result = client().validate(toxicity(), policies=[P1, P2])
+        # Default fail-closed raises; opt-in partial_ok=True returns the
+        # earlier envelopes + error entries (TP-2128 round-3 PR #39
+        # review).
+        result = client().validate(toxicity(), policies=[P1, P2], partial_ok=True)
         # Earlier envelope survives; the failed policy is an error entry, in order.
         assert result["validation"] == VALIDATOR_RESPONSE
         assert result["policies"][0] == P1_BLOCK
@@ -190,11 +193,26 @@ class TestErrorPropagation:
         requests_mock.post(TOX_URL, json=VALIDATOR_RESPONSE)
         requests_mock.post(P1_URL, json=P2_PASS)  # a PASS ...
         requests_mock.post(P2_URL, status_code=500, text="boom")  # ... and an error
-        result = client().validate(toxicity(), policies=[P1, P2])
+        result = client().validate(toxicity(), policies=[P1, P2], partial_ok=True)
         assert is_blocking(result["policies"][0]) is False
         assert is_blocking(result["policies"][1]) is True
         assert any_blocking(result) is True
         assert any_blocking(result["policies"]) is True
+
+    def test_default_fails_closed_on_any_policy_error(self, requests_mock):
+        """Without partial_ok, one policy error raises the original HTTPError."""
+        requests_mock.post(TOX_URL, json=VALIDATOR_RESPONSE)
+        requests_mock.post(P1_URL, json=P1_BLOCK)
+        requests_mock.post(P2_URL, status_code=500, text="boom")
+        with pytest.raises(HTTPError) as exc_info:
+            client().validate(toxicity(), policies=[P1, P2])
+        assert exc_info.value.status_code == 500
+        # partial_result carries whatever envelopes we did collect so a
+        # try/except caller can inspect them when it wants to.
+        partial = exc_info.value.partial_result
+        assert partial["validation"] == VALIDATOR_RESPONSE
+        assert partial["policies"][0] == P1_BLOCK
+        assert partial["policies"][1]["policy_id"] == P2
 
     def test_all_policies_failing_still_raises_with_partial_result(self, requests_mock):
         requests_mock.post(TOX_URL, json=VALIDATOR_RESPONSE)
