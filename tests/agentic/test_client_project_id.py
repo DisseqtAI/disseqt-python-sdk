@@ -66,9 +66,7 @@ class TestProjectIdPassThrough:
         # one of its kwargs.
         assert _captured_transport.call_args.kwargs["project_id"] == "proj-abc"
 
-    def test_project_id_omitted_defaults_to_none_and_transport_sees_none(
-        self, _captured_transport
-    ):
+    def test_project_id_omitted_defaults_to_none_and_transport_sees_none(self, _captured_transport):
         """
         Omitting the kwarg entirely is the common new-Kong path. The
         stored attribute must be ``None`` (not ``""``) and the transport
@@ -83,9 +81,7 @@ class TestProjectIdPassThrough:
 
 class TestProjectIdBlankNormalisation:
     @pytest.mark.parametrize("blank", ["", " ", "   ", "\t", "\t\t "])
-    def test_blank_or_whitespace_project_id_normalises_to_none(
-        self, blank, _captured_transport
-    ):
+    def test_blank_or_whitespace_project_id_normalises_to_none(self, blank, _captured_transport):
         """
         A caller who passed ``project_id=""`` or ``project_id="  "``
         meant "no project" every time. Treating these as valid and

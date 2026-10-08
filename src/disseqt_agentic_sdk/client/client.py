@@ -227,7 +227,9 @@ class DisseqtAgenticClient:
         # Treat empty / whitespace-only project_id as unset — don't
         # validate, don't send. The validated-and-stamped path only
         # fires when the caller explicitly provides a non-empty value.
-        self.project_id: str | None = project_id.strip() if project_id and project_id.strip() else None
+        self.project_id: str | None = (
+            project_id.strip() if project_id and project_id.strip() else None
+        )
         self.application_id = application_id.strip()
         # Fail-fast on a value whose characters would break HTTP header
         # encoding at send time (CRLF injection risk, non-Latin-1 codepoints
