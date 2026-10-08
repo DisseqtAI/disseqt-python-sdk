@@ -32,17 +32,10 @@ from __future__ import annotations
 #      like tab while letting the actual crash-risk class through).
 #
 # Originally application_id-only (TP-2128 round-2 P2 #2.3), generalized
-# to api_key and project_id (both now also travel as headers — see
-# transport/http.py). Validated at TWO points, not one:
-#   - client.client.DisseqtAgenticClient.__init__ / transport.http.
-#     HTTPTransport.__init__: fail fast and loudly for the values that
-#     don't change after construction (api_key, application_id).
-#   - transport.http.HTTPTransport._send_group: project_id varies per
-#     span/group and can reach the transport through more than one
-#     public class (DisseqtTrace, DisseqtSpan, EnrichedSpan are all
-#     directly constructible, bypassing DisseqtAgenticClient's
-#     validation entirely) — this is the one call every value must pass
-#     through before becoming a header, regardless of how it got there.
+# to api_key (now also travels as a header — see transport/http.py).
+# Validated at both client.client.DisseqtAgenticClient.__init__ and
+# transport.http.HTTPTransport.__init__, so a directly-constructed
+# HTTPTransport can't bypass the check.
 _HEADER_VALUE_DISALLOWED_LINE_BREAKS = frozenset("\r\n")
 
 

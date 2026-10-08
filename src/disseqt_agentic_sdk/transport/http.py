@@ -74,6 +74,7 @@ class HTTPTransport:
         verify_ssl: bool = True,
         realtime_policy_id: str | None = None,
         application_id: str | None = None,
+        project_id: str | None = None,
     ):
         """
         Initialize HTTP transport.
@@ -94,6 +95,11 @@ class HTTPTransport:
                 Kong's traces-auth plugin verifies the header against
                 policy-management before forwarding. When None, the
                 header is not sent (project-only scope, backwards-compat).
+            project_id: Optional project UUID. When set, stamped onto
+                every payload as the ``project.id`` resource attribute
+                and the ``X-Project-Id`` request header — the shape
+                pre-2.2.1 Kong traces-auth plugins require. When None, neither is
+                sent (current Kong resolves project from ``api_key``).
         """
         self.endpoint = endpoint.rstrip("/")
         self.api_key = api_key
@@ -101,16 +107,19 @@ class HTTPTransport:
         self.verify_ssl = verify_ssl
         self.realtime_policy_id = realtime_policy_id
         self.application_id = application_id
-        # api_key/application_id don't vary after construction (unlike
-        # project_id, validated per-send below in _send_group), so fail
-        # fast here. This is the layer that catches a value that reached
-        # HTTPTransport WITHOUT going through DisseqtAgenticClient's own
-        # (earlier, friendlier) validation -- e.g. HTTPTransport
-        # constructed directly, as this module's own test suite does.
+        self.project_id = project_id
+        # api_key/application_id/project_id don't vary after construction,
+        # so fail fast here. This is the layer that catches a value that
+        # reached HTTPTransport WITHOUT going through
+        # DisseqtAgenticClient's own (earlier, friendlier) validation --
+        # e.g. HTTPTransport constructed directly, as this module's own
+        # test suite does.
         if self.api_key:
             validate_header_value(self.api_key, "api_key")
         if self.application_id:
             validate_header_value(self.application_id, "application_id")
+        if self.project_id:
+            validate_header_value(self.project_id, "project_id")
 
         # Setup session with retry strategy
         self.session = requests.Session()
@@ -218,10 +227,15 @@ class HTTPTransport:
                     "service.name": span_dict.get("service_name", ""),
                     "service.version": span_dict.get("service_version", ""),
                     "deployment.environment": span_dict.get("environment", ""),
-                    "project.id": span_dict.get("project_id", ""),
                     "ingestion_url": self.endpoint,
                     "api.key": self.api_key,
                 }
+                # project.id is only required by pre-2.2.1 Kong traces-auth plugin
+                # versions. Current Kong resolves the project from
+                # api_key, so new clients can omit it; we still stamp it
+                # when supplied so old-plugin deployments keep working.
+                if self.project_id:
+                    resource_attrs["project.id"] = self.project_id
                 # policy.id is the OTel-style resource attribute
                 # llm-monitoring's validation consumer keys on to route
                 # the span through policy-driven evaluation. Only emit
@@ -245,54 +259,31 @@ class HTTPTransport:
         # application_id — never send an empty value.
         if self.application_id:
             headers["X-Application-Id"] = self.application_id
-        # X-Api-Key / X-Project-Id: header-first path for Kong's traces-auth
-        # plugin. Historically the SDK put both under resource.attributes,
-        # so the plugin had to buffer + JSON-parse the full body just to
+        # X-Api-Key: header-first path for Kong's traces-auth plugin.
+        # Historically the SDK put it under resource.attributes, so the
+        # plugin had to buffer + JSON-parse the full body just to
         # authenticate — that's what put the auth path next to the 8 KB
-        # spool-to-disk bug in TP-2314. Sending them as headers lets a
+        # spool-to-disk bug in TP-2314. Sending it as a header lets a
         # header-aware plugin version decide auth before touching a single
-        # byte of body. resource.attributes below stay populated so this
+        # byte of body. resource.attributes above stay populated so this
         # SDK still works against plugin versions that only look in the
-        # body — old-server / new-client is safe.
+        # body — old-server / new-client is safe. project_id is not sent:
+        # Kong resolves it from the api_key server-side.
         #
         # X-Realtime-Policy-Id is deliberately NOT sent as a header: as of
-        # this change nothing server-side reads it (traces-auth's header
-        # extractor only checks X-Api-Key/X-Project-Id), so shipping it
-        # now would only add exposure (see allow_redirects below) with no
+        # this change nothing server-side reads it, so shipping it now
+        # would only add exposure (see allow_redirects below) with no
         # matching benefit. Add it in the same change that adds its
         # consumer, not ahead of it. resource.attributes["policy.id"]
         # above is unaffected — that's the existing body-side contract.
-        project_id = resource_attrs.get("project.id")
-        if project_id:
-            # Unlike api_key/application_id (validated once in __init__,
-            # above), project_id varies per group/span and can reach here
-            # via more than one directly-constructible public class
-            # (DisseqtTrace, DisseqtSpan, EnrichedSpan) that bypasses
-            # DisseqtAgenticClient's own validation entirely. This is the
-            # one point every value actually passes through before
-            # becoming a header, so validate it here too -- and treat a
-            # bad value as this group's send failure (logged, retried
-            # like any other failure) rather than letting an uncaught
-            # UnicodeEncodeError propagate into the caller's own thread
-            # (add_span's synchronous flush path isn't covered by
-            # buffer.py's background-thread try/except).
-            try:
-                validate_header_value(project_id, "project_id")
-            except ValueError as exc:
-                logger.error(
-                    "Dropping span group: project_id is not safe to send " "as an HTTP header (%s)",
-                    exc,
-                    extra={
-                        "endpoint": self.endpoint,
-                        "span_count": len(spans),
-                        "policy_id": policy_id or None,
-                    },
-                )
-                return False
         if self.api_key:
             headers["X-Api-Key"] = self.api_key
-        if project_id:
-            headers["X-Project-Id"] = project_id
+        # X-Project-Id: only sent when the caller explicitly supplied a
+        # project_id (pre-2.2.1 Kong traces-auth plugin compatibility
+        # shim). Current Kong resolves it from X-Api-Key — don't send
+        # an empty header value.
+        if self.project_id:
+            headers["X-Project-Id"] = self.project_id
         try:
             response = self.session.post(
                 self.endpoint,

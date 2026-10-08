@@ -50,7 +50,6 @@ class _MissingSentinel:
 # One sentinel per required argument. Do NOT share instances — see
 # ``_MissingSentinel`` for the reason.
 _MISSING_API_KEY: object = _MissingSentinel()
-_MISSING_PROJECT_ID: object = _MissingSentinel()
 _MISSING_SERVICE_NAME: object = _MissingSentinel()
 _MISSING_APPLICATION_ID: object = _MissingSentinel()
 
@@ -76,7 +75,7 @@ class DisseqtAgenticClient:
     Main SDK client - manages configuration, transport, and buffering.
 
     Responsibilities:
-    - Store SDK configuration (project_id, endpoint, etc.)
+    - Store SDK configuration (api_key, endpoint, etc.)
     - Initialize transport layer
     - Manage buffering for efficient ingestion
     - Provide resource metadata
@@ -111,7 +110,13 @@ class DisseqtAgenticClient:
     def __init__(
         self,
         api_key: str = _MISSING_API_KEY,  # type: ignore[assignment]
-        project_id: str = _MISSING_PROJECT_ID,  # type: ignore[assignment]
+        # project_id keeps its pre-#31 2nd-positional slot so a caller
+        # that previously passed it positionally
+        # (``DisseqtAgenticClient("key", "proj", "svc", ...)``) still
+        # routes "proj" to project_id, not silently into service_name.
+        # Making it `None`-defaulted keeps every downstream positional
+        # arg optional-callable while the slot stays reserved.
+        project_id: str | None = None,
         service_name: str = _MISSING_SERVICE_NAME,  # type: ignore[assignment]
         endpoint: str = "https://api.disseqt.ai/agentic-monitoring/api/v1/traces",
         service_version: str = "1.0.0",
@@ -127,8 +132,12 @@ class DisseqtAgenticClient:
         Initialize SDK client.
 
         Args:
-            api_key: API key for authentication (required)
-            project_id: Project ID (required)
+            api_key: API key for authentication (required). Kong resolves
+                the owning project + org + user from this alone via
+                auth-svc's validate-api-key endpoint (user_api_keys has
+                UNIQUE (api_key_hash)); ``project_id`` is only needed on
+                deployments running a Kong plugin version that still
+                requires it in the OTLP body.
             service_name: Service name (required)
             endpoint: Backend API endpoint URL (required, default: https://api.disseqt.ai/agentic-monitoring/api/v1/traces)
             service_version: Service version
@@ -147,6 +156,16 @@ class DisseqtAgenticClient:
                 / empty / whitespace-only raises ``ValueError``
                 immediately at construction rather than silently
                 dropping every telemetry POST at flush time.
+            project_id: Optional project UUID. On pre-2.2.1 Kong
+                traces-auth plugins the OTLP
+                ``resource.attributes["project.id"]`` was mandatory and
+                this kwarg was required; current Kong resolves the
+                project from ``api_key`` server-side, so this is now
+                optional. When supplied, it is stamped onto every
+                outgoing payload (as the ``project.id`` resource
+                attribute and the ``X-Project-Id`` request header) so
+                older Kong plugin versions keep working. When omitted,
+                neither is sent.
             realtime_policy_id: Optional realtime-policy UUID. When set,
                 every span emitted by this client carries it as the
                 ``policy.id`` resource attribute, which is the contract
@@ -180,7 +199,6 @@ class DisseqtAgenticClient:
         # service_name too — same rule as disseqt_sdk.Client's
         # (realtime_policy_id ⇒ application_name) check.
         _reject_missing_or_empty(api_key, "api_key")
-        _reject_missing_or_empty(project_id, "project_id")
         _reject_missing_or_empty(
             service_name,
             "service_name",
@@ -202,11 +220,16 @@ class DisseqtAgenticClient:
 
         # Configuration
         self.api_key = api_key
-        self.project_id = project_id
         self.service_name = service_name
         self.service_version = service_version
         self.environment = environment
         self.realtime_policy_id = realtime_policy_id
+        # Treat empty / whitespace-only project_id as unset — don't
+        # validate, don't send. The validated-and-stamped path only
+        # fires when the caller explicitly provides a non-empty value.
+        self.project_id: str | None = (
+            project_id.strip() if project_id and project_id.strip() else None
+        )
         self.application_id = application_id.strip()
         # Fail-fast on a value whose characters would break HTTP header
         # encoding at send time (CRLF injection risk, non-Latin-1 codepoints
@@ -216,18 +239,14 @@ class DisseqtAgenticClient:
         # banner. TP-2128 round-2 P2 #2.3 + round-3 P1 #1.1.
         #
         # This covers the documented construction path (this client), not
-        # every possible path: project_id can also reach a header via a
-        # directly-constructed DisseqtTrace/DisseqtSpan/EnrichedSpan
-        # (all public classes) bypassing this client entirely, and
-        # application_id/api_key can likewise bypass this client via a
-        # directly-constructed HTTPTransport. transport/http.py validates
-        # both at the one point every value actually passes through
-        # before becoming a header, regardless of how it got there — this
-        # check here is the fail-fast-and-loud layer for the common path,
-        # not the only layer.
+        # every possible path: application_id/api_key can also bypass this
+        # client via a directly-constructed HTTPTransport, which validates
+        # them again in its own __init__ — this check here is the
+        # fail-fast-and-loud layer for the common path, not the only layer.
         _validate_header_value(self.api_key, "api_key")
-        _validate_header_value(self.project_id, "project_id")
         _validate_header_value(self.application_id, "application_id")
+        if self.project_id:
+            _validate_header_value(self.project_id, "project_id")
 
         # Initialize transport
         self.transport = HTTPTransport(
@@ -236,6 +255,7 @@ class DisseqtAgenticClient:
             max_retries=max_retries,
             realtime_policy_id=realtime_policy_id,
             application_id=self.application_id,
+            project_id=self.project_id,
         )
 
         # Initialize buffer
@@ -258,8 +278,8 @@ class DisseqtAgenticClient:
 
         set_client(self)
 
-        # Defense-in-depth: never log the project_id (a sensitive identifier),
-        # even though the logger would redact it. Only non-sensitive fields here.
+        # Non-sensitive fields only. api_key/application_id are secrets or
+        # opaque identifiers and don't belong in structured logs.
         logger.info(
             "DisseqtAgenticClient initialized",
             extra={

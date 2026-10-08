@@ -31,7 +31,6 @@ def _stub_transport(monkeypatch):
 def _make_client(**overrides):
     kwargs = {
         "api_key": "test_key",
-        "project_id": "test_proj",
         "service_name": "test_service",
         "endpoint": "http://localhost/v1/traces",
         "application_id": "7ce57144-9df6-4fa4-8aad-8cbc1ffdb558",
@@ -55,7 +54,6 @@ class TestApplicationIdRequired:
         with pytest.raises(ValueError, match="application_id is required") as exc_info:
             DisseqtAgenticClient(
                 api_key="k",
-                project_id="p",
                 service_name="s",
                 endpoint="http://localhost/v1/traces",
             )
@@ -80,6 +78,10 @@ class TestApplicationIdRequired:
         ``application_id`` sits after a ``*`` in the signature so a
         caller can't accidentally position-pass some other value into
         it. This test locks that in.
+
+        project_id was restored to its original 2nd positional slot in
+        the "optional, non-breaking" rework, so the overflow case now
+        needs 11 positional args to reach the kwonly barrier.
         """
         with pytest.raises(TypeError, match="positional"):
             # Passing 11 positional args tries to fill application_id

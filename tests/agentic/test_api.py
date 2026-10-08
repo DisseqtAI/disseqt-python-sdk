@@ -22,14 +22,12 @@ class TestPublicAPI:
 
         client = DisseqtAgenticClient(
             api_key="test_key",
-            project_id="proj_456",
             service_name="test_service",
             endpoint="http://localhost:8080/v1/traces",
             application_id="test-app-id",
         )
 
         assert client is not None
-        assert client.project_id == "proj_456"
         assert client.service_name == "test_service"
         mock_http_transport_class.assert_called_once()
         mock_trace_buffer_class.assert_called_once()
@@ -44,16 +42,6 @@ class TestPublicAPI:
         """
         with pytest.raises(ValueError, match="api_key is required"):
             DisseqtAgenticClient(
-                project_id="proj_456",
-                service_name="test_service",
-                application_id="test-app-id",
-            )
-
-    def test_client_missing_project_id_only(self):
-        """Missing project_id raises ValueError (not TypeError)."""
-        with pytest.raises(ValueError, match="project_id is required"):
-            DisseqtAgenticClient(
-                api_key="key",
                 service_name="test_service",
                 application_id="test-app-id",
             )
@@ -63,17 +51,6 @@ class TestPublicAPI:
         with pytest.raises(ValueError, match="service_name is required"):
             DisseqtAgenticClient(
                 api_key="key",
-                project_id="proj_456",
-                application_id="test-app-id",
-            )
-
-    def test_client_empty_project_id(self):
-        """Test client fails with empty project_id."""
-        with pytest.raises(ValueError, match="project_id is required"):
-            DisseqtAgenticClient(
-                api_key="key",
-                project_id="",
-                service_name="test",
                 application_id="test-app-id",
             )
 
@@ -82,7 +59,6 @@ class TestPublicAPI:
         with pytest.raises(ValueError, match="api_key is required"):
             DisseqtAgenticClient(
                 api_key="",
-                project_id="proj_456",
                 service_name="test",
                 application_id="test-app-id",
             )
@@ -92,7 +68,6 @@ class TestPublicAPI:
         with pytest.raises(ValueError, match="endpoint is required"):
             DisseqtAgenticClient(
                 api_key="key",
-                project_id="proj_456",
                 service_name="test",
                 endpoint="",
                 application_id="test-app-id",
@@ -103,7 +78,6 @@ class TestPublicAPI:
         with pytest.raises(ValueError, match="environment is required"):
             DisseqtAgenticClient(
                 api_key="key",
-                project_id="proj_456",
                 service_name="test",
                 environment="",
                 application_id="test-app-id",
@@ -115,7 +89,6 @@ class TestPublicAPI:
         """Test starting a trace."""
         client = DisseqtAgenticClient(
             api_key="test_key",
-            project_id="proj_456",
             service_name="test_service",
             application_id="test-app-id",
         )
@@ -123,7 +96,6 @@ class TestPublicAPI:
         with start_trace(client, "test_trace", intent_id="intent_123") as trace:
             assert trace.name == "test_trace"
             assert trace.intent_id == "intent_123"
-            assert trace.project_id == "proj_456"
 
     @patch("disseqt_agentic_sdk.client.client.HTTPTransport")
     @patch("disseqt_agentic_sdk.client.client.TraceBuffer")
@@ -131,7 +103,6 @@ class TestPublicAPI:
         """Test starting a trace with spans."""
         client = DisseqtAgenticClient(
             api_key="test_key",
-            project_id="proj_456",
             service_name="test_service",
             application_id="test-app-id",
         )
@@ -148,7 +119,6 @@ class TestPublicAPI:
         """Test flushing spans."""
         client = DisseqtAgenticClient(
             api_key="test_key",
-            project_id="proj_456",
             service_name="test_service",
             application_id="test-app-id",
         )
@@ -162,7 +132,6 @@ class TestPublicAPI:
         """Test SDK shutdown."""
         client = DisseqtAgenticClient(
             api_key="test_key",
-            project_id="proj_456",
             service_name="test_service",
             application_id="test-app-id",
         )

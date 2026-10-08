@@ -1,12 +1,11 @@
 """
-Tests for the header-safety validation on ``api_key`` and ``project_id``.
+Tests for the header-safety validation on ``api_key``.
 
-Both values now travel as HTTP headers (X-Api-Key / X-Project-Id) on
-every trace POST, alongside ``application_id`` (X-Application-Id,
-covered separately in test_client_application_id.py). All three now
-route through the same ``_validate_header_value`` check
-(client.py, generalized from the application_id-only check) so a
-malformed value in any of them fails loudly at construction instead of
+It now travels as an HTTP header (X-Api-Key) on every trace POST,
+alongside ``application_id`` (X-Application-Id, covered separately in
+test_client_application_id.py). Both route through the same
+``_validate_header_value`` check (client.py, generalized from the
+application_id-only check) so a malformed value in either fails loudly at construction instead of
 reaching ``http.client.putheader`` and raising an uncaught
 ``UnicodeEncodeError`` on every send thereafter.
 
@@ -37,7 +36,6 @@ def _stub_transport(monkeypatch):
 def _make_client(**overrides):
     kwargs = {
         "api_key": "test_key",
-        "project_id": "test_proj",
         "service_name": "test_service",
         "endpoint": "http://localhost/v1/traces",
         "application_id": "7ce57144-9df6-4fa4-8aad-8cbc1ffdb558",
@@ -64,27 +62,9 @@ class TestApiKeyHeaderSafety:
         assert client.api_key == "secret-key-42"
 
 
-class TestProjectIdHeaderSafety:
-    def test_newline_in_project_id_raises(self):
-        with pytest.raises(ValueError, match="carriage return or newline"):
-            _make_client(project_id="proj-with-\nnewline")
-
-    def test_carriage_return_in_project_id_raises(self):
-        with pytest.raises(ValueError, match="carriage return or newline"):
-            _make_client(project_id="proj\r\nX-Injected: 1")
-
-    def test_non_latin1_character_in_project_id_raises(self):
-        with pytest.raises(ValueError, match="Latin-1"):
-            _make_client(project_id="proj-\U0001f525-name")
-
-    def test_ordinary_project_id_accepted(self):
-        client = _make_client(project_id="proj-abc-123")
-        assert client.project_id == "proj-abc-123"
-
-
 class TestErrorMessagesNameTheField:
     """
-    Three fields now share one validator -- confirm the error message
+    Two fields now share one validator -- confirm the error message
     still names the actual offending field, not a generic/wrong one,
     so a customer debugging a construction failure isn't misdirected.
     """
@@ -92,10 +72,6 @@ class TestErrorMessagesNameTheField:
     def test_api_key_error_names_api_key(self):
         with pytest.raises(ValueError, match="api_key contains"):
             _make_client(api_key="bad-\U0001f525-key")
-
-    def test_project_id_error_names_project_id(self):
-        with pytest.raises(ValueError, match="project_id contains"):
-            _make_client(project_id="bad-\U0001f525-proj")
 
     def test_application_id_error_still_names_application_id(self):
         with pytest.raises(ValueError, match="application_id contains"):

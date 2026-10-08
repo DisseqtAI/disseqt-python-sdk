@@ -32,7 +32,6 @@ class DisseqtTrace:
         name: str,
         trace_id: str | None = None,
         org_id: str = "",
-        project_id: str = "",
         user_id: str = "",
         service_name: str = "",
         service_version: str = "1.0.0",
@@ -49,7 +48,6 @@ class DisseqtTrace:
             name: Trace name
             trace_id: Optional trace ID (auto-generated if not provided)
             org_id: Organization ID
-            project_id: Project ID
             user_id: User ID
             service_name: Service name
             service_version: Service version
@@ -74,7 +72,6 @@ class DisseqtTrace:
         # Store parameters
         self.name = name
         self.org_id = org_id
-        self.project_id = project_id
         self.user_id = user_id
         self.service_name = service_name
         self.service_version = service_version
@@ -149,7 +146,6 @@ class DisseqtTrace:
             kind=kind,
             span_id=span_id,
             parent_span_id=parent_span_id,
-            project_id=self.project_id,
             user_id=self.user_id,
             service_name=self.service_name,
             service_version=self.service_version,
@@ -258,7 +254,6 @@ class DisseqtTrace:
             "start_time_ns": self.start_time_ns,
             "end_time_ns": self.end_time_ns,
             "org_id": self.org_id,
-            "project_id": self.project_id,
             "user_id": self.user_id,
             "service_name": self.service_name,
             "service_version": self.service_version,

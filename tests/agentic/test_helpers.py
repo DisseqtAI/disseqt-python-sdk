@@ -30,7 +30,6 @@ class TestHelpers:
         ):
             self.client = DisseqtAgenticClient(
                 api_key="test_key",
-                project_id="test_proj",
                 service_name="test_service",
                 application_id="test-app-id",
             )
@@ -438,7 +437,6 @@ class TestDisseqtTraceIOCapture:
         )
         self.client = DisseqtAgenticClient(
             api_key="test_key",
-            project_id="test_proj",
             service_name="test_service",
             endpoint="http://localhost/v1/traces",
             application_id="test-app-id",
@@ -987,7 +985,6 @@ class TestClientHelpers:
         """Test get_client returns client when initialized."""
         client = DisseqtAgenticClient(
             api_key="test_key",
-            project_id="test_proj",
             service_name="test_service",
             application_id="test-app-id",
         )
@@ -995,7 +992,6 @@ class TestClientHelpers:
 
         retrieved_client = get_client()
         assert retrieved_client is not None
-        assert retrieved_client.project_id == "test_proj"
 
         client.shutdown()
         set_client(None)

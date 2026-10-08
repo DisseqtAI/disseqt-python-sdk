@@ -28,7 +28,6 @@ class TestAPIClientHelpers:
         ):
             client = DisseqtAgenticClient(
                 api_key="test_key",
-                project_id="test_proj",
                 service_name="test_service",
                 application_id="test-app-id",
             )
@@ -36,7 +35,6 @@ class TestAPIClientHelpers:
 
             retrieved_client = get_current_client()
             assert retrieved_client is not None
-            assert retrieved_client.project_id == "test_proj"
 
             client.shutdown()
             set_client(None)
@@ -56,7 +54,6 @@ class TestAPIClientHelpers:
         ):
             client = DisseqtAgenticClient(
                 api_key="test_key",
-                project_id="test_proj",
                 service_name="test_service",
                 application_id="test-app-id",
             )
@@ -86,7 +83,6 @@ class TestAPIClientHelpers:
         ):
             client = DisseqtAgenticClient(
                 api_key="test_key",
-                project_id="test_proj",
                 service_name="test_service",
                 application_id="test-app-id",
             )
@@ -116,7 +112,6 @@ class TestAPIClientHelpers:
         ):
             client = DisseqtAgenticClient(
                 api_key="test_key",
-                project_id="test_proj",
                 service_name="test_service",
                 application_id="test-app-id",
             )

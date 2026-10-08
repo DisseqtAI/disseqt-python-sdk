@@ -7,7 +7,6 @@ fields are passed via ``extra={...}`` (stdlib style), matching earlier releases.
 import io
 import json
 import logging
-from unittest.mock import patch
 
 import pytest
 
@@ -78,13 +77,11 @@ class TestAgenticLogging:
         get_logger("disseqt_agentic_sdk.client").info(
             "DisseqtAgenticClient initialized",
             extra={
-                "project_id": "670bb08f-secret",
-                "api_key": "dsk_secret",
+                "api_key": "test_secret",
                 "endpoint": "https://x",
             },
         )
         line = _lines(cap)[-1]
-        assert line["project_id"] == "[REDACTED]"
         assert line["api_key"] == "[REDACTED]"
         assert line["endpoint"] == "https://x"  # non-sensitive survives
 
@@ -106,31 +103,3 @@ class TestAgenticLogging:
     def test_set_log_level_invalid_falls_back_to_info(self, cap):
         set_log_level(object())  # type: ignore[arg-type]
         assert disseqt_logging.current_level() == "info"
-
-
-class TestAgenticClientDoesNotLogProjectId:
-    """Defense-in-depth: the client init must not emit project_id even unredacted."""
-
-    def test_init_omits_project_id_even_without_redaction(self):
-        from disseqt_agentic_sdk.client.client import DisseqtAgenticClient
-
-        buf = io.StringIO()
-        disseqt_logging.configure(level="info", fmt="json", stream=buf, redact=False)
-        try:
-            with (
-                patch("disseqt_agentic_sdk.client.client.HTTPTransport"),
-                patch("disseqt_agentic_sdk.client.client.TraceBuffer"),
-            ):
-                client = DisseqtAgenticClient(
-                    api_key="test_key",
-                    project_id="PID-SENTINEL-123",
-                    service_name="svc",
-                    endpoint="http://localhost:8080/v1/traces",
-                    application_id="test-app-id",
-                )
-                client.shutdown()
-            text = buf.getvalue()
-            assert "DisseqtAgenticClient initialized" in text
-            assert "PID-SENTINEL-123" not in text  # never logged, redaction off
-        finally:
-            disseqt_logging.disable()

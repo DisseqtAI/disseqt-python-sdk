@@ -22,7 +22,6 @@ from disseqt_agentic_sdk import DisseqtAgenticClient, instrument_all, start_trac
 
 client = DisseqtAgenticClient(
     api_key=os.environ["DISSEQT_API_KEY"],
-    project_id=os.environ["DISSEQT_PROJECT_ID"],
     application_id=os.environ["DISSEQT_APPLICATION_ID"],  # required
     service_name="auto-instrumented-demo",
     endpoint=os.environ.get(

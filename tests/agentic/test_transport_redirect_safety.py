@@ -11,7 +11,7 @@ socket can.
 Bug: ``requests``' default ``allow_redirects=True`` follows a
 301/302/303 automatically. ``rebuild_auth`` strips ONLY the
 ``Authorization`` header on a cross-host redirect -- custom headers
-like ``X-Api-Key`` / ``X-Project-Id`` are not stripped and follow to
+like ``X-Api-Key`` are not stripped and follow to
 the new host in cleartext, even though the JSON body (and its
 ``resource.attributes["api.key"]`` copy) is dropped for that same
 redirect class (POST -> GET conversion). Pre-fix, that redirect
@@ -46,7 +46,6 @@ def _make_span() -> EnrichedSpan:
         end_time_unix_nano=1_700_000_001_000_000_000,
         duration_ns=1_000_000_000,
         status_code="OK",
-        project_id="proj-redirect-test",
         service_name="probe-service",
         realtime_policy_id="",
     )

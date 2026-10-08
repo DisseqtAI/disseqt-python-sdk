@@ -7,7 +7,7 @@ Usage:
     from disseqt_agentic_sdk.instrumentation import instrument_all
 
     client = DisseqtAgenticClient(
-        api_key=..., project_id=..., service_name="my-app", application_id=...
+        api_key=..., service_name="my-app", application_id=...
     )
     instrument_all(client)
 
