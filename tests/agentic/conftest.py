@@ -9,6 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from disseqt_agentic_sdk import DisseqtAgenticClient
+from disseqt_agentic_sdk.context import clear_context
 
 # Add src directory to Python path for src layout
 # This allows tests to import the package without installing it
@@ -19,9 +20,23 @@ if str(src_path) not in sys.path:
 
 @pytest.fixture(autouse=True)
 def reset_sdk():
-    """Reset SDK state before each test."""
+    """
+    Reset SDK state before and after each test.
+
+    Several tests across this suite construct a bare DisseqtTrace/
+    DisseqtSpan directly (no client, no `with`, no explicit .end()) to
+    exercise a specific method in isolation. Since contextvars.ContextVar
+    (see disseqt_agentic_sdk/context/context.py) correctly restores the
+    PREVIOUS current-trace/current-span on a proper end()/__exit__ -- not
+    just "clear to None" -- a test that never ends what it constructed
+    leaves it genuinely current for whatever test runs next, and that
+    leak now compounds across tests instead of being silently papered
+    over. clear_context() here guarantees no test starts with another
+    test's leftover trace/span implicitly "current".
+    """
+    clear_context()
     yield
-    # Cleanup after test if needed
+    clear_context()
 
 
 @pytest.fixture

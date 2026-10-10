@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from disseqt_agentic_sdk.client import DisseqtAgenticClient
 
-from disseqt_agentic_sdk.context import get_current_span, set_current_span
+from disseqt_agentic_sdk.context import get_current_span, reset_current_span, set_current_span
 from disseqt_agentic_sdk.enums import SpanKind, SpanStatus
 from disseqt_agentic_sdk.models.span import EnrichedSpan
 from disseqt_agentic_sdk.semantics import (
@@ -70,7 +70,6 @@ class DisseqtSpan:
         # Get parent from context if not explicitly provided
         # Only use context if parent_span_id was not passed (None means check context)
         # If parent_span_id was explicitly passed as None, use None (root span)
-        self._parent_span_context = None  # Store parent span for context restoration
         if parent_span_id is None:
             current_span = get_current_span()
             if current_span is not None:
@@ -80,7 +79,6 @@ class DisseqtSpan:
                 trace_id_str = str(trace_id)
                 if current_trace_id_str == trace_id_str:
                     parent_span_id = current_span.span_id
-                    self._parent_span_context = current_span  # Store parent for restoration
 
         # Determine if root span
         self.root = parent_span_id is None
@@ -116,8 +114,14 @@ class DisseqtSpan:
         # Attributes dictionary (will be serialized to attributes_json)
         self.attributes: dict[str, Any] = {}
 
-        # Set current span in context
-        set_current_span(self)
+        # Set current span in context, keeping the token so __exit__ can
+        # restore whatever span was current before this one (correct
+        # under nesting/concurrency -- see context.py). Deliberately NOT
+        # restored in end() -- only __exit__ does; see end()'s own comment.
+        self._span_context_token = set_current_span(self)
+        # Guards __exit__'s context-restore step against being run twice
+        # (its own idempotency check -- see __exit__).
+        self._context_restored = False
 
     def set_agent_info(
         self,
@@ -301,16 +305,39 @@ class DisseqtSpan:
 
     def end(self) -> "DisseqtSpan":
         """
-        End the span (set end time).
+        End the span (set end time) and, if a client is attached, deliver it
+        to the buffer for incremental sending.
+
+        Idempotent: calling this more than once (directly, then again via
+        __exit__, or via DisseqtTrace.end()'s cleanup sweep over any span
+        the caller didn't explicitly end) only delivers the span once.
 
         Returns:
             self for method chaining
         """
-        if self.end_time_ns is None:
-            self.end_time_ns = now_ns()
+        if self.end_time_ns is not None:
+            return self  # already ended (and, if applicable, already sent)
+        self.end_time_ns = now_ns()
 
         # Don't clear context here - __exit__ will handle parent restoration
         # This prevents race conditions where child spans can't find their parent
+
+        # Incremental sending: every public way to end a span (this method
+        # directly, `with span:` via __exit__, or DisseqtTrace.end()'s sweep
+        # over spans returned bare by trace_llm_call/trace_agent_action/
+        # trace_tool_call in api/helpers.py -- none of which use `with`)
+        # must reach the buffer exactly once. This used to live only in
+        # __exit__, so a span ended any other way was silently never sent.
+        if self._client is not None:
+            try:
+                enriched_span = self.to_enriched_span()
+                self._client.buffer.add_span(enriched_span)
+            except Exception as e:
+                # Log error but don't fail the span completion
+                import logging
+
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Failed to send span {self.span_id} to buffer: {e}")
 
         return self
 
@@ -362,19 +389,22 @@ class DisseqtSpan:
         """Context manager exit - automatically end span and restore parent context"""
         if exc_type:
             self.set_error(str(exc_val), error_type=exc_type.__name__)
-        self.end()
+        self.end()  # end() itself delivers to the buffer now -- see its own doc comment
 
-        # Send span to buffer immediately if client is available (incremental sending)
-        if self._client is not None:
-            try:
-                enriched_span = self.to_enriched_span()
-                self._client.buffer.add_span(enriched_span)
-            except Exception as e:
-                # Log error but don't fail the span completion
-                import logging
+        # Idempotency guard: contextvars.Token.reset() raises RuntimeError
+        # ("has already been used once") on a second reset -- unlike
+        # end()'s own end_time_ns-based guard, __exit__ had no protection
+        # against being invoked twice on the same span (e.g. a caller
+        # reusing `with span:` a second time, or a defensive cleanup path
+        # calling it again). Observability code should never crash the
+        # caller (same policy as set_agent_info's contextlib.suppress
+        # elsewhere in this file) -- so this must be safe to call more
+        # than once, same as end() already is.
+        if self._context_restored:
+            return
+        self._context_restored = True
 
-                logger = logging.getLogger(__name__)
-                logger.warning(f"Failed to send span {self.span_id} to buffer: {e}")
-
-        # Restore parent span to context so sibling spans can find their parent
-        set_current_span(self._parent_span_context)
+        # Restore whatever span was current before this one, via the
+        # token captured in __init__, so sibling spans can find their
+        # real parent -- correct under concurrent/nested spans.
+        reset_current_span(self._span_context_token)
