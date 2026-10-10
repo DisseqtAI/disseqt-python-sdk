@@ -28,12 +28,15 @@ from .insecure_output import OutputInsecureOutputValidator
 from .intent_compliance import OutputIntentComplianceValidator
 from .intent_guard import OutputIntentGuardValidator
 from .intersectionality import OutputIntersectionalityValidator
+from .language_detection import LanguageDetectionValidator
+from .language_formality import LanguageFormalityValidator
 from .meteor_score import MeteorScoreValidator
 from .narrative_continuity import NarrativeContinuityValidator
 from .nsfw import OutputNSFWValidator
 from .political_bias import OutputPoliticalBiasValidator
 from .racial_bias import OutputRacialBiasValidator
 from .readability import ReadabilityValidator
+from .repeat_request import RepeatRequestValidator
 from .response_tone import ResponseToneValidator
 from .rouge_score import RougeScoreValidator
 from .self_harm import OutputSelfHarmValidator
@@ -55,6 +58,10 @@ __all__ = [
     "NarrativeContinuityValidator",
     "ReadabilityValidator",
     "ResponseToneValidator",
+    # Language & conversation
+    "LanguageDetectionValidator",
+    "LanguageFormalityValidator",
+    "RepeatRequestValidator",
     # Safety & bias detection
     "OutputBiasValidator",
     "OutputGenderBiasValidator",
