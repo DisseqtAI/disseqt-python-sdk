@@ -22,8 +22,9 @@ class LanguageDetectionValidator(OutputValidator):
     text to evaluate in llm_output (response field); llm_input_query and
     llm_input_context can be empty.
 
-    Note: the expected language (``requested_language``, server default
-    English) is not yet settable through the typed SDK config.
+    Set the expected language with ``requested_language`` in the config
+    (ISO 639-1, e.g. "de"); it defaults to English server-side. ``min_share``
+    tunes which minor languages are dropped from the breakdown.
     """
 
     def __post_init__(self) -> None:
