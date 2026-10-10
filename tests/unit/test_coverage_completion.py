@@ -121,7 +121,16 @@ class TestValidatorPostInit:
         from disseqt_sdk.validators.output.insecure_output import (
             OutputInsecureOutputValidator,
         )
+        from disseqt_sdk.validators.output.language_detection import (
+            LanguageDetectionValidator,
+        )
+        from disseqt_sdk.validators.output.language_formality import (
+            LanguageFormalityValidator,
+        )
         from disseqt_sdk.validators.output.meteor_score import MeteorScoreValidator
+        from disseqt_sdk.validators.output.repeat_request import (
+            RepeatRequestValidator,
+        )
         from disseqt_sdk.validators.output.rouge_score import RougeScoreValidator
         from disseqt_sdk.validators.output.toxicity import OutputToxicityValidator
 
@@ -142,6 +151,9 @@ class TestValidatorPostInit:
             MeteorScoreValidator(data=data, config=config),
             RougeScoreValidator(data=data, config=config),
             OutputToxicityValidator(data=data, config=config),
+            LanguageDetectionValidator(data=data, config=config),
+            LanguageFormalityValidator(data=data, config=config),
+            RepeatRequestValidator(data=data, config=config),
         ]
 
         for validator in validators:

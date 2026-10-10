@@ -264,6 +264,8 @@ class TestConfigInputMapping:
             threshold=0.85,
             custom_labels=["Excellent", "Good", "Fair", "Poor"],
             label_thresholds=[0.9, 0.7, 0.5],
+            requested_language="de",
+            min_share=0.1,
         )
 
         validator = ToxicityValidator(
@@ -277,6 +279,8 @@ class TestConfigInputMapping:
         assert config_input["threshold"] == 0.85
         assert config_input["custom_labels"] == ["Excellent", "Good", "Fair", "Poor"]
         assert config_input["label_thresholds"] == [0.9, 0.7, 0.5]
+        assert config_input["requested_language"] == "de"
+        assert config_input["min_share"] == 0.1
 
     def test_config_minimal(self):
         """Test configuration with only required threshold."""
@@ -293,3 +297,5 @@ class TestConfigInputMapping:
         assert config_input["threshold"] == 0.5
         assert "custom_labels" not in config_input
         assert "label_thresholds" not in config_input
+        assert "requested_language" not in config_input
+        assert "min_share" not in config_input
