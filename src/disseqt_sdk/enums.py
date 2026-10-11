@@ -55,6 +55,11 @@ class OutputValidation(Enum):
     DIVERSITY = "diversity"
     NARRATIVE_CONTINUITY = "narrative-continuity"
 
+    # Language & conversation
+    LANGUAGE_DETECTION = "language-detection"
+    LANGUAGE_FORMALITY = "language-formality"
+    REPEAT_REQUEST = "repeat-request"
+
     # Safety & bias detection
     BIAS = "bias"
     GENDER_BIAS = "gender-bias"
