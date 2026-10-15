@@ -307,7 +307,6 @@ def _get_or_bootstrap_trace(
     return (
         DisseqtTrace(
             name=name,
-            project_id=client.project_id,
             service_name=client.service_name,
             service_version=client.service_version,
             environment=client.environment,

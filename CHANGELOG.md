@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (agentic SDK only, backward-compatible)
+- **`project_id` on `DisseqtAgenticClient` is now optional.** Kong traces-auth plugin 2.2.1+
+  resolves the owning project (plus org + user) server-side from
+  `api_key` alone via auth-svc's `validate-api-key` endpoint
+  (`user_api_keys` has a `UNIQUE (api_key_hash)` index — the api_key is a
+  deterministic pointer to exactly one project), so new call sites can
+  omit `project_id=`. Deployments on older Kong plugin versions that
+  still require `project.id` in the OTLP body keep working unchanged:
+  pass `project_id=...` and it is stamped onto every payload as the
+  `project.id` resource attribute and the `X-Project-Id` request header,
+  exactly as before.
+  - `DisseqtTrace`, `DisseqtSpan`, and `EnrichedSpan` no longer carry a
+    per-span `project_id` field — those were never read anywhere beyond
+    the resource-level stamp; the client-level kwarg is the single
+    source of truth.
+  - No code change required at any existing call site. New call sites
+    may choose to drop `project_id=` once their deployment runs
+    Kong traces-auth plugin 2.2.1+.
+  - **Release coordination:** the README quick-start now shows
+    `project_id=` as optional. The current prod plugin (2.2.0) still
+    returns 400 when both `project.id` and `X-Project-Id` are missing,
+    so this SDK revision should not ship in a release until
+    [disseqt-platform PR #487](https://github.com/DisseqtAI/disseqt-platform/pull/487)
+    (plugin 2.2.1) is deployed to every environment customers may hit.
+
 ### Fixed
 - **``CreateRunRequest.run_name`` now actually reaches the server.** Since
   this SDK's first release, ``to_payload()`` sent the run name under the

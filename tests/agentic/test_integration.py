@@ -17,7 +17,6 @@ class TestIntegration:
         """Test complete trace creation and sending workflow."""
         client = DisseqtAgenticClient(
             api_key="test_key",
-            project_id="proj_456",
             service_name="test_service",
             endpoint="http://localhost:8080/v1/traces",
             application_id="test-app-id",
@@ -54,7 +53,6 @@ class TestIntegration:
             # Create client with real buffer and transport (Session will be mocked)
             client = DisseqtAgenticClient(
                 api_key="test_key",
-                project_id="proj_456",
                 service_name="test_service",
                 application_id="test-app-id",
             )
@@ -66,7 +64,6 @@ class TestIntegration:
                 trace_id="test_trace",
                 span_id="test_span",
                 name="test",
-                project_id="proj_456",
                 service_name="test_service",
             )
 
@@ -87,7 +84,6 @@ class TestIntegration:
         """Test nested span context management."""
         client = DisseqtAgenticClient(
             api_key="test_key",
-            project_id="proj_456",
             service_name="test_service",
             application_id="test-app-id",
         )

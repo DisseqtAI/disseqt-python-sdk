@@ -26,7 +26,6 @@ from disseqt_agentic_sdk.trace import DisseqtTrace
 # Initialize SDK client
 client = DisseqtAgenticClient(
     api_key="your-api-key",
-    project_id="proj_456",
     service_name="my-service",
     endpoint="http://localhost:8080/v1/traces",
     application_id="your-application-uuid",
@@ -40,7 +39,6 @@ model = genai.GenerativeModel("gemini-2.0-flash-exp")
 trace = DisseqtTrace(
     name="agent_workflow",
     org_id="",  # Set by backend middleware
-    project_id="proj_456",
     service_name="my-service",
     service_version="1.0.0",
     environment="production",
