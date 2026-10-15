@@ -239,14 +239,23 @@ class DisseqtTrace:
         """
         return self.spans.copy()
 
-    def to_enriched_spans(self) -> list[EnrichedSpan]:
+    def to_enriched_spans(self, undelivered_only: bool = False) -> list[EnrichedSpan]:
         """
-        Convert all spans to EnrichedSpan models for sending to backend.
+        Convert spans to EnrichedSpan models for sending to backend.
+
+        Args:
+            undelivered_only: Skip spans already handed to the buffer by
+                ``DisseqtSpan.end()`` (incremental sending), so a caller who
+                also invokes ``send_trace`` does not deliver them twice.
 
         Returns:
             List of EnrichedSpan instances
         """
-        return [span.to_enriched_span() for span in self.spans]
+        return [
+            span.to_enriched_span()
+            for span in self.spans
+            if not (undelivered_only and getattr(span, "_delivered", False))
+        ]
 
     def to_dict(self) -> dict[str, Any]:
         """

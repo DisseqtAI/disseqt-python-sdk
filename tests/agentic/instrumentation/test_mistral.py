@@ -112,6 +112,13 @@ class TestMistralChat:
 
         instrumentor = MistralInstrumentor()
         instrumentor._client = recording_client
+        # try_open_llm_span now explicitly checks instrumentor._is_instrumented
+        # (TP-2128 round-3 PR #39 review: dropping client unconditionally
+        # on uninstrument() meant wrappers couldn't rely on `_client is None`
+        # anymore as the "pass through" signal). The test bypasses
+        # instrument() to avoid the full wrapt patch, so mark the
+        # instrumentor active here.
+        instrumentor._is_instrumented = True
         wrapper_fn = _sync_stream(instrumentor)
 
         stream = wrapper_fn(

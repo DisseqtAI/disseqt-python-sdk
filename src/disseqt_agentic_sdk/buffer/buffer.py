@@ -217,6 +217,7 @@ class TraceBuffer:
         """Start background thread for time-based AND size-triggered flushing"""
 
         def flush_worker():
+            # Event.wait (not time.sleep) so stop() wakes the worker at once.
             while not self._stop_flush_thread:
                 # Waits for either: max_batch_size crossed (add_span/
                 # add_spans sets _flush_requested -- wakes immediately,
@@ -270,6 +271,11 @@ class TraceBuffer:
         self._flush_requested.set()  # wake flush_worker immediately, don't wait out flush_interval
         if self._flush_thread and self._flush_thread.is_alive():
             self._flush_thread.join(timeout=2.0)
+            if self._flush_thread.is_alive():
+                logger.warning(
+                    "Flush thread did not stop within timeout; continuing with final flush",
+                    extra={"timeout_s": 2.0},
+                )
         # Final flush of any remaining spans
         self.flush()
         logger.debug("Buffer stopped and flushed")

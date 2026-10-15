@@ -7,8 +7,10 @@ from typing import Any, cast
 
 import requests
 
+from disseqt_logging import digest
+
 from ._version import check_version_notice, sdk_identity_headers
-from .client import HTTPError, _version_blocked_error
+from .client import HTTPError, ResponseDecodeError, _version_blocked_error
 from .models.prompt_packs import (
     CreateRunRequest,
     GeneratePromptPackRequest,
@@ -151,13 +153,32 @@ class DisseqtAPIClient:
 
             try:
                 raw = response.json()
-                if raw is None:
-                    raise ValueError("Server returned null/empty JSON response")
-                return cast(dict[str, Any], raw)
             except json.JSONDecodeError as e:
-                raise ValueError(
-                    f"Failed to decode JSON response: {e}. " f"Response text: {response.text[:200]}"
+                # The body may echo user content / PII: report only a digest.
+                raise ResponseDecodeError(
+                    status_code=response.status_code,
+                    message=(
+                        f"Failed to decode JSON response: {e}. "
+                        f"Response body: {digest(response.text or '')}"
+                    ),
+                    response_body="",
                 ) from e
+            if raw is None:
+                raise ResponseDecodeError(
+                    status_code=response.status_code,
+                    message="Server returned null/empty JSON response",
+                    response_body="",
+                )
+            if not isinstance(raw, dict):
+                raise ResponseDecodeError(
+                    status_code=response.status_code,
+                    message=(
+                        "Server returned an unexpected JSON "
+                        f"{type(raw).__name__} response; expected an object"
+                    ),
+                    response_body="",
+                )
+            return cast(dict[str, Any], raw)
 
         except requests.RequestException as e:
             raise HTTPError(

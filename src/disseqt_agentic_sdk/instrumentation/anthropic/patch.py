@@ -12,7 +12,6 @@ import json
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from disseqt_agentic_sdk.enums import SpanKind
 from disseqt_agentic_sdk.instrumentation._kwargs import (
     KW_MESSAGES,
     KW_MODEL,
@@ -26,15 +25,15 @@ from disseqt_agentic_sdk.instrumentation._tool_result import (
     _notify_planned_tool_calls,
 )
 from disseqt_agentic_sdk.instrumentation._utils import (
-    open_llm_span,
+    read as _read,
+)
+from disseqt_agentic_sdk.instrumentation._utils import (
     safe_call,
     safe_set,
     serialize_messages,
     set_first_tool_call_attrs,
     set_messages_if_capturing,
-)
-from disseqt_agentic_sdk.instrumentation._utils import (
-    read as _read,
+    try_open_llm_span,
 )
 from disseqt_agentic_sdk.semantics import (
     AgenticAttributes,
@@ -152,7 +151,9 @@ def _set_response_attrs(span: DisseqtSpan, response: Any) -> None:
 
 def messages_create(instrumentor: AnthropicInstrumentor) -> Callable[..., Any]:
     def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
-        scope = open_llm_span(instrumentor.client, "anthropic.messages.create", SpanKind.MODEL_EXEC)
+        scope = try_open_llm_span(instrumentor, "anthropic.messages.create")
+        if scope is None:
+            return wrapped(*args, **kwargs)
         span = scope.span
         safe_call(_set_request_attrs, span, kwargs)
         try:
@@ -180,7 +181,9 @@ def async_messages_create(instrumentor: AnthropicInstrumentor) -> Callable[..., 
     async def wrapper(
         wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
     ) -> Any:
-        scope = open_llm_span(instrumentor.client, "anthropic.messages.create", SpanKind.MODEL_EXEC)
+        scope = try_open_llm_span(instrumentor, "anthropic.messages.create")
+        if scope is None:
+            return await wrapped(*args, **kwargs)
         span = scope.span
         safe_call(_set_request_attrs, span, kwargs)
         try:

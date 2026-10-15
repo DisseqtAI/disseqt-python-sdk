@@ -134,16 +134,28 @@ class DisseqtInstrumentor(ABC):
         """Restore original methods on the provider SDK."""
         if not self._is_instrumented:
             return
+        fully_unwound = False
         try:
             self._uninstrument()
         finally:
-            self._unwind_patches()
+            fully_unwound = self._unwind_patches()
             self._is_instrumented = False
             # Drop the client reference so wrapper closures created during
             # _instrument() (which capture `self`) no longer keep the client
             # alive. Long-running processes that instrument/uninstrument
             # repeatedly would otherwise leak clients.
-            self._client = None
+            #
+            # Only do so when every patch was actually unwound. If one of our
+            # wrappers is still live (buried under another library's wrapper),
+            # it keeps running and needs the client; clearing it would turn
+            # every user LLM call through that chain into a failure/no-op.
+            if fully_unwound:
+                self._client = None
+            else:
+                logger.warning(
+                    f"{self.package_name}: some patches could not be removed; "
+                    "keeping client reference so the remaining wrappers keep working"
+                )
 
     # ------------------------------------------------------------------
     # Subclass hooks
@@ -177,13 +189,27 @@ class DisseqtInstrumentor(ABC):
             installed = _get_attr(module, attr)
         self._patched.append((module_name, attr, installed))
 
-    def _unwind_patches(self) -> None:
-        """Restore each tracked patch and clear the list."""
-        for module_name, attr, installed in self._patched:
-            with contextlib.suppress(Exception):
+    def _unwind_patches(self) -> bool:
+        """
+        Restore each tracked patch.
+
+        Returns True when nothing of ours is left live. Patches that could
+        not be removed (buried under another library's wrapper, or the
+        restore raised) stay tracked in ``_patched`` and make this return
+        False.
+        """
+        remaining: list[tuple[str, str, Any]] = []
+        for entry in self._patched:
+            module_name, attr, installed = entry
+            try:
                 module = importlib.import_module(module_name)
-                _restore_wrapped(module, attr, installed, self.package_name)
-        self._patched.clear()
+                ok = _restore_wrapped(module, attr, installed, self.package_name)
+            except Exception:
+                ok = False
+            if not ok:
+                remaining.append(entry)
+        self._patched[:] = remaining
+        return not remaining
 
     @property
     def client(self) -> DisseqtAgenticClient:
@@ -219,12 +245,23 @@ def _version_lt(a: str, b: str) -> bool:
     """
     Return True if version string ``a`` is strictly less than ``b``.
 
-    Naive MAJOR.MINOR.PATCH-only comparator: strips non-digit characters
-    from each of the first three dot-separated parts. Sufficient for the
-    current min_version gates (all declared as X.Y.Z), but does not
-    handle rc / post / local versions correctly. A follow-up will swap
-    this out for ``packaging.version.Version``.
+    Uses ``packaging.version.Version`` (PEP 440: rc / beta / post / local
+    handled correctly, e.g. ``1.0.0rc1 < 1.0.0``). Falls back to a naive
+    MAJOR.MINOR.PATCH comparator when ``packaging`` is unavailable or a
+    string is not valid PEP 440.
     """
+    try:
+        from packaging.version import InvalidVersion, Version
+    except ImportError:
+        return _naive_version_lt(a, b)
+    try:
+        return Version(a) < Version(b)
+    except InvalidVersion:
+        return _naive_version_lt(a, b)
+
+
+def _naive_version_lt(a: str, b: str) -> bool:
+    """Naive MAJOR.MINOR.PATCH-only comparator (non-digits stripped)."""
 
     def _parts(v: str) -> tuple[int, ...]:
         parts = []
@@ -250,7 +287,7 @@ def _get_attr(module: Any, dotted: str) -> Any:
     return inspect.getattr_static(obj, parts[-1])
 
 
-def _restore_wrapped(module: Any, dotted: str, installed: Any, provider: str) -> None:
+def _restore_wrapped(module: Any, dotted: str, installed: Any, provider: str) -> bool:
     """
     Splice our wrapt FunctionWrapper out of the chain at `module.dotted`.
 
@@ -264,9 +301,12 @@ def _restore_wrapped(module: Any, dotted: str, installed: Any, provider: str) ->
       which isn't safe to do blindly; leave the other library's chain intact
       and let their uninstall (or a process restart) restore the original.
     - If our wrapper is gone from the chain: nothing to do.
+
+    Returns True when no layer of ours remains live, False when it is still
+    buried in the chain.
     """
     if installed is None:
-        return
+        return True
     parts = dotted.split(".")
     parent = module
     for part in parts[:-1]:
@@ -275,11 +315,11 @@ def _restore_wrapped(module: Any, dotted: str, installed: Any, provider: str) ->
     try:
         fn = inspect.getattr_static(parent, leaf)
     except AttributeError:
-        return
+        return True
 
     if fn is installed:
         setattr(parent, leaf, fn.__wrapped__)
-        return
+        return True
 
     node = getattr(fn, "__wrapped__", None)
     while node is not None:
@@ -288,5 +328,6 @@ def _restore_wrapped(module: Any, dotted: str, installed: Any, provider: str) ->
                 f"{provider}: cannot restore {dotted}: another library wrapped on top; "
                 "leaving chain intact"
             )
-            return
+            return False
         node = getattr(node, "__wrapped__", None)
+    return True
