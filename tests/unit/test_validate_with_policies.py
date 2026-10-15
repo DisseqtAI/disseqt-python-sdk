@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from disseqt_sdk import Client, any_blocking, is_blocking, parse_policy
+from disseqt_sdk import Client, any_blocking, is_blocking, is_error, parse_policy
 from disseqt_sdk.client import HTTPError
 from disseqt_sdk.models.agentic_behaviour import AgenticBehaviourRequest
 from disseqt_sdk.models.base import SDKConfigInput
@@ -171,13 +171,72 @@ class TestErrorPropagation:
         assert exc_info.value.status_code == 404
         assert tox.called  # validator ran before the policy error surfaced
 
-    def test_second_policy_failure_after_first_succeeds(self, requests_mock):
+    def test_second_policy_failure_keeps_first_envelope(self, requests_mock):
+        requests_mock.post(TOX_URL, json=VALIDATOR_RESPONSE)
+        requests_mock.post(P1_URL, json=P1_BLOCK)
+        requests_mock.post(P2_URL, status_code=500, text="boom")
+        # Default fail-closed raises; opt-in partial_ok=True returns the
+        # earlier envelopes + error entries (TP-2128 round-3 PR #39
+        # review).
+        result = client().validate(toxicity(), policies=[P1, P2], partial_ok=True)
+        # Earlier envelope survives; the failed policy is an error entry, in order.
+        assert result["validation"] == VALIDATOR_RESPONSE
+        assert result["policies"][0] == P1_BLOCK
+        err = result["policies"][1]
+        assert err["policy_id"] == P2
+        assert err["status"] == "error" and err["sdk_error"] is True
+        assert err["error"]["status_code"] == 500
+        assert err["error"]["type"] == "HTTPError"
+        assert is_error(err) and parse_policy(err) is None
+
+    def test_error_entry_fails_closed(self, requests_mock):
+        requests_mock.post(TOX_URL, json=VALIDATOR_RESPONSE)
+        requests_mock.post(P1_URL, json=P2_PASS)  # a PASS ...
+        requests_mock.post(P2_URL, status_code=500, text="boom")  # ... and an error
+        result = client().validate(toxicity(), policies=[P1, P2], partial_ok=True)
+        assert is_blocking(result["policies"][0]) is False
+        assert is_blocking(result["policies"][1]) is True
+        assert any_blocking(result) is True
+        assert any_blocking(result["policies"]) is True
+
+    def test_default_fails_closed_on_any_policy_error(self, requests_mock):
+        """Without partial_ok, one policy error raises the original HTTPError."""
         requests_mock.post(TOX_URL, json=VALIDATOR_RESPONSE)
         requests_mock.post(P1_URL, json=P1_BLOCK)
         requests_mock.post(P2_URL, status_code=500, text="boom")
         with pytest.raises(HTTPError) as exc_info:
             client().validate(toxicity(), policies=[P1, P2])
         assert exc_info.value.status_code == 500
+        # partial_result carries whatever envelopes we did collect so a
+        # try/except caller can inspect them when it wants to.
+        partial = exc_info.value.partial_result
+        assert partial["validation"] == VALIDATOR_RESPONSE
+        assert partial["policies"][0] == P1_BLOCK
+        assert partial["policies"][1]["policy_id"] == P2
+
+    def test_all_policies_failing_still_raises_with_partial_result(self, requests_mock):
+        requests_mock.post(TOX_URL, json=VALIDATOR_RESPONSE)
+        requests_mock.post(P1_URL, status_code=500, text="boom")
+        requests_mock.post(P2_URL, status_code=502, text="boom")
+        with pytest.raises(HTTPError) as exc_info:
+            client().validate(toxicity(), policies=[P1, P2])
+        assert exc_info.value.status_code == 500
+        partial = exc_info.value.partial_result
+        assert partial["validation"] == VALIDATOR_RESPONSE
+        assert [e["policy_id"] for e in partial["policies"]] == [P1, P2]
+
+    def test_version_block_always_raises(self, requests_mock):
+        from disseqt_sdk import SDKVersionBlockedError
+
+        requests_mock.post(TOX_URL, json=VALIDATOR_RESPONSE)
+        requests_mock.post(P1_URL, json=P2_PASS)
+        requests_mock.post(
+            P2_URL,
+            status_code=426,
+            json={"code": "DSQ-4260", "message": "upgrade", "data": {"min_version": "9.9.9"}},
+        )
+        with pytest.raises(SDKVersionBlockedError):
+            client().validate(toxicity(), policies=[P1, P2])
 
 
 class TestClientDefaultPolicies:

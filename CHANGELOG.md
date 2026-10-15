@@ -8,6 +8,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Manual spans ended via a bare ``.end()`` call (not a ``with`` block) are
+  now actually delivered.** ``DisseqtSpan``'s buffer-push only ran inside
+  ``__exit__``, so the documented ``trace_llm_call``/manual-span usage
+  pattern silently sent zero spans whenever a caller called ``.end()``
+  directly instead of using ``with``. ``end()`` now pushes to the buffer
+  itself and is idempotent (safe to call more than once, e.g. via both a
+  direct call and ``__exit__`` — it will not double-send).
+- **Crossing a buffer's ``max_batch_size`` no longer blocks the caller's
+  own thread on a network call.** ``add_span``/``add_spans`` used to send
+  the batch inline, synchronously, on whatever thread called them — an
+  application's own request-handling thread could block on a trace
+  upload. They now wake a background thread instead and return
+  immediately, regardless of batch size.
+- **Two concurrent ``flush()`` calls (e.g. shutdown racing an in-flight
+  background flush) no longer send at the same time.** The fix above
+  stopped holding the buffer lock across the network call, which
+  incidentally opened a window for two flush() calls to POST
+  concurrently with no ordering guarantee between them. A dedicated
+  send lock now serializes flush() sends; add_span/add_spans still never
+  block on it.
+- **Two concurrent async flows using implicit trace bootstrap
+  (``agent_span()``, the ``@disseqt_trace`` decorator, auto-instrumentation)
+  could get silently merged onto one trace.** ``context.py``'s
+  current-trace/current-span state was ``threading.local()``-based — one
+  slot per OS *thread*, shared by every ``asyncio`` Task running on it.
+  If flow B's implicit ``get_current_trace()`` lookup ran while flow A's
+  trace was still "current" (both on the same thread, interleaved via
+  ``await``), B would nest its span under A's trace instead of getting
+  its own. Newly exposed (not caused) by the span-delivery fix above —
+  before it, the misattributed span was simply never sent, which is why
+  this stayed invisible. Fixed by migrating to
+  ``contextvars.ContextVar``, which isolates correctly per ``asyncio``
+  Task. Does **not** affect the documented ``with start_trace(...) as
+  trace: with trace.start_span(...):`` pattern — only implicit-bootstrap
+  callers were ever at risk. Also fixes ``DisseqtSpan.__exit__()``
+  raising ``RuntimeError`` if invoked twice on the same span (an
+  independent-review catch on this same migration).
+
+  **Scope note:** this fixes the *cross-flow* leak (two different
+  logical flows corrupting each other's current trace/span). It does
+  not add context-restoration to the bare, non-``with`` span helpers
+  (``trace_llm_call``/``trace_agent_action``/``trace_tool_call``) —
+  ``get_current_span()`` still won't clear after a bare span returned by
+  those helpers ends, same as before this migration; only ``__exit__()``
+  clears it, matching the pre-existing, unchanged design.
+
+- **``disseqt_sdk.Client`` reuses one pooled ``requests.Session`` and retries HTTP 429.** ``validate()`` previously made a fresh connection per call and never retried. It now retries only 429 (default 2 retries, ``max_retries=0`` disables), honouring ``Retry-After`` up to 5 s -- a longer wait is not sat out and the 429 is raised. Connection errors, timeouts and 5xx are never retried, so a validator run cannot be billed twice. Added ``Client.close()`` and ``with Client(...)`` support.
+- **``DisseqtAPIClient`` no longer lets a non-object JSON body through or echoes the response body in errors.** A 2xx whose body is a list/number/string (e.g. a gateway error page) used to be returned as if it were the response; it now raises ``ResponseDecodeError`` naming the type received. A body that fails to decode no longer puts up to 200 characters of the raw text (which may contain user data) into the exception message -- a digest is reported instead. ``ResponseDecodeError`` (an ``HTTPError`` *and* ``ValueError``, so existing handlers keep working) is now exported from ``disseqt_sdk``.
+- **``validate(..., policies=[...])`` evaluates policies in parallel, under one deadline.** Policies were evaluated one after another (N policies = N sequential round trips, with no overall bound). They now run up to 4 at a time (kept under the server's per-API-key rate-limit burst; total request count is unchanged), results stay in the order of ``policies``, and the whole evaluation shares a single deadline equal to the client ``timeout`` -- a policy still running or not yet started when it expires becomes an error entry (``status_code`` 0, fail-closed) instead of blocking the caller.
+- **A client only delivers its own project's spans.** ``DisseqtAgenticClient`` now passes its ``project_id`` to the transport; a span carrying a different, non-empty ``project_id`` is refused (logged once per foreign project, dropped, never retried) instead of being sent under another project's identity.
+- **The API key is no longer sent in the trace POST body** (``resource.attributes["api.key"]``). It authenticates via the ``X-Api-Key`` header only. **Requires a server/gateway that authenticates from headers** — deploy the llm-monitoring ingest change first.
+- **``send_trace()`` no longer re-sends spans that ``end()`` already delivered.** A caller using ``with`` blocks (incremental sending) *and* ``send_trace`` used to deliver every span twice with the same ``spanId``. Spans now carry a delivered flag and ``send_trace`` skips them.
+- **SDK audit fixes (agentic + validation SDKs).**
+  - ``uninstrument()`` only drops its client reference when every patch was
+    actually unwound (a wrapper buried under another library's keeps working),
+    and all provider wrappers now fail soft: if the span cannot be opened they
+    call the provider directly instead of raising into the user's LLM call.
+  - Span attributes that are not JSON-serialisable (datetime, set, bytes,
+    circular refs, ...) no longer abort span delivery; the offending attribute
+    is coerced or dropped, never the span.
+  - Trace POSTs are now actually retried on 429/5xx (``POST`` was excluded
+    from urllib3's retry allow-list) and honour ``Retry-After``. Spans the
+    server rejects permanently (4xx other than 408/429) are dropped with one
+    log line instead of being re-POSTed forever. Spans are grouped per POST by
+    full resource identity (project, service name/version, environment,
+    policy) rather than by policy alone.
+  - ``set_capture_content(True)`` can no longer re-enable content capture
+    process-wide after any caller turned it off; it only applies to the calling
+    context.
+  - ``DisseqtAgenticClient.shutdown()`` closes the HTTP session, unregisters its
+    ``atexit`` hook and stops the flush thread promptly.
+  - ``disseqt_sdk.Client`` rejects empty / header-unsafe ``api_key`` and
+    ``project_id`` at construction, wraps ``UnicodeEncodeError`` as
+    ``HTTPError(status_code=0)``, and raises ``ResponseDecodeError`` (an
+    ``HTTPError`` *and* ``ValueError``) for non-object JSON; response bodies are
+    no longer echoed into error messages (a digest is used instead).
+  - ``validate(..., policies=[...])``: when one policy fails after others
+    succeeded, earlier envelopes are kept and the failed policy appears as an
+    error entry (``{"policy_id", "status": "error", "sdk_error": True,
+    "error": {...}}``). ``is_blocking`` / ``any_blocking`` treat it as BLOCK
+    (fail closed); new ``is_error()`` helper. If every policy fails the original
+    exception is still raised. **Behaviour change** for callers that relied on an
+    exception for a partial failure.
+  - Auth-failure stderr banner is throttled (first failure, then exponentially
+    growing intervals, reset on success). Min-version gating uses
+    ``packaging.version`` when available. ``EnrichedSpan`` round-trips
+    ``realtime_policy_id``. Span logging uses the package logger. Log redaction
+    now recurses into dict/list/tuple/set fields and redacts exception text.
 - **``CreateRunRequest.run_name`` now actually reaches the server.** Since
   this SDK's first release, ``to_payload()`` sent the run name under the
   key ``"run_name"``, but the backend has only ever bound

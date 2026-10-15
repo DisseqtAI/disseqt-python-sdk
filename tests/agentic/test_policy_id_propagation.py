@@ -300,7 +300,7 @@ class TestNoPolicyAnywhere:
         attrs = posts[0]["resource"]["attributes"]
         # The other resource attrs (service.name etc.) still flow.
         assert attrs["service.name"] == "my-app"
-        assert attrs["api.key"] == "k"
+        assert "api.key" not in attrs
         # But there's no policy.id — explicit non-presence.
         assert "policy.id" not in attrs
 

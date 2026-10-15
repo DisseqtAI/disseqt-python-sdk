@@ -222,3 +222,25 @@ class TestDisseqtSpan:
         assert enriched.kind == "CUSTOM_KIND"
         assert enriched.trace_id == "test_trace"
         assert enriched.span_id == span.span_id
+
+    def test_double_exit_does_not_raise(self):
+        """
+        Independent review of the contextvars migration found this gap:
+        contextvars.Token.reset() raises RuntimeError ("has already been
+        used once") on a second reset -- unlike end() (guarded by
+        end_time_ns), __exit__() had no idempotency guard around its
+        context-restore step. Calling __exit__() twice on the same span
+        (e.g. a caller reusing `with span:` a second time, or a
+        defensive/retry cleanup path) must not crash -- same
+        never-crash-the-caller policy as the rest of this file
+        (set_agent_info's contextlib.suppress, etc.).
+        """
+        from disseqt_agentic_sdk.context import clear_context
+
+        clear_context()
+        try:
+            span = DisseqtSpan(trace_id="test_trace", name="test_span", kind=SpanKind.INTERNAL)
+            span.__exit__(None, None, None)
+            span.__exit__(None, None, None)  # must not raise RuntimeError
+        finally:
+            clear_context()

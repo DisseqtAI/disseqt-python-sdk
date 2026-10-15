@@ -950,7 +950,7 @@ class TestDisseqtTraceIOCapture:
         Chaining: when a decorated function calls another decorated
         function, the inner call must nest as a child span under the
         outer trace — NOT open a second top-level trace. Detection
-        uses get_current_trace() (thread-local) set by the outer
+        uses get_current_trace() (contextvars-based) set by the outer
         start_trace's __enter__.
         """
 

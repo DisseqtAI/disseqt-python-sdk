@@ -236,6 +236,7 @@ class DisseqtAgenticClient:
             max_retries=max_retries,
             realtime_policy_id=realtime_policy_id,
             application_id=self.application_id,
+            project_id=self.project_id,
         )
 
         # Initialize buffer
@@ -277,8 +278,11 @@ class DisseqtAgenticClient:
         Args:
             trace: DisseqtTrace instance
         """
-        # Convert trace spans to EnrichedSpan models
-        enriched_spans = trace.to_enriched_spans()
+        # Convert trace spans to EnrichedSpan models. Spans already delivered
+        # incrementally by DisseqtSpan.end() are skipped so nothing is sent twice.
+        enriched_spans = trace.to_enriched_spans(undelivered_only=True)
+        if not enriched_spans:
+            return
 
         logger.debug(
             "Sending trace to buffer",
@@ -304,6 +308,12 @@ class DisseqtAgenticClient:
         Shutdown client - flush all buffered spans and stop background threads.
         """
         logger.info("Shutting down DisseqtAgenticClient")
+        # Drop the atexit hook: it holds a strong ref to this client (leaking
+        # it and its buffer/session for the process lifetime) and would run
+        # shutdown a second time at exit. unregister is a no-op if absent.
+        atexit.unregister(self.shutdown)
         # Stop buffer (will flush remaining spans and stop flush thread)
         self.buffer.stop()
+        # Release the HTTP session / connection pool after the final flush.
+        self.transport.close()
         logger.info("DisseqtAgenticClient shutdown complete")

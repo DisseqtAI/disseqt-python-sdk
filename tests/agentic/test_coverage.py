@@ -2,6 +2,8 @@
 Additional tests to achieve 100% coverage.
 """
 
+import json
+import time
 from datetime import datetime, timezone
 from unittest.mock import Mock, patch
 
@@ -21,6 +23,17 @@ from disseqt_agentic_sdk.utils.time import (
     to_timestamp_ms,
     to_timestamp_ns,
 )
+
+
+def _wait_until(predicate, timeout=3.0, interval=0.005):
+    """Poll a predicate -- needed since P2 made the size-triggered flush
+    run on the background thread, not inline in add_span/add_spans."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval)
+    return predicate()
 
 
 class TestTraceCoverage:
@@ -210,9 +223,11 @@ class TestBufferCoverage:
             )
             self.buffer.add_span(span)
 
-        # Should have flushed
+        # Should have flushed. Runs on the background flush thread now
+        # (P2), not inline -- poll instead of asserting immediately.
+        assert _wait_until(lambda: self.transport.send_spans_with_failures.called)
         self.transport.send_spans_with_failures.assert_called_once()
-        assert len(self.buffer.buffer) == 0
+        assert _wait_until(lambda: len(self.buffer.buffer) == 0)
 
     def test_buffer_add_spans_flush_on_batch_size(self):
         """Test add_spans triggers flush when batch size reached."""
@@ -231,6 +246,8 @@ class TestBufferCoverage:
         ]
 
         self.buffer.add_spans(spans)
+        # Runs on the background flush thread now (P2), not inline.
+        assert _wait_until(lambda: self.transport.send_spans_with_failures.called)
         self.transport.send_spans_with_failures.assert_called_once()
 
     def test_buffer_should_flush(self):
@@ -514,9 +531,9 @@ class TestTransportCoverage:
             assert spans[0]["attributes"]["gen_ai.test"] == "value"
             assert spans[0]["attributes"]["agentic.test"] == "value2"
 
-            # Check that API key is in resource attributes
-            assert "api.key" in payload["resource"]["attributes"]
-            assert payload["resource"]["attributes"]["api.key"] == "test-api-key"
+            # The API key authenticates via header only -- never in the body
+            assert "api.key" not in payload["resource"]["attributes"]
+            assert "test-api-key" not in json.dumps(payload)
 
     def test_transport_error_handling(self):
         """Test error handling in send_spans."""

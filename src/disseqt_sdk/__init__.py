@@ -11,7 +11,7 @@ from disseqt_logging import set_level as set_log_level
 
 from ._version import SDK_VERSION as __version__
 from .api_client import DisseqtAPIClient
-from .client import Client, HTTPError, SDKVersionBlockedError
+from .client import Client, HTTPError, ResponseDecodeError, SDKVersionBlockedError
 from .models.base import SDKConfigInput
 from .policy import (
     PolicyDecision,
@@ -20,6 +20,7 @@ from .policy import (
     any_blocking,
     is_async,
     is_blocking,
+    is_error,
 )
 from .policy import parse as parse_policy
 
@@ -27,6 +28,7 @@ __all__ = [
     "Client",
     "DisseqtAPIClient",
     "HTTPError",
+    "ResponseDecodeError",
     "PolicyDecision",
     "PolicyRule",
     "PolicyRuleset",
@@ -37,6 +39,7 @@ __all__ = [
     "get_logger",
     "is_async",
     "is_blocking",
+    "is_error",
     "parse_policy",
     "set_log_level",
 ]

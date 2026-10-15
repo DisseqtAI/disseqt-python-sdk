@@ -154,7 +154,7 @@ class TestClientErrorHandling:
 
         assert "Failed to decode JSON response" in str(exc_info.value)
 
-    @patch("requests.post")
+    @patch("requests.Session.post")
     def test_network_error_handling(self, mock_post, client, config, input_validation_request):
         """Test network error handling."""
         validator = ToxicityValidator(data=input_validation_request, config=config)

@@ -12,7 +12,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from disseqt_agentic_sdk.enums import SpanKind
 from disseqt_agentic_sdk.instrumentation._oai_compat import (
     ChatStreamAccumulator,
     read,
@@ -20,7 +19,7 @@ from disseqt_agentic_sdk.instrumentation._oai_compat import (
     set_common_chat_request,
 )
 from disseqt_agentic_sdk.instrumentation._stream import AsyncStreamWrapper, SyncStreamWrapper
-from disseqt_agentic_sdk.instrumentation._utils import open_llm_span, safe_call, safe_set
+from disseqt_agentic_sdk.instrumentation._utils import safe_call, safe_set, try_open_llm_span
 from disseqt_agentic_sdk.instrumentation.base import DisseqtInstrumentor
 from disseqt_agentic_sdk.semantics import (
     AgenticOperation,
@@ -57,7 +56,9 @@ class MistralInstrumentor(DisseqtInstrumentor):
 
 def _sync_chat(instrumentor: MistralInstrumentor) -> Callable[..., Any]:
     def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
-        scope = open_llm_span(instrumentor.client, "mistral.chat.complete", SpanKind.MODEL_EXEC)
+        scope = try_open_llm_span(instrumentor, "mistral.chat.complete")
+        if scope is None:
+            return wrapped(*args, **kwargs)
         span = scope.span
         safe_call(
             set_common_chat_request,
@@ -85,7 +86,9 @@ def _async_chat(instrumentor: MistralInstrumentor) -> Callable[..., Any]:
     async def wrapper(
         wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
     ) -> Any:
-        scope = open_llm_span(instrumentor.client, "mistral.chat.complete", SpanKind.MODEL_EXEC)
+        scope = try_open_llm_span(instrumentor, "mistral.chat.complete")
+        if scope is None:
+            return await wrapped(*args, **kwargs)
         span = scope.span
         safe_call(
             set_common_chat_request,
@@ -111,7 +114,9 @@ def _async_chat(instrumentor: MistralInstrumentor) -> Callable[..., Any]:
 
 def _sync_stream(instrumentor: MistralInstrumentor) -> Callable[..., Any]:
     def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
-        scope = open_llm_span(instrumentor.client, "mistral.chat.stream", SpanKind.MODEL_EXEC)
+        scope = try_open_llm_span(instrumentor, "mistral.chat.stream")
+        if scope is None:
+            return wrapped(*args, **kwargs)
         span = scope.span
         safe_call(
             set_common_chat_request,
@@ -143,7 +148,9 @@ def _async_stream(instrumentor: MistralInstrumentor) -> Callable[..., Any]:
     async def wrapper(
         wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
     ) -> Any:
-        scope = open_llm_span(instrumentor.client, "mistral.chat.stream", SpanKind.MODEL_EXEC)
+        scope = try_open_llm_span(instrumentor, "mistral.chat.stream")
+        if scope is None:
+            return await wrapped(*args, **kwargs)
         span = scope.span
         safe_call(
             set_common_chat_request,

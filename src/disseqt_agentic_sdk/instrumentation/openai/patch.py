@@ -11,7 +11,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from disseqt_agentic_sdk.enums import SpanKind
 from disseqt_agentic_sdk.instrumentation._embeddings import (
     from_openai_request as _emb_from_openai_request,
 )
@@ -31,10 +30,10 @@ from disseqt_agentic_sdk.instrumentation._oai_compat import (
 )
 from disseqt_agentic_sdk.instrumentation._stream import AsyncStreamWrapper, SyncStreamWrapper
 from disseqt_agentic_sdk.instrumentation._utils import (
-    open_llm_span,
     safe_call,
     safe_set,
     set_messages_if_capturing,
+    try_open_llm_span,
 )
 from disseqt_agentic_sdk.semantics import (
     AgenticAttributes,
@@ -59,9 +58,9 @@ SYSTEM = GenAISystem.OPENAI
 # ---------------------------------------------------------------------
 def chat_completions_create(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
     def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
-        scope = open_llm_span(
-            instrumentor.client, "openai.chat.completions.create", SpanKind.MODEL_EXEC
-        )
+        scope = try_open_llm_span(instrumentor, "openai.chat.completions.create")
+        if scope is None:
+            return wrapped(*args, **kwargs)
         span = scope.span
         safe_call(
             set_common_chat_request,
@@ -98,9 +97,9 @@ def async_chat_completions_create(instrumentor: OpenAIInstrumentor) -> Callable[
     async def wrapper(
         wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
     ) -> Any:
-        scope = open_llm_span(
-            instrumentor.client, "openai.chat.completions.create", SpanKind.MODEL_EXEC
-        )
+        scope = try_open_llm_span(instrumentor, "openai.chat.completions.create")
+        if scope is None:
+            return await wrapped(*args, **kwargs)
         span = scope.span
         safe_call(
             set_common_chat_request,
@@ -211,7 +210,9 @@ class _LegacyCompletionsStreamAccumulator:
 
 def completions_create(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
     def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
-        scope = open_llm_span(instrumentor.client, "openai.completions.create", SpanKind.MODEL_EXEC)
+        scope = try_open_llm_span(instrumentor, "openai.completions.create")
+        if scope is None:
+            return wrapped(*args, **kwargs)
         span = scope.span
         safe_call(
             set_common_chat_request,
@@ -252,7 +253,9 @@ def async_completions_create(instrumentor: OpenAIInstrumentor) -> Callable[..., 
     async def wrapper(
         wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
     ) -> Any:
-        scope = open_llm_span(instrumentor.client, "openai.completions.create", SpanKind.MODEL_EXEC)
+        scope = try_open_llm_span(instrumentor, "openai.completions.create")
+        if scope is None:
+            return await wrapped(*args, **kwargs)
         span = scope.span
         safe_call(
             set_common_chat_request,
@@ -294,7 +297,9 @@ def async_completions_create(instrumentor: OpenAIInstrumentor) -> Callable[..., 
 # ---------------------------------------------------------------------
 def embeddings_create(instrumentor: OpenAIInstrumentor) -> Callable[..., Any]:
     def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
-        scope = open_llm_span(instrumentor.client, "openai.embeddings.create", SpanKind.MODEL_EXEC)
+        scope = try_open_llm_span(instrumentor, "openai.embeddings.create")
+        if scope is None:
+            return wrapped(*args, **kwargs)
         span = scope.span
         safe_call(_set_embeddings_request, span, kwargs)
         try:
@@ -314,7 +319,9 @@ def async_embeddings_create(instrumentor: OpenAIInstrumentor) -> Callable[..., A
     async def wrapper(
         wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
     ) -> Any:
-        scope = open_llm_span(instrumentor.client, "openai.embeddings.create", SpanKind.MODEL_EXEC)
+        scope = try_open_llm_span(instrumentor, "openai.embeddings.create")
+        if scope is None:
+            return await wrapped(*args, **kwargs)
         span = scope.span
         safe_call(_set_embeddings_request, span, kwargs)
         try:

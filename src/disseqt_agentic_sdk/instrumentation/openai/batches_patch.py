@@ -17,9 +17,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from disseqt_agentic_sdk.enums import SpanKind
 from disseqt_agentic_sdk.instrumentation._batches import from_openai, set_batch_attrs
-from disseqt_agentic_sdk.instrumentation._utils import open_llm_span, safe_call, safe_set
+from disseqt_agentic_sdk.instrumentation._utils import safe_call, safe_set, try_open_llm_span
 from disseqt_agentic_sdk.semantics import (
     AgenticAttributes,
     AgenticOperation,
@@ -61,7 +60,9 @@ def _make_batch_wrappers(
     def sync_wrapper(
         wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
     ) -> Any:
-        scope = open_llm_span(instrumentor.client, span_name, SpanKind.MODEL_EXEC)
+        scope = try_open_llm_span(instrumentor, span_name)
+        if scope is None:
+            return wrapped(*args, **kwargs)
         span = scope.span
         _emit_provider_tags(span)
         try:
@@ -78,7 +79,9 @@ def _make_batch_wrappers(
     async def async_wrapper(
         wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
     ) -> Any:
-        scope = open_llm_span(instrumentor.client, span_name, SpanKind.MODEL_EXEC)
+        scope = try_open_llm_span(instrumentor, span_name)
+        if scope is None:
+            return await wrapped(*args, **kwargs)
         span = scope.span
         _emit_provider_tags(span)
         try:

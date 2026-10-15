@@ -6,7 +6,7 @@ A trace is a collection of spans representing a complete workflow.
 
 from typing import TYPE_CHECKING, Any
 
-from disseqt_agentic_sdk.context import get_current_trace, set_current_trace
+from disseqt_agentic_sdk.context import reset_current_trace, set_current_trace
 from disseqt_agentic_sdk.enums import SpanKind
 from disseqt_agentic_sdk.models.span import EnrichedSpan
 from disseqt_agentic_sdk.span import DisseqtSpan
@@ -92,8 +92,10 @@ class DisseqtTrace:
         # Client reference for incremental span sending (optional)
         self._client = client
 
-        # Set current trace in context
-        set_current_trace(self)
+        # Set current trace in context, keeping the token so end() can
+        # restore whatever trace (if any) was current before this one --
+        # correct even under nested/concurrent traces, see context.py.
+        self._trace_context_token = set_current_trace(self)
 
     def start_span(
         self,
@@ -220,10 +222,11 @@ class DisseqtTrace:
             if span.end_time_ns is None:
                 span.end()
 
-        # Clear from context
-        current_trace = get_current_trace()
-        if current_trace is self:
-            set_current_trace(None)
+        # Restore whatever trace was current before this one, via the
+        # token captured in __init__ -- correct regardless of whether
+        # another trace has since become current (e.g. a nested trace
+        # still active as this one ends).
+        reset_current_trace(self._trace_context_token)
 
         return self
 
@@ -236,14 +239,23 @@ class DisseqtTrace:
         """
         return self.spans.copy()
 
-    def to_enriched_spans(self) -> list[EnrichedSpan]:
+    def to_enriched_spans(self, undelivered_only: bool = False) -> list[EnrichedSpan]:
         """
-        Convert all spans to EnrichedSpan models for sending to backend.
+        Convert spans to EnrichedSpan models for sending to backend.
+
+        Args:
+            undelivered_only: Skip spans already handed to the buffer by
+                ``DisseqtSpan.end()`` (incremental sending), so a caller who
+                also invokes ``send_trace`` does not deliver them twice.
 
         Returns:
             List of EnrichedSpan instances
         """
-        return [span.to_enriched_span() for span in self.spans]
+        return [
+            span.to_enriched_span()
+            for span in self.spans
+            if not (undelivered_only and getattr(span, "_delivered", False))
+        ]
 
     def to_dict(self) -> dict[str, Any]:
         """
