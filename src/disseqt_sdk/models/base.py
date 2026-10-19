@@ -16,6 +16,9 @@ class SDKConfigInput:
     untouched — and the labels follow the judge's score axis: safety judges
     score severity, so a HIGHER score is WORSE (order your labels
     accordingly, e.g. ``["OK", "Bad", "Awful", "Severe"]``).
+
+    ``requested_language`` / ``min_share`` are used only by the
+    language-detection validator (see those fields).
     """
 
     threshold: float
@@ -56,6 +59,12 @@ class SDKConfigInput:
     # their frozen rubric verbatim and ignore caller criteria (the response
     # stamps others.criteria_ignored=true when that happens).
     judge: dict[str, Any] | None = None
+    # Expected language (ISO 639-1, e.g. "de") for the language-detection
+    # validator; the server defaults to English. ``min_share`` drops languages
+    # below this fraction of the text from the detector's breakdown (server
+    # default 0.1). Both are ignored by validators that do not use them.
+    requested_language: str | None = None
+    min_share: float | None = None
 
     def __post_init__(self) -> None:
         has_integration_id = bool(self.llm_id or (self.judge or {}).get("custom_llm_id"))
@@ -78,6 +87,10 @@ class SDKConfigInput:
             out["custom_labels"] = self.custom_labels
         if self.label_thresholds:
             out["label_thresholds"] = self.label_thresholds
+        if self.requested_language:
+            out["requested_language"] = self.requested_language
+        if self.min_share is not None:
+            out["min_share"] = self.min_share
         if self.intents:
             out["intents"] = self.intents
         if self.llm_as_a_judge:
