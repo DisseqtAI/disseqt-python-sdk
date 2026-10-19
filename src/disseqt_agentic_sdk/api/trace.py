@@ -104,7 +104,7 @@ def start_trace(
         >>> from disseqt_agentic_sdk.enums import SpanKind
         >>> # Init the client ONCE for the whole app
         >>> client = DisseqtAgenticClient(
-        ...     api_key="...", project_id="...", service_name="my-app",
+        ...     api_key="...", service_name="my-app",
         ...     application_id="...",
         ... )
         >>> # Agent A — uses policy A
@@ -129,7 +129,6 @@ def start_trace(
         name=name,
         trace_id=trace_id,
         org_id="",  # Set by backend middleware for localhost
-        project_id=client.project_id,
         user_id=trace_user_id,
         service_name=client.service_name,
         service_version=client.service_version,

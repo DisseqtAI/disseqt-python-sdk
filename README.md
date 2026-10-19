@@ -71,9 +71,10 @@ from disseqt_agentic_sdk.api.helpers import trace_llm_call, trace_tool_call
 # Initialize client
 client = DisseqtAgenticClient(
     api_key="your-api-key",
-    project_id="proj_456",
     service_name="my-service",
-    endpoint="http://localhost:8080/v1/traces"
+    endpoint="http://localhost:8080/v1/traces",
+    application_id="your-application-uuid",
+    # project_id="proj_456",  # optional — only needed on pre-2.2.1 Kong traces-auth plugin
 )
 
 # Create a trace with multiple spans

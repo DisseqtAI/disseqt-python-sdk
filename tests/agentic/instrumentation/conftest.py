@@ -47,7 +47,6 @@ def recording_client(monkeypatch):
     )
     client = DisseqtAgenticClient(
         api_key="test_key",
-        project_id="test_proj",
         service_name="test_service",
         endpoint="http://localhost/v1/traces",
         application_id="test-app-id",

@@ -7,7 +7,6 @@ from disseqt_agentic_sdk.semantics import AgenticOperation
 # Initialize SDK client
 client = DisseqtAgenticClient(
     api_key="your-api-key",
-    project_id="proj_456",
     service_name="my-service",
     endpoint="http://localhost:8080/v1/traces",
     application_id="your-application-uuid",

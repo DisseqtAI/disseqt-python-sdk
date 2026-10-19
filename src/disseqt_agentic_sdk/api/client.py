@@ -47,7 +47,7 @@ def get_current_client() -> DisseqtAgenticClient:
         raise RuntimeError(
             "SDK not initialized. Call init() first:\n"
             "from disseqt_agentic_sdk import init\n"
-            "init(api_key='...', org_id='...', project_id='...', service_name='...')"
+            "init(api_key='...', service_name='...', application_id='...')"
         )
     return _client
 

@@ -18,7 +18,6 @@ class TestDisseqtSpan:
             trace_id="test_trace_123",
             name="test_span",
             kind=SpanKind.INTERNAL,
-            project_id="proj_1",
             service_name="test_service",
         )
 
@@ -26,7 +25,6 @@ class TestDisseqtSpan:
         assert span.name == "test_span"
         assert span.kind == "INTERNAL"
         assert span.org_id == ""  # Set by backend middleware
-        assert span.project_id == "proj_1"
         assert span.service_name == "test_service"
         assert span.status == SpanStatus.OK
         assert span.start_time_ns > 0
