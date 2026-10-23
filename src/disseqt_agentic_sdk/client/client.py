@@ -11,6 +11,7 @@ from disseqt_agentic_sdk.buffer import TraceBuffer
 from disseqt_agentic_sdk.trace import DisseqtTrace
 from disseqt_agentic_sdk.transport import HTTPTransport
 from disseqt_agentic_sdk.utils.logging import get_logger
+from disseqt_agentic_sdk.utils.validation import validate_header_value as _validate_header_value
 
 logger = get_logger()
 
@@ -49,7 +50,6 @@ class _MissingSentinel:
 # One sentinel per required argument. Do NOT share instances — see
 # ``_MissingSentinel`` for the reason.
 _MISSING_API_KEY: object = _MissingSentinel()
-_MISSING_PROJECT_ID: object = _MissingSentinel()
 _MISSING_SERVICE_NAME: object = _MissingSentinel()
 _MISSING_APPLICATION_ID: object = _MissingSentinel()
 
@@ -70,67 +70,12 @@ def _reject_missing_or_empty(value: object, name: str, extra_hint: str = "") -> 
         raise ValueError(msg)
 
 
-# The two things that actually break sending an application_id as an
-# HTTP header, checked directly against the real failure modes rather
-# than an assumed character blacklist:
-#
-#   1. Embedded \r / \n — `requests` raises InvalidHeader for these
-#      (header-injection risk); everything else in the C0-control /
-#      DEL range (tab, NUL, bell, ...) is, in practice, sent over the
-#      wire by `requests` without complaint, so it isn't checked here.
-#   2. Anything outside the Latin-1 range — `http.client.putheader`
-#      encodes header values as Latin-1 and raises an uncaught
-#      UnicodeEncodeError for anything outside it (an emoji, most
-#      non-Latin scripts, a copy-pasted smart quote). That exception
-#      isn't a `requests.exceptions.RequestException`, so nothing
-#      downstream catches it — it can kill the background flush thread
-#      outright. Checked directly via an encode attempt rather than an
-#      enumerated character set, so it can't drift out of sync with
-#      what actually breaks. TP-2128 round-3 senior review P1 #1.1
-#      (the original C0-control blacklist rejected harmless characters
-#      like tab while letting the actual crash-risk class through).
-_APPLICATION_ID_DISALLOWED_LINE_BREAKS = frozenset("\r\n")
-
-
-def _validate_application_id(value: str) -> None:
-    """
-    Raise ``ValueError`` immediately on a malformed ``application_id``.
-
-    The X-Application-Id header value is opaque to us (Kong's traces-
-    auth plugin verifies it against policy-management) but must not
-    carry characters that would break sending it as an HTTP header on
-    every send. Combined with retain-on-failure (TP-2128 round-2 P1
-    #1.2) an un-caught failure here would otherwise retry forever
-    against a value that will never succeed. Fail loudly here instead.
-    TP-2128 round-2 P2 #2.3, tightened by round-3 P1 #1.1 to match what
-    ``requests``/``http.client`` actually reject rather than an assumed
-    control-character list. Caller is responsible for the emptiness
-    check — ``application_id`` is a required field so ``""`` / whitespace
-    is rejected at construction with a different, more actionable
-    message than the header-encoding one below.
-    """
-    if _APPLICATION_ID_DISALLOWED_LINE_BREAKS & set(value):
-        raise ValueError(
-            "application_id contains a carriage return or newline character, "
-            "which requests rejects as a header-injection risk on every send. "
-            "Use a plain token (typically a UUID)."
-        )
-    try:
-        value.encode("latin-1")
-    except UnicodeEncodeError as exc:
-        raise ValueError(
-            f"application_id contains a character outside the Latin-1 range "
-            f"({exc}), which would crash HTTP header encoding on every send. "
-            f"Use a plain ASCII token (typically a UUID)."
-        ) from exc
-
-
 class DisseqtAgenticClient:
     """
     Main SDK client - manages configuration, transport, and buffering.
 
     Responsibilities:
-    - Store SDK configuration (project_id, endpoint, etc.)
+    - Store SDK configuration (api_key, endpoint, etc.)
     - Initialize transport layer
     - Manage buffering for efficient ingestion
     - Provide resource metadata
@@ -165,7 +110,13 @@ class DisseqtAgenticClient:
     def __init__(
         self,
         api_key: str = _MISSING_API_KEY,  # type: ignore[assignment]
-        project_id: str = _MISSING_PROJECT_ID,  # type: ignore[assignment]
+        # project_id keeps its pre-#31 2nd-positional slot so a caller
+        # that previously passed it positionally
+        # (``DisseqtAgenticClient("key", "proj", "svc", ...)``) still
+        # routes "proj" to project_id, not silently into service_name.
+        # Making it `None`-defaulted keeps every downstream positional
+        # arg optional-callable while the slot stays reserved.
+        project_id: str | None = None,
         service_name: str = _MISSING_SERVICE_NAME,  # type: ignore[assignment]
         endpoint: str = "https://api.disseqt.ai/agentic-monitoring/api/v1/traces",
         service_version: str = "1.0.0",
@@ -181,8 +132,12 @@ class DisseqtAgenticClient:
         Initialize SDK client.
 
         Args:
-            api_key: API key for authentication (required)
-            project_id: Project ID (required)
+            api_key: API key for authentication (required). Kong resolves
+                the owning project + org + user from this alone via
+                auth-svc's validate-api-key endpoint (user_api_keys has
+                UNIQUE (api_key_hash)); ``project_id`` is only needed on
+                deployments running a Kong plugin version that still
+                requires it in the OTLP body.
             service_name: Service name (required)
             endpoint: Backend API endpoint URL (required, default: https://api.disseqt.ai/agentic-monitoring/api/v1/traces)
             service_version: Service version
@@ -201,6 +156,16 @@ class DisseqtAgenticClient:
                 / empty / whitespace-only raises ``ValueError``
                 immediately at construction rather than silently
                 dropping every telemetry POST at flush time.
+            project_id: Optional project UUID. On pre-2.2.1 Kong
+                traces-auth plugins the OTLP
+                ``resource.attributes["project.id"]`` was mandatory and
+                this kwarg was required; current Kong resolves the
+                project from ``api_key`` server-side, so this is now
+                optional. When supplied, it is stamped onto every
+                outgoing payload (as the ``project.id`` resource
+                attribute and the ``X-Project-Id`` request header) so
+                older Kong plugin versions keep working. When omitted,
+                neither is sent.
             realtime_policy_id: Optional realtime-policy UUID. When set,
                 every span emitted by this client carries it as the
                 ``policy.id`` resource attribute, which is the contract
@@ -234,7 +199,6 @@ class DisseqtAgenticClient:
         # service_name too — same rule as disseqt_sdk.Client's
         # (realtime_policy_id ⇒ application_name) check.
         _reject_missing_or_empty(api_key, "api_key")
-        _reject_missing_or_empty(project_id, "project_id")
         _reject_missing_or_empty(
             service_name,
             "service_name",
@@ -256,11 +220,16 @@ class DisseqtAgenticClient:
 
         # Configuration
         self.api_key = api_key
-        self.project_id = project_id
         self.service_name = service_name
         self.service_version = service_version
         self.environment = environment
         self.realtime_policy_id = realtime_policy_id
+        # Treat empty / whitespace-only project_id as unset — don't
+        # validate, don't send. The validated-and-stamped path only
+        # fires when the caller explicitly provides a non-empty value.
+        self.project_id: str | None = (
+            project_id.strip() if project_id and project_id.strip() else None
+        )
         self.application_id = application_id.strip()
         # Fail-fast on a value whose characters would break HTTP header
         # encoding at send time (CRLF injection risk, non-Latin-1 codepoints
@@ -268,7 +237,16 @@ class DisseqtAgenticClient:
         # failure in the buffer, an unvalidated bad value would fail every
         # flush forever without ever reaching the CRITICAL auth-failure
         # banner. TP-2128 round-2 P2 #2.3 + round-3 P1 #1.1.
-        _validate_application_id(self.application_id)
+        #
+        # This covers the documented construction path (this client), not
+        # every possible path: application_id/api_key can also bypass this
+        # client via a directly-constructed HTTPTransport, which validates
+        # them again in its own __init__ — this check here is the
+        # fail-fast-and-loud layer for the common path, not the only layer.
+        _validate_header_value(self.api_key, "api_key")
+        _validate_header_value(self.application_id, "application_id")
+        if self.project_id:
+            _validate_header_value(self.project_id, "project_id")
 
         # Initialize transport
         self.transport = HTTPTransport(
@@ -277,6 +255,7 @@ class DisseqtAgenticClient:
             max_retries=max_retries,
             realtime_policy_id=realtime_policy_id,
             application_id=self.application_id,
+            project_id=self.project_id,
         )
 
         # Initialize buffer
@@ -299,8 +278,8 @@ class DisseqtAgenticClient:
 
         set_client(self)
 
-        # Defense-in-depth: never log the project_id (a sensitive identifier),
-        # even though the logger would redact it. Only non-sensitive fields here.
+        # Non-sensitive fields only. api_key/application_id are secrets or
+        # opaque identifiers and don't belong in structured logs.
         logger.info(
             "DisseqtAgenticClient initialized",
             extra={

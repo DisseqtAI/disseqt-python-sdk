@@ -52,9 +52,13 @@ def main():
     # ------------------------------------------------------------------
     # 1. Initialize the API client (Kong gateway on localhost:8000)
     # ------------------------------------------------------------------
+    # Replace the placeholders below with your project's credentials —
+    # copy them from the Disseqt dashboard (Project Settings → API keys).
+    # Never commit real values here; this file ships in a public repo and
+    # the previous UUIDs (VAPT-2026-046) had to be treated as leaked.
     client = DisseqtAPIClient(
-        project_id="121c8136-5458-494b-a8be-ad46440f4330",
-        api_key="99499ed3-f956-4881-bec9-64d5cea0edec",
+        project_id="<ENTER_YOUR_PROJECT_ID_HERE>",
+        api_key="<ENTER_YOUR_API_KEY_HERE>",
         base_url="http://localhost:8000",
         timeout=30,
     )

@@ -38,7 +38,6 @@ class DisseqtSpan:
         kind: SpanKind | str,
         span_id: str | None = None,
         parent_span_id: str | None = None,
-        project_id: str = "",
         user_id: str = "",
         service_name: str = "",
         service_version: str = "1.0.0",
@@ -55,7 +54,6 @@ class DisseqtSpan:
             kind: Span kind (MODEL_EXEC, TOOL_EXEC, AGENT_EXEC, etc.)
             span_id: Optional span ID (auto-generated if not provided)
             parent_span_id: Optional parent span ID (auto-detected from context if not provided)
-            project_id: Project ID
             user_id: User ID
             service_name: Service name
             service_version: Service version
@@ -95,7 +93,6 @@ class DisseqtSpan:
         self.name = name
         self.kind = kind.value if isinstance(kind, SpanKind) else kind
         self.org_id = ""  # Set by backend middleware
-        self.project_id = project_id
         self.user_id = user_id
         self.service_name = service_name
         self.service_version = service_version
@@ -341,7 +338,6 @@ class DisseqtSpan:
             duration_ns=duration_ns,
             status_code=self.status.value if isinstance(self.status, SpanStatus) else self.status,
             org_id=self.org_id,
-            project_id=self.project_id,
             user_id=self.user_id,
             service_name=self.service_name,
             service_version=self.service_version,

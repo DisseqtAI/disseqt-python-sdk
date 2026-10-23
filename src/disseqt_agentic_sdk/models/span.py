@@ -37,9 +37,10 @@ class EnrichedSpan:
     status_code: str = "OK"  # OK, ERROR
     status_message: str = ""
 
-    # Multi-tenancy (required for routing)
+    # Multi-tenancy (required for routing). project_id is resolved
+    # server-side by Kong from the api_key and injected as an upstream
+    # header; the SDK no longer carries it.
     org_id: str = ""
-    project_id: str = ""
     user_id: str = ""
 
     # Service information (required)
@@ -97,7 +98,6 @@ class EnrichedSpan:
             "status_code": self.status_code,
             "status_message": self.status_message,
             "org_id": self.org_id,
-            "project_id": self.project_id,
             "user_id": self.user_id,
             "service_name": self.service_name,
             "service_version": self.service_version,
@@ -166,7 +166,6 @@ class EnrichedSpan:
             status_code=data.get("status_code", "OK"),
             status_message=data.get("status_message", ""),
             org_id=data.get("org_id", ""),
-            project_id=data.get("project_id", ""),
             user_id=data.get("user_id", ""),
             service_name=data.get("service_name", ""),
             service_version=data.get("service_version", "1.0.0"),
