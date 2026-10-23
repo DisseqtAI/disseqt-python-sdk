@@ -24,6 +24,10 @@ Python SDK for Disseqt AI observability and validation. This package includes tw
 - **Context Management**: Thread-local context for nested traces
 - **Helper Functions**: Decorators and utilities for easy integration
 
+## Red-teaming
+
+Attack your AI System from the `disseqt` CLI or code with only an API key: see [docs/redteaming.md](docs/redteaming.md).
+
 ## Installation
 
 ```bash
@@ -82,7 +86,7 @@ with start_trace(client, name="agent_workflow") as trace:
     # Agent execution span
     with trace.start_span("agent_execution", SpanKind.AGENT_EXEC) as agent_span:
         agent_span.set_agent_info("my_agent", "agent_001")
-        
+
         # LLM call span
         with trace.start_span("llm_call", SpanKind.MODEL_EXEC) as llm_span:
             llm_span.set_model_info("gpt-4", "openai")
@@ -91,7 +95,7 @@ with start_trace(client, name="agent_workflow") as trace:
                 output_messages=[{"role": "assistant", "content": "Hi there!"}]
             )
             llm_span.set_token_usage(input_tokens=10, output_tokens=5)
-        
+
         # Tool call span
         with trace.start_span("api_call", SpanKind.TOOL_EXEC) as tool_span:
             tool_span.set_tool_info("get_weather", "call_001")
