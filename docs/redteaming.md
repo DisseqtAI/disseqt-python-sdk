@@ -56,6 +56,41 @@ Environment variables win over a stored login, so CI only needs `DISSEQT_API_KEY
 | `DISSEQT_POLICIES_BASE_URL`                     | AI System registry, default `https://api.disseqt.ai/policy` |
 | `DISSEQT_PROJECT_ID`, `DISSEQT_ORGANIZATION_ID` | Optional; derived from the key when unset                   |
 
+### Configure in code instead of env vars
+
+Every variable has a constructor parameter; a parameter you pass wins over the env var. Lookup order:
+parameter, env var, `disseqt login` config, default.
+
+```ts
+const client = new DisseqtResourceClient({
+  apiKey: '<project API key>', // DISSEQT_API_KEY
+  baseUrl: 'https://api.disseqt.ai/dataset', // DISSEQT_BASE_URL
+  policiesBaseUrl: 'https://api.disseqt.ai/policy', // DISSEQT_POLICIES_BASE_URL
+  projectId: '<project id>', // DISSEQT_PROJECT_ID (optional)
+  timeout: 30, // seconds (or timeoutMs: 30000)
+});
+```
+
+```python
+client = DisseqtAPIClient(
+    api_key="<project API key>",                        # DISSEQT_API_KEY
+    base_url="https://api.disseqt.ai/dataset",          # DISSEQT_BASE_URL
+    policies_base_url="https://api.disseqt.ai/policy",  # DISSEQT_POLICIES_BASE_URL
+    project_id="<project id>",                          # DISSEQT_PROJECT_ID (optional)
+    timeout=30,
+)
+```
+
+| Env var                     | Node param        | Python param        | Needed?                                                              |
+| --------------------------- | ----------------- | ------------------- | -------------------------------------------------------------------- |
+| `DISSEQT_API_KEY`           | `apiKey`          | `api_key`           | Yes, the only required value                                         |
+| `DISSEQT_BASE_URL`          | `baseUrl`         | `base_url`          | No, defaults to production                                           |
+| `DISSEQT_POLICIES_BASE_URL` | `policiesBaseUrl` | `policies_base_url` | No, defaults to production                                           |
+| `DISSEQT_PROJECT_ID`        | `projectId`       | `project_id`        | No, derived from the key                                             |
+| `DISSEQT_ORGANIZATION_ID`   | —                 | —                   | Library: derived from the key. CLI only, for `vuln-test` and `scan`. |
+
+Pass `base_url` / `baseUrl` only to point at a non-production environment.
+
 ## Choose a target
 
 Every attack takes exactly one target:
