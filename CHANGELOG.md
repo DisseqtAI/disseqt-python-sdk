@@ -8,6 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **AI System targets.** Every red-team entry point takes exactly one of
+  ``--app`` (``application_id``), ``--integration`` (``app_integration_id``) or
+  ``--endpoint`` (``endpoint_url``): ``redteam attack`` (single + multi-turn),
+  ``redteam vuln-test`` (app integrations only), ``pp-run create`` and
+  ``plan-run create``. Zero or several targets is a usage error (exit 2).
+  Multi-turn ``--app``/``--integration`` send ``jailbreak_config.application_id``
+  / top-level ``app_integration_id`` and no template; new ``--app-name`` /
+  ``--app-type`` (default ``chatbot``). Library kwargs ``application_id=`` /
+  ``app_integration_id=`` / ``endpoint_url=`` on ``runs.create``,
+  ``test_plan_runs.create``, ``sessions.create``, ``vulnerabilities.test`` and
+  ``mr.batch_automate``.
+- ``disseqt app list`` (policy-management ``GET /api/v1/applications``;
+  ``DISSEQT_POLICIES_BASE_URL``, default ``https://api.disseqt.ai/policy``),
+  ``disseqt app link <application_id> --integration <id>`` and ``app unlink``;
+  library ``client.applications.list() / links() / link() / unlink()``.
+- ``DisseqtAPIClient.whoami()`` and a server-backed ``disseqt whoami``
+  (gateway ``GET /api/v1/whoami`` → ``project_id``, ``organization_id``,
+  ``user_id``; falls back to local credentials on 404).
+- ``disseqt_sdk.models.redteam``: ``TestingRunStatus`` (``stop_reason``,
+  ``is_terminal``), ``TestingValidateResult`` (``aggregate_decision``
+  ``PASS|BORDERLINE|BLOCK``), ``sessions.run_status()`` / ``sessions.validate()``.
+- ``--page`` / ``--page-size`` / ``--all`` on ``redteam results``,
+  ``list-attacks`` and ``breach list``.
+- Ctrl-C or ``--max-wait`` expiry while polling cancels the run server-side
+  (``redteam attack``, ``plan-run create --wait``) and prints how to inspect
+  it; Ctrl-C exits 130.
 - ``PacksResource.list_mine()`` and ``disseqt pack list`` now hit
   ``GET /api/v1/sdk/prompt-packs/my-packs`` (api/server.go
   ``sdkPromptPackRoutes``), which returns the caller's own packs. The plain
@@ -16,6 +42,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   via ``PacksResource.list()`` / ``disseqt pack list --marketplace``.
 
 ### Changed
+- ``project_id`` is optional everywhere (``Client``, ``DisseqtAPIClient``,
+  ``disseqt login``); ``X-Project-Id`` is sent only when set, the gateway
+  derives the project from the key.
+- **BREAKING:** one credential precedence for CLI and library: explicit
+  args, then ``DISSEQT_API_KEY`` (+ ``DISSEQT_PROJECT_ID``), then
+  ``~/.disseqt/config.json``. ``Client()`` previously preferred the config
+  file over env vars.
+- **BREAKING:** ``DisseqtAPIClient`` arguments are optional and its default
+  ``base_url`` is ``https://api.disseqt.ai/dataset`` (was
+  ``http://localhost:8000``); it falls back to ``DISSEQT_BASE_URL`` and the
+  ``disseqt login`` config. An explicit ``base_url`` keeps the legacy Kong
+  prefix ``/sdk/prompt-packs/api/v1/sdk/prompt-packs`` for the 0.11 methods.
+- ``disseqt login --base-url`` is stored and used by later commands.
+- **BREAKING:** ``DisseqtAPIClient.list_run_output_validations()`` takes a
+  pack id: the only registered route is ``/:id/output-validations``
+  (the per-run path it called never existed).
+- **BREAKING:** ``OutputValidationsResource.results_csv()`` and
+  ``SessionsResource.report_csv()`` return raw ``bytes``; the CLI prints the
+  CSV verbatim instead of a JSON-quoted string.
+- ``redteam list-personas --attack-type`` filters server-side.
 - **Breaking:** ``PacksResource.publish(pack_id)`` is now
   ``publish(pack_id, sharing_scope="PRIVATE")`` and sends
   ``{"sharing_scope": ...}``. The handler binds it as
@@ -34,6 +80,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``400 ValidationFailed``. Creating new prompts is still
   ``add_prompts()`` / ``disseqt pack add-prompts`` (``/prompts/bulk``).
 
+### Fixed
+- ``targets.parse_curl`` / ``target parse-curl`` send ``curl_commands``
+  (api/app_integration_types.go); ``runs.add_to_pack`` / ``pp-run
+  add-to-pack`` send ``entry_ids``.
+- Paginated responses are read as ``{items, pagination}``: ``get_breach`` /
+  ``breach get`` (walks pages), ``report --format markdown|json``.
+- Polling treats ``stopped`` (and ``cancelled``) as terminal.
+- ``redteam results`` falls back to MR interactions only on HTTP 404.
+- Reading a ``.yaml`` config without PyYAML is a clear error.
+
+### Deprecated
+- ``Client(policies=..., realtime_policy_base_url=...)``,
+  ``validate(..., policies=...)`` and the ``disseqt_sdk.policy`` helpers are
+  back as shims that emit ``DeprecationWarning``.
+- ``--target`` on ``redteam attack`` (UUID → ``--app``, JSON/@file →
+  template) and ``redteam vuln-test`` (→ ``--integration``).
+
+### Removed
+- **BREAKING (vs 0.12.0 drafts):** ``red_team()``, ``RedTeamer`` and
+  ``cost_accumulator`` are no longer exported (the callback loop never
+  reached the server).
+
 ### Documentation
 - ``PacksResource.create``/``update`` docstrings and ``disseqt pack
   create``/``update`` help now state that ``severity``,
@@ -44,8 +112,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.12.0] - 2026-09-29
 
 DeepTeam parity: the ``disseqt`` CLI (``redteam``, ``scan``, resource
-groups, ``login``/``logout``/``whoami``), ``RedTeamer`` / ``red_team()``
-extensions, and ``cost_accumulator``. Every CLI request body is built from
+groups, ``login``/``logout``/``whoami``) and attack/vulnerability extension
+base classes. Every CLI request body is built from
 the dataset-backend Go structs; the file/line is cited next to each builder.
 
 ### Added
@@ -112,7 +180,8 @@ the dataset-backend Go structs; the file/line is cited next to each builder.
   browser session), the whole ``disseqt policy`` group, and the env vars
   ``DISSEQT_REDTEAM_BASE_URL`` / ``DISSEQT_DATASET_BASE_URL`` /
   ``DISSEQT_POLICY_MGMT_BASE_URL``.
-- **Server-side realtime-policy evaluation surface.** The
+- **Server-side realtime-policy evaluation surface** (since restored as
+  deprecated shims, see Unreleased). The
   ``Client.validate(request, policies=[...])`` shape (and its
   ``Client.validate_sync(..., raise_on_async=True)`` companion), the
   ``Guardrails`` class, the ``BaseGuard`` extension, the ``disseqt
