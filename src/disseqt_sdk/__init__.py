@@ -21,7 +21,15 @@ from .extensions import (
     BaseVulnerability,
 )
 from .models.base import SDKConfigInput
-from .red_team import RedTeamer, red_team
+from .policy import (  # deprecated shims, kept for 0.11 callers
+    PolicyDecision,
+    PolicyRule,
+    PolicyRuleset,
+    any_blocking,
+    is_async,
+    is_blocking,
+)
+from .policy import parse as parse_policy
 from .resources import (
     ByovValidatorsResource,
     McpTargetsResource,
@@ -33,7 +41,6 @@ from .resources import (
     TargetsResource,
     VulnerabilitiesResource,
 )
-from .telemetry import cost_accumulator
 
 __all__ = [
     "BaseAttack",
@@ -49,17 +56,21 @@ __all__ = [
     "McpTargetsResource",
     "OutputValidationsResource",
     "PacksResource",
+    "PolicyDecision",
+    "PolicyRule",
+    "PolicyRuleset",
     "RagTargetsResource",
-    "RedTeamer",
     "RunsResource",
     "SDKConfigInput",
     "SDKVersionBlockedError",
     "SessionsResource",
     "TargetsResource",
     "VulnerabilitiesResource",
+    "any_blocking",
     "configure_logging",
-    "cost_accumulator",
     "get_logger",
-    "red_team",
+    "is_async",
+    "is_blocking",
+    "parse_policy",
     "set_log_level",
 ]

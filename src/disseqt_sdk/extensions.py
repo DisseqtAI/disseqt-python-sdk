@@ -34,13 +34,12 @@ class BaseVulnerability:
     def assess(self, client: Client, target: Any) -> dict[str, Any]:  # noqa: D401
         """Assess ``target`` for this vulnerability.
 
-        Default implementation is a stub — subclasses either override or
-        the caller uses :func:`disseqt_sdk.red_team` which composes
-        server-driven vulnerabilities.
+        Default implementation is a stub — subclasses override it, or run a
+        server-registered vulnerability with ``client.vulnerabilities.test``.
         """
         raise NotImplementedError(
-            "BaseVulnerability.assess() is a stub — subclass or use "
-            "disseqt_sdk.red_team() with a server-registered vulnerability id"
+            "BaseVulnerability.assess() is a stub — subclass it, or use "
+            "DisseqtAPIClient().vulnerabilities.test() with a server vulnerability id"
         )
 
     def simulate_attacks(self, client: Client, count: int = 1) -> list[str]:

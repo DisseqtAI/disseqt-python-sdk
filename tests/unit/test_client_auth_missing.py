@@ -53,9 +53,10 @@ def test_client_raises_when_only_project_id_provided() -> None:
         Client(project_id="proj_1")
 
 
-def test_client_raises_when_only_api_key_provided() -> None:
-    with pytest.raises(AuthMissingError):
-        Client(api_key="dsq_test")
+def test_client_accepts_api_key_without_project() -> None:
+    # The gateway derives the project from the key; project_id is optional.
+    c = Client(api_key="dsq_test")
+    assert (c.api_key, c.project_id) == ("dsq_test", None)
 
 
 def test_client_treats_empty_string_creds_as_missing() -> None:

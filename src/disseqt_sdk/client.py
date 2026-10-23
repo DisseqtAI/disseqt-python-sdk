@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import json
-import os
 import time
+import warnings
 from collections.abc import Mapping
-from typing import Any, cast
+from typing import Any, Protocol, cast, runtime_checkable
 
 import requests
 
 from disseqt_logging import digest, get_logger
 
 from ._version import check_version_notice, sdk_identity_headers
-from .auth import AuthMissingError
+from .auth import AuthMissingError, resolve
 from .factories import (
     _AgenticFactory,
     _CompositeFactory,
@@ -23,6 +23,8 @@ from .factories import (
     _RagFactory,
     _ThemesFactory,
 )
+from .models.composite_score import CompositeScoreRequest
+from .models.themes_classifier import ThemesClassifierRequest
 from .registry import get_validator_metadata
 from .routes import build_validator_url
 from .validators.base import BaseValidator, ThemesClassifierValidator
@@ -31,26 +33,17 @@ from .validators.composite.evaluate import CompositeScoreEvaluator
 logger = get_logger(__name__)
 
 
-def _load_stored_auth() -> dict[str, Any] | None:
-    """``~/.disseqt/config.json`` (written by ``disseqt login``), else the
-    ``DISSEQT_PROJECT_ID`` / ``DISSEQT_API_KEY`` env vars. An insecure config
-    file (mode wider than 0600) is an error, never a silent fallback."""
-    from .auth import AuthConfigPermissionError
-    from .auth import load as _load
+_POLICY_DEPRECATION = (
+    "policies=/realtime_policy_base_url= are deprecated and will be removed; the "
+    "policy-evaluate endpoint is not served by any in-scope backend"
+)
 
-    try:
-        stored = _load()
-    except AuthConfigPermissionError:
-        raise
-    except Exception:
-        stored = None
-    if stored is not None:
-        return stored
-    project_id = os.environ.get("DISSEQT_PROJECT_ID")
-    api_key = os.environ.get("DISSEQT_API_KEY")
-    if project_id and api_key:
-        return {"project_id": project_id, "api_key": api_key}
-    return None
+
+@runtime_checkable
+class SupportsInputData(Protocol):
+    """A bare ``disseqt_sdk.models`` request; deprecated ``policies=`` input."""
+
+    def to_input_data(self) -> dict[str, Any]: ...
 
 
 class HTTPError(Exception):
@@ -192,6 +185,8 @@ class Client:
         base_url: str | None = None,
         timeout: int = 30,
         application_name: str | None = None,
+        realtime_policy_base_url: str | None = None,
+        policies: list[str] | None = None,
     ) -> None:
         """Initialize the Disseqt SDK client.
 
@@ -207,32 +202,37 @@ class Client:
                 :class:`DisseqtAgenticClient`.
 
         Raises:
-            AuthMissingError: No creds from kwargs or
+            AuthMissingError: No API key from kwargs, env or
                 ``~/.disseqt/config.json``. Fails at construction
                 instead of the first API call.
         """
-        # Resolution order: explicit kwargs → ``~/.disseqt/config.json``
-        # (written by ``disseqt login``) → DISSEQT_* env vars.
-        if not (project_id and api_key):
-            stored = _load_stored_auth()
-            if stored is not None:
-                project_id = project_id or stored.get("project_id")
-                api_key = api_key or stored.get("api_key")
-                if base_url is None:
-                    base_url = stored.get("base_url")
-        if base_url is None:
-            base_url = "https://api.disseqt.ai/realtime-validations"
-
-        self.project_id = project_id or ""
-        self.api_key = api_key or ""
-        if not self.project_id or not self.api_key:
+        # Precedence: kwargs, then env, then ~/.disseqt/config.json (env beats config).
+        api_key, project_id, _ = resolve(api_key, project_id)
+        if not api_key:
             raise AuthMissingError(
-                "Missing project_id and/or api_key. Provide them via:\n"
-                "  1. Client(project_id=..., api_key=...)\n"
-                "  2. `disseqt login` (writes ~/.disseqt/config.json)\n"
-                "  3. env vars DISSEQT_PROJECT_ID and DISSEQT_API_KEY"
+                "Missing api_key. Provide it via:\n"
+                "  1. Client(api_key=...)\n"
+                "  2. env var DISSEQT_API_KEY (DISSEQT_PROJECT_ID optional)\n"
+                "  3. `disseqt login` (writes ~/.disseqt/config.json)"
             )
-        self.base_url = base_url
+        if realtime_policy_base_url is not None or policies:
+            warnings.warn(_POLICY_DEPRECATION, DeprecationWarning, stacklevel=2)
+        default_policies = list(policies) if policies else None
+        if default_policies is not None:
+            if not all(isinstance(p, str) and p.strip() for p in default_policies):
+                raise ValueError(
+                    f"Client(policies=...) must be a list of policy-id strings (got {default_policies!r})"
+                )
+            if not (application_name and application_name.strip()):
+                raise ValueError("application_name is required when Client(policies=...) is set")
+        self.project_id: str | None = project_id
+        self.api_key: str = api_key
+        self.realtime_policy_base_url = (
+            realtime_policy_base_url or "https://api.disseqt.ai/realtime-validations"
+        )
+        self.policies = default_policies
+        # Validators live on their own gateway; the stored base_url is the dataset one.
+        self.base_url = base_url or "https://api.disseqt.ai/realtime-validations"
         self.timeout = timeout
         self.application_name = application_name
 
@@ -254,55 +254,153 @@ class Client:
         Returns:
             Dictionary of HTTP headers
         """
-        return {
+        headers = {
             "X-API-Key": self.api_key,
-            "X-Project-Id": self.project_id,
             "Content-Type": "application/json",
             **sdk_identity_headers(),
         }
+        if self.project_id:
+            headers["X-Project-Id"] = self.project_id
+        return headers
 
     def validate(
         self,
-        request: BaseValidator | ThemesClassifierValidator | CompositeScoreEvaluator,
+        request: (
+            BaseValidator | ThemesClassifierValidator | CompositeScoreEvaluator | SupportsInputData
+        ),
+        policies: list[str] | None = None,
     ) -> dict[str, Any]:
         """Run a single validator (or composite/themes) and return its response.
 
-        The historical ``policies=[...]`` shape targeted an aspirational
-        server-side policy-evaluate endpoint that no in-scope backend
-        registers, so it was removed. This method now only runs the
-        validator classes exposed under :mod:`disseqt_sdk.validators`.
-
-        Args:
-            request: A validator instance from :mod:`disseqt_sdk.validators`
-                (or a themes-classifier / composite-score evaluator).
-
-        Returns:
-            The validator's raw response envelope.
+        ``policies=[...]`` (and a ``Client(policies=...)`` default) is a deprecated
+        shim kept for 0.11 callers; it emits :class:`DeprecationWarning`.
 
         Raises:
             HTTPError: If the API request fails.
             ValueError: If ``request`` is not a validator instance.
         """
+        if policies is not None:
+            warnings.warn(_POLICY_DEPRECATION, DeprecationWarning, stacklevel=2)
+            return self._validate_with_policies(request, policies)
+        if self.policies is not None and not isinstance(
+            request,
+            (
+                ThemesClassifierValidator,
+                CompositeScoreEvaluator,
+                ThemesClassifierRequest,
+                CompositeScoreRequest,
+            ),
+        ):
+            warnings.warn(_POLICY_DEPRECATION, DeprecationWarning, stacklevel=2)
+            return self._validate_with_policies(request, self.policies)
         if not isinstance(
             request, (BaseValidator, ThemesClassifierValidator, CompositeScoreEvaluator)
         ):
             raise ValueError(
-                "request must be a validator instance from disseqt_sdk.validators "
+                "A bare request object needs policies=[...] — pass a validator "
+                "instance to run a single validator "
                 f"(got {type(request).__name__})"
             )
         return self._run_validator(request)
 
     def validate_sync(
         self,
-        request: BaseValidator | ThemesClassifierValidator | CompositeScoreEvaluator,
+        request: (
+            BaseValidator | ThemesClassifierValidator | CompositeScoreEvaluator | SupportsInputData
+        ),
+        policies: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Alias for :meth:`validate` retained for API stability.
+        """Alias for :meth:`validate` retained for API stability."""
+        return self.validate(request, policies=policies)
 
-        Historical block-on-verdict semantics were tied to the removed
-        server-side policy-evaluate path and no longer apply. Now a
-        one-line delegator so existing callers keep working.
+    def _validate_with_policies(
+        self,
+        request: (
+            BaseValidator | ThemesClassifierValidator | CompositeScoreEvaluator | SupportsInputData
+        ),
+        policies: list[str],
+    ) -> dict[str, Any]:
+        """Orchestrate shape 2/3 of :meth:`validate` (``policies=[...]``).
+
+        Every client-side rule is checked — and raises ``ValueError`` —
+        BEFORE any network call is made.
         """
-        return self.validate(request)
+        # Normalize first: a one-shot iterable (generator) would otherwise
+        # be exhausted by validation and silently evaluate zero policies.
+        try:
+            policy_ids = list(policies)
+        except TypeError:
+            raise ValueError(
+                f"policies must be a list of policy-id strings (got {policies!r})"
+            ) from None
+        if not policy_ids or not all(isinstance(p, str) and p.strip() for p in policy_ids):
+            raise ValueError(
+                "policies must be a non-empty list of policy-id strings " f"(got {policy_ids!r})"
+            )
+        if isinstance(
+            request,
+            (
+                ThemesClassifierValidator,
+                CompositeScoreEvaluator,
+                ThemesClassifierRequest,
+                CompositeScoreRequest,
+            ),
+        ):
+            raise ValueError(
+                "policies=[...] is not supported with composite-score or "
+                "themes-classifier requests — those endpoints have their own "
+                "aggregation and are never policy-evaluated"
+            )
+        application_name = self.application_name
+        if not (application_name and application_name.strip()):
+            raise ValueError(
+                "application_name is required to evaluate policies — set "
+                "Client(application_name=...) so the Decisions ledger can "
+                "attribute each decision to your application"
+            )
+
+        # Both shapes carry the input on an object that knows its wire
+        # form. A validator's payload already contains the renamed
+        # input_data; bare models serialize themselves. A validator's
+        # config_input (threshold, custom labels, llm_as_a_judge flag, …)
+        # is forwarded to the policy evaluation too, so per-validator
+        # config reaches the server-side policy engine; bare models carry
+        # no config.
+        config_input: dict[str, Any] | None = None
+        if isinstance(request, BaseValidator):
+            payload = request.to_payload()
+            input_data = dict(payload.get("input_data") or {})
+            config_input = dict(payload.get("config_input") or {}) or None
+        elif isinstance(request, SupportsInputData):
+            input_data = request.to_input_data()
+        else:
+            raise ValueError(
+                "request must be a validator instance or a disseqt_sdk.models "
+                f"request object, got {type(request).__name__}"
+            )
+        if not input_data:
+            raise ValueError(
+                "the request carries no input fields — set prompt/context/"
+                "response (or agentic fields) so the policies have something "
+                "to evaluate"
+            )
+
+        # All guards passed — now (and only now) touch the network.
+        validation: dict[str, Any] | None = (
+            self._run_validator(request) if isinstance(request, BaseValidator) else None
+        )
+        envelopes = [
+            self._post_policy_evaluate(
+                policy_id, input_data, application_name, config_input=config_input
+            )
+            for policy_id in policy_ids
+        ]
+        logger.info(
+            "validation.policies",
+            policy_count=len(envelopes),
+            with_validator=validation is not None,
+        )
+        return {"validation": validation, "policies": envelopes}
 
     def _run_validator(
         self, request: BaseValidator | ThemesClassifierValidator | CompositeScoreEvaluator
@@ -434,3 +532,82 @@ class Client:
         else:
             # Use default response handling (no forced normalization)
             return server_response
+
+    def _post_policy_evaluate(
+        self,
+        policy_id: str,
+        input_data: dict[str, Any],
+        application_name: str,
+        config_input: dict[str, Any] | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        """POST one policy-evaluation request and decode the envelope.
+
+        Transport for :meth:`validate` (``policies=[...]``).
+        Raises :class:`HTTPError` on any non-2xx
+        (unknown/unpublished policies answer 404 DSQ-4040) and
+        ``ValueError`` on an undecodable body.
+        """
+        url = (
+            f"{self.realtime_policy_base_url.rstrip('/')}"
+            f"/api/v1/sdk/policies/{policy_id}/evaluate"
+        )
+        payload: dict[str, Any] = {
+            "input_data": input_data,
+            "application_name": application_name,
+        }
+        if config_input is not None:
+            payload["config_input"] = config_input
+
+        headers = self._build_headers()
+        if request_id is not None:
+            headers["X-Request-Id"] = request_id
+
+        started = time.monotonic()
+        try:
+            http_resp = requests.post(url, json=payload, headers=headers, timeout=self.timeout)
+        except requests.RequestException as e:
+            logger.error(
+                "policy.network_error",
+                policy_id=policy_id,
+                latency_ms=round((time.monotonic() - started) * 1000, 1),
+                exc_info=True,
+            )
+            raise HTTPError(
+                status_code=0,
+                message=f"Network error: {e}",
+                response_body="",
+            ) from e
+
+        latency_ms = round((time.monotonic() - started) * 1000, 1)
+        check_version_notice(http_resp.headers)
+        if not http_resp.ok:
+            logger.error(
+                "policy.http_error",
+                policy_id=policy_id,
+                status=http_resp.status_code,
+                latency_ms=latency_ms,
+            )
+            blocked = _version_blocked_error(
+                http_resp.status_code, http_resp.headers, http_resp.text
+            )
+            if blocked is not None:
+                raise blocked
+            raise HTTPError(
+                status_code=http_resp.status_code,
+                message="Policy evaluation failed",
+                response_body=http_resp.text[:512] if http_resp.text else "",
+            )
+        try:
+            data = http_resp.json()
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"Failed to decode policy response: {e}. Body: {http_resp.text[:200]}"
+            ) from e
+        logger.info(
+            "policy.response",
+            policy_id=policy_id,
+            status=http_resp.status_code,
+            latency_ms=latency_ms,
+        )
+        return cast(dict[str, Any], data)

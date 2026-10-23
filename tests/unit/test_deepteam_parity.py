@@ -9,13 +9,7 @@ from __future__ import annotations
 import pytest
 from click.testing import CliRunner
 
-from disseqt_sdk import (
-    BaseSingleTurnAttack,
-    BaseVulnerability,
-    RedTeamer,
-    cost_accumulator,
-    red_team,
-)
+from disseqt_sdk import BaseSingleTurnAttack, BaseVulnerability
 from disseqt_sdk.cli import cli
 from disseqt_sdk.models import Example, SDKConfigInput
 
@@ -57,53 +51,6 @@ class TestPhase5aExtensions:
         vuln = BaseVulnerability(name="v1")
         with pytest.raises(NotImplementedError):
             vuln.assess(client=None, target=None)
-
-
-class TestPhase5cRedTeam:
-    def test_red_team_calls_callback_for_each_pair(self):
-        seen: list[str] = []
-
-        def cb(prompt: str) -> str:
-            seen.append(prompt)
-            return "ok"
-
-        vulns = [BaseVulnerability(name="v1"), BaseVulnerability(name="v2")]
-        atks = [BaseSingleTurnAttack(name="a1")]
-        run = red_team(cb, vulns, atks)
-        assert run.total_attacks == 2
-        assert len(run.materialized) == 2
-        assert len(seen) == 2
-
-    def test_red_teamer_reuse_skips_prior_prompts(self):
-        rt = RedTeamer(client=None, reuse_previous_attacks=True)
-        vulns = [BaseVulnerability(name="v1")]
-        atks = [BaseSingleTurnAttack(name="a1")]
-
-        def cb(_: str) -> str:
-            return "ok"
-
-        run1 = rt.red_team(cb, vulns, atks)
-        run2 = rt.red_team(cb, vulns, atks)
-        assert run1.total_attacks == 1
-        assert run2.total_attacks == 0  # deduped
-
-    def test_red_team_captures_provider_errors(self):
-        def cb(_: str) -> str:
-            raise RuntimeError("provider down")
-
-        run = red_team(cb, [BaseVulnerability(name="v")], [BaseSingleTurnAttack(name="a")])
-        assert not run.materialized
-        assert run.errors and "provider down" in run.errors[0]["error"]
-
-
-class TestPhase6Telemetry:
-    def test_cost_accumulator_scopes(self):
-        with cost_accumulator() as bucket:
-            bucket.add(simulation_cost=0.5, evaluation_cost=0.25)
-            bucket.add(simulation_cost=0.5, prompt_tokens=100)
-        assert bucket.total_cost == pytest.approx(1.25)
-        assert bucket.prompt_tokens == 100
-        assert len(bucket.entries) == 2
 
 
 # NOTE: TestCliValidate (policies-based `disseqt validate` and
@@ -295,19 +242,20 @@ class TestCliRedteamExpansion:
 
     def test_redteam_list_personas_filters(self, monkeypatch, requests_mock):
         self._env(monkeypatch)
+        # Server filters: api/jailbreak_agents_handlers.go ListJailbreakAgentsResponse.
         m = requests_mock.get(
             f"{self.RT_BASE}/api/v1/mr-jailbreak/agents",
-            json=[
-                {"name": "dan", "attack_type": "roleplay"},
-                {"name": "coder", "attack_type": "obfuscation"},
-            ],
+            json={"agents": [{"name": "dan", "attack_type": "roleplay"}], "total_count": 1},
         )
         r = CliRunner().invoke(cli, ["redteam", "list-personas", "--attack-type", "roleplay"])
         assert r.exit_code == 0, r.output
         assert "dan" in r.output
-        assert "coder" not in r.output
-        # ListJailbreakAgentsRequest requires page_id + kebab-case page-size (5..100).
-        assert m.last_request.qs == {"page_id": ["1"], "page-size": ["100"]}
+        # ListJailbreakAgentsRequest: page_id + kebab-case page-size (5..100) + attack_type.
+        assert m.last_request.qs == {
+            "page_id": ["1"],
+            "page-size": ["100"],
+            "attack_type": ["roleplay"],
+        }
 
     def test_redteam_list_techniques_multi_only(self, monkeypatch, requests_mock):
         self._env(monkeypatch)
