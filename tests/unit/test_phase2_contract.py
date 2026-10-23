@@ -275,6 +275,7 @@ class TestTargets:
         expected: dict[str, str],
     ) -> None:
         monkeypatch.setenv("DISSEQT_PROJECT_ID", "p-env")
+        monkeypatch.setenv("DISSEQT_ORGANIZATION_ID", "o-env")
         requests_mock.post(f"{BASE}/api/v1/vulnerabilities/V/test/poll", json=ok({"run_id": "x"}))
         res = runner.invoke(cli, ["redteam", "vuln-test", "--vulnerability", "V", *flags])
         assert res.exit_code == 0, res.output
@@ -337,8 +338,16 @@ class TestTargets:
         api.runs.create("P", {"max_tokens": 5}, application_id=APP_ID)
         assert body(requests_mock.last_request) == {"max_tokens": 5, "application_id": APP_ID}
         requests_mock.post(f"{BASE}/api/v1/vulnerabilities/V/test", json=ok({}))
-        api.vulnerabilities.test("V", app_integration_id=INTEG_ID)
+        api.vulnerabilities.test(
+            "V", app_integration_id=INTEG_ID, project_id="P1", organization_id="O1"
+        )
         assert body(requests_mock.last_request) == {"app_integration_id": INTEG_ID}
+        assert requests_mock.last_request.qs == {"project_id": ["p1"], "organization_id": ["o1"]}
+        requests_mock.get(
+            f"{BASE}/api/v1/whoami", json=ok({"project_id": "P2", "organization_id": "O2"})
+        )
+        api.vulnerabilities.test("V", application_id=APP_ID)
+        assert requests_mock.last_request.qs == {"project_id": ["p2"], "organization_id": ["o2"]}
         requests_mock.post(f"{BASE}/api/v1/test-plans/PL/runs", json=ok({}))
         api.test_plan_runs.create("PL", endpoint_url="https://t")
         assert body(requests_mock.last_request)["target"] == {
@@ -426,7 +435,7 @@ class TestContractFixes:
         # api/prompt_pack_entry_handlers.go AddPromptsToPackRequest entry_ids.
         assert body(requests_mock.last_request) == {"entry_ids": ["e1"]}
         res = runner.invoke(
-            cli, ["pp-run", "add-to-pack", "R", "--output-id", "e2", "--pack-id", "P"]
+            cli, ["pp-run", "add-to-pack", "R", "--entry-id", "e2", "--pack-id", "P"]
         )
         assert res.exit_code == 0, res.output
         assert body(requests_mock.last_request) == {"entry_ids": ["e2"]}
@@ -662,6 +671,20 @@ class TestNodeParity:
         assert res.exit_code == 130, res.output
         assert f"disseqt redteam status {job}" in res.output
         assert all(r.method in ("GET", "POST") for r in requests_mock.request_history)
+
+
+def test_multi_turn_skips_failed_zero_uuid_jobs(requests_mock: Any, monkeypatch) -> None:
+    # TargetPromptResult.JobID is a non-pointer uuid: failed rows carry the nil UUID.
+    monkeypatch.setenv("DISSEQT_API_KEY", "k")
+    monkeypatch.setenv("DISSEQT_PROJECT_ID", "p-env")
+    nil = "00000000-0000-0000-0000-000000000000"
+    requests_mock.post(
+        f"{MR}/batch-automate",
+        json=ok({"results": [{"target_prompt": "p", "job_id": nil, "error": "x"}]}),
+    )
+    res = CliRunner().invoke(cli, [*_MULTI, "--integration", INTEG_ID])
+    assert res.exit_code == 0, res.output
+    assert not any(nil in r.url for r in requests_mock.request_history if r.method == "GET")
 
 
 def requests_mock_any_link() -> Any:

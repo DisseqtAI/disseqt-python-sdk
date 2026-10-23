@@ -92,13 +92,6 @@ class BaseMultiTurnAttack(BaseAttack):
         return min(1.0, len(self.turns) / self.max_turns)
 
 
-# NOTE: BaseGuard removed alongside Guardrails. It wrapped a policy id and
-# delegated to Client.validate(..., policies=[...]) — the same removed
-# server-side policy-evaluate path. If a client-side guard concept needs to
-# come back, it should compose class-based validators locally rather than
-# take a dependency on a runtime endpoint we do not currently serve.
-
-
 @dataclass
 class BaseMetric:
     """Named metric — thin wrapper over criteria + threshold + labels.

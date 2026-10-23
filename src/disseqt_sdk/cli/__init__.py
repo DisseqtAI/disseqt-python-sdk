@@ -10,6 +10,8 @@ from __future__ import annotations
 import click
 
 from .._version import SDK_VERSION
+from . import plans as _plans
+from . import redteam_tools as _redteam_tools  # noqa: F401 (registers redteam verbs)
 from . import resources as _resources
 from .login import login as login_cmd
 from .login import logout as logout_cmd
@@ -17,13 +19,13 @@ from .redteam import redteam as redteam_group
 from .scan import scan as scan_cmd
 from .whoami import whoami as whoami_cmd
 
-app_group = _resources.app
+app_group = _plans.app
 byov_group = _resources.byov
 mcp_target_group = _resources.mcp_target
 output_validation_group = _resources.output_validation
 pack_group = _resources.pack
-plan_group = _resources.plan
-plan_run_group = _resources.plan_run
+plan_group = _plans.plan
+plan_run_group = _plans.plan_run
 pp_run_group = _resources.pp_run
 rag_target_group = _resources.rag_target
 session_group = _resources.session

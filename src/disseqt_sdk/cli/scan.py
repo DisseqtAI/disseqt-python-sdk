@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 import click
 
@@ -55,6 +56,19 @@ def _resolve_validators(cli_flag: tuple[str, ...], cfg: ScanConfig) -> tuple[str
     if cfg.validators:
         return tuple(cfg.validators)
     return APPSEC_VALIDATORS
+
+
+def _emit(report: str, output_path: str | None) -> None:
+    if output_path:
+        Path(output_path).write_text(report, encoding="utf-8")
+    else:
+        click.echo(report)
+
+
+def _exit_empty(reason: str, fmt: str, output_path: str | None) -> NoReturn:
+    """Nothing to scan: exit 0 with an empty report in the requested format."""
+    _emit(f"# disseqt scan\n\n{reason}" if fmt == "markdown" else _render([], fmt), output_path)
+    sys.exit(0)
 
 
 def _render(findings: list, fmt: str) -> str:
@@ -169,8 +183,7 @@ def scan(
         except GitDiffError as exc:
             _fail(str(exc))
         if not only:
-            click.echo("# disseqt scan\n\nNo changed files in diff range.", err=False)
-            sys.exit(0)
+            _exit_empty("No changed files in diff range.", output_format, output_path)
 
     chunks = list(
         collect_chunks(
@@ -181,8 +194,7 @@ def scan(
         )
     )
     if not chunks:
-        click.echo("# disseqt scan\n\nNo source files matched (nothing to do).", err=False)
-        sys.exit(0)
+        _exit_empty("No source files matched (nothing to do).", output_format, output_path)
 
     stats = DispatchStats()
     findings = list(
@@ -195,11 +207,7 @@ def scan(
     )
     findings = [f for f in findings if meets_min_severity(f.severity, effective_min)]
 
-    report = _render(findings, output_format)
-    if output_path:
-        Path(output_path).write_text(report, encoding="utf-8")
-    else:
-        click.echo(report)
+    _emit(_render(findings, output_format), output_path)
 
     # Summary always to stderr so it doesn't corrupt piped JSON/SARIF output.
     click.echo(

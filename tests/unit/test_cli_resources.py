@@ -277,10 +277,12 @@ def test_vulnerability_list(runner: CliRunner, requests_mock) -> None:
     assert result.exit_code == 0
 
 
-def test_vulnerability_test(runner: CliRunner, requests_mock) -> None:
-    requests_mock.post(f"{DATASET_BASE}/api/v1/vulnerabilities/v1/test", json={"job_id": "j1"})
+def test_vulnerability_test(runner: CliRunner, requests_mock, monkeypatch) -> None:
+    monkeypatch.setenv("DISSEQT_ORGANIZATION_ID", "org-1")
+    m = requests_mock.post(f"{DATASET_BASE}/api/v1/vulnerabilities/v1/test", json={"job_id": "j1"})
     result = runner.invoke(cli, ["vulnerability", "test", "v1", "--json", '{"target": "t1"}'])
     assert result.exit_code == 0
+    assert m.last_request.qs == {"project_id": ["test_project"], "organization_id": ["org-1"]}
 
 
 def test_invalid_json_fails_fast(runner: CliRunner) -> None:
@@ -352,9 +354,9 @@ def test_pp_run_add_to_pack(runner: CliRunner, requests_mock) -> None:
             "pp-run",
             "add-to-pack",
             "r1",
-            "--output-id",
+            "--entry-id",
             "o1",
-            "--output-id",
+            "--entry-id",
             "o2",
             "--pack-id",
             "p1",
@@ -502,3 +504,70 @@ def test_removed_prompt_pack_verbs_are_gone(runner: CliRunner) -> None:
         ["pp-run", "retrieval-traces", "r1"],
     ):
         assert runner.invoke(cli, args).exit_code == 2, args
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["pack", "create", "--json", "@/nonexistent/body.json"],
+        ["redteam", "technique", "create", "--json", "{not json"],
+        ["redteam", "technique", "create", "--json", "@/nonexistent/body.json"],
+    ],
+)
+def test_bad_json_body_is_usage_error(runner: CliRunner, argv: list[str]) -> None:
+    result = runner.invoke(cli, argv)
+    assert result.exit_code == 2
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+@pytest.mark.parametrize(
+    "flag, key", [("--app", "application_id"), ("--integration", "app_integration_id")]
+)
+def test_vulnerability_test_target_flags(
+    runner: CliRunner, requests_mock, monkeypatch, flag: str, key: str
+) -> None:
+    monkeypatch.setenv("DISSEQT_ORGANIZATION_ID", "org-1")
+    m = requests_mock.post(f"{DATASET_BASE}/api/v1/vulnerabilities/v1/test", json={})
+    result = runner.invoke(cli, ["vulnerability", "test", "v1", flag, "id-1"])
+    assert result.exit_code == 0, result.output
+    assert m.last_request.json() == {key: "id-1"}
+
+
+def test_vulnerability_test_rejects_endpoint(runner: CliRunner) -> None:
+    result = runner.invoke(cli, ["vulnerability", "test", "v1", "--endpoint", "http://x"])
+    assert result.exit_code == 2
+
+
+def test_compare_commands_send_required_ids(runner: CliRunner, requests_mock) -> None:
+    base = f"{DATASET_BASE}/api/v1/sdk/prompt-packs/p1"
+    runs = requests_mock.get(f"{base}/runs/compare", json={})
+    vals = requests_mock.get(f"{base}/validations/compare", json={})
+    r = runner.invoke(cli, ["pp-run", "compare", "p1", "--run1", "a", "--run2", "b"])
+    assert r.exit_code == 0, r.output
+    assert runs.last_request.qs == {"run1_id": ["a"], "run2_id": ["b"]}
+    argv = ["output-validation", "compare", "p1", "--validation1", "a", "--validation2", "b"]
+    r = runner.invoke(cli, argv)
+    assert r.exit_code == 0, r.output
+    assert vals.last_request.qs == {"validation1_id": ["a"], "validation2_id": ["b"]}
+
+
+def test_byov_list_sends_project_id(runner: CliRunner, requests_mock) -> None:
+    m = requests_mock.get(f"{DATASET_BASE}/api/v1/llm/custom-validators", json={})
+    assert runner.invoke(cli, ["byov", "list"]).exit_code == 0
+    assert m.last_request.qs == {"project_id": ["test_project"]}
+
+
+def test_mark_successful_sends_success_true(runner: CliRunner, requests_mock) -> None:
+    m = requests_mock.patch(
+        f"{DATASET_BASE}/api/v1/jailbreak/generated-prompts/g1/success", json={}
+    )
+    r = runner.invoke(cli, ["redteam", "generated-prompt", "mark-successful", "g1"])
+    assert r.exit_code == 0, r.output
+    assert m.last_request.json() == {"success": True}
+
+
+def test_list_attacks_multi_clamps_page_size(runner: CliRunner, requests_mock) -> None:
+    m = requests_mock.get(f"{DATASET_BASE}/api/v1/mr-jailbreak/techniques", json={})
+    r = runner.invoke(cli, ["redteam", "list-attacks", "--kind", "multi", "--page-size", "2"])
+    assert r.exit_code == 0, r.output
+    assert m.last_request.qs["page-size"] == ["5"]

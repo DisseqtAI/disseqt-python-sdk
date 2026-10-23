@@ -47,6 +47,23 @@ def require_credentials() -> tuple[str | None, str]:
     return project_id, api_key
 
 
+def load_json_body(json_body: str | None) -> dict[str, Any]:
+    """Parse a --json value (literal JSON or @file) into an object; bad input exits 2."""
+    if not json_body:
+        return {}
+    try:
+        if json_body.startswith("@"):
+            with open(json_body[1:], encoding="utf-8") as f:
+                data = json.load(f)
+        else:
+            data = json.loads(json_body)
+    except (OSError, json.JSONDecodeError) as e:
+        _fail(f"invalid --json: {e}")
+    if not isinstance(data, dict):
+        _fail("--json body must be a JSON object")
+    return data
+
+
 def echo_json(payload: Any) -> None:
     """Print pretty JSON to stdout."""
     click.echo(json.dumps(payload, indent=2, sort_keys=True, default=str))

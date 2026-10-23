@@ -460,6 +460,13 @@ def test_cli_scan_no_files_exits_zero(tmp_path: Path):
     assert "No source files" in result.output
 
 
+def test_cli_scan_no_files_json_stays_machine_readable(tmp_path: Path):
+    _write(tmp_path, "README.md", "# hi\n")
+    result = CliRunner().invoke(cli, ["scan", str(tmp_path), "-f", "json"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == json.loads(to_json([]))
+
+
 def test_cli_scan_produces_sarif_when_requested(tmp_path: Path, monkeypatch):
     _write(tmp_path, "app.py", "eval(user_input)\n")
 

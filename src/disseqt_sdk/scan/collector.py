@@ -128,12 +128,9 @@ def _walk(root: Path) -> Iterator[Path]:
         for entry in entries:
             name = entry.name
             if entry.is_dir():
+                # Dot-dirs (.github, ...) are skipped too; point --path at one to scan it.
                 if name in SKIP_DIRS or name.startswith("."):
-                    # SKIP_DIRS is authoritative; also drop other dot-dirs to
-                    # avoid scanning .github/.circleci/etc. If a user wants
-                    # them, they can point --path at the dir directly.
-                    if name in SKIP_DIRS or (name.startswith(".") and name not in {"."}):
-                        continue
+                    continue
                 stack.append(entry)
             elif entry.is_file():
                 yield entry

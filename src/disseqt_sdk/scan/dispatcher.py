@@ -143,9 +143,7 @@ def _raise_for_wire_status(envelope: Any) -> None:
 
 
 def _default_transport(method: str, path: str, body: dict[str, Any]) -> Any:
-    # Lazy import — dispatcher is imported from cli/scan.py, and cli/_http
-    # in turn touches cli/__init__.py which registers scan. Break the cycle
-    # by resolving the HTTP layer at call time.
+    # Lazy: cli/_http imports cli/__init__, which imports this module.
     from ..cli import _http  # noqa: PLC0415 — deliberate lazy import
 
     return _http.request(

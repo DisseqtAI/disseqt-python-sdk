@@ -1,6 +1,6 @@
 """CLI resource groups: ``target``, ``rag-target``, ``mcp-target``,
 ``pack``, ``pp-run``, ``output-validation``, ``session``, ``byov``,
-``vulnerability``, ``plan``, ``plan-run``.
+``vulnerability`` (``plan``, ``plan-run``, ``app``: :mod:`.plans`).
 
 Prompt-pack verbs use the service-key mount ``/api/v1/sdk/prompt-packs``
 (api/server.go sdkPromptPackRoutes); the browser-session mount is not
@@ -12,16 +12,23 @@ all on the dataset gateway (``DISSEQT_BASE_URL``).
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
 from typing import Any
 
 import click
 
 from ..api_client import DisseqtAPIClient
-from ..resources import PACK_SHARING_SCOPES, plan_run_target
+from ..resources import PACK_SHARING_SCOPES
 from . import _http
-from ._common import _fail, echo_json, optional_target, require_credentials, target_options
+from ._common import (
+    _fail,
+    echo_json,
+    load_json_body,
+    optional_target,
+    require_credentials,
+    target_options,
+)
+from .whoami import resolve_project_id, scope_params
 
 
 def _json_option(
@@ -29,23 +36,6 @@ def _json_option(
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Reusable --json option that either reads a literal string or a file."""
     return click.option("--json", "json_body", help=help_text)
-
-
-def _load_json_body(json_body: str | None) -> dict[str, Any]:
-    """Parse a --json value: literal JSON, or @file for a JSON file."""
-    if not json_body:
-        return {}
-    if json_body.startswith("@"):
-        with open(json_body[1:], encoding="utf-8") as f:
-            data = json.load(f)
-    else:
-        try:
-            data = json.loads(json_body)
-        except json.JSONDecodeError as e:
-            _fail(f"invalid --json: {e}")
-    if not isinstance(data, dict):
-        _fail("--json body must be a JSON object")
-    return data
 
 
 def _get(path: str, params: dict[str, Any] | None = None) -> None:
@@ -96,7 +86,7 @@ def target() -> None:
 @target.command("create")
 @_json_option("Target payload as JSON literal or @file.")
 def target_create(json_body: str | None) -> None:
-    _post("/api/v1/llm/app-integrations", _load_json_body(json_body))
+    _post("/api/v1/llm/app-integrations", load_json_body(json_body))
 
 
 @target.command("list")
@@ -114,7 +104,7 @@ def target_get(target_id: str) -> None:
 @click.argument("target_id")
 @_json_option("Patch payload as JSON literal or @file.")
 def target_update(target_id: str, json_body: str | None) -> None:
-    _patch(f"/api/v1/llm/app-integrations/{target_id}", _load_json_body(json_body))
+    _patch(f"/api/v1/llm/app-integrations/{target_id}", load_json_body(json_body))
 
 
 @target.command("delete")
@@ -131,7 +121,7 @@ def target_test(target_id: str, json_body: str | None) -> None:
     # Backend registers /:id/test-connection, not /:id/test (server.go:811).
     _post(
         f"/api/v1/llm/app-integrations/{target_id}/test-connection",
-        _load_json_body(json_body),
+        load_json_body(json_body),
     )
 
 
@@ -139,7 +129,7 @@ def target_test(target_id: str, json_body: str | None) -> None:
 @_json_option("Full target-integration JSON (unsaved).")
 def target_probe(json_body: str | None) -> None:
     """Test-connection without saving (dry run)."""
-    _post("/api/v1/llm/app-integrations/test-connection", _load_json_body(json_body))
+    _post("/api/v1/llm/app-integrations/test-connection", load_json_body(json_body))
 
 
 @target.command("parse-curl")
@@ -180,7 +170,7 @@ def _make_crud_group(name: str, base_path: str, help_text: str) -> click.Group:
     @group.command("create")
     @_json_option()
     def _create(json_body: str | None) -> None:
-        _post(base_path, _load_json_body(json_body))
+        _post(base_path, load_json_body(json_body))
 
     @group.command("list")
     def _list() -> None:
@@ -195,7 +185,7 @@ def _make_crud_group(name: str, base_path: str, help_text: str) -> click.Group:
     @click.argument("resource_id")
     @_json_option()
     def _update(resource_id: str, json_body: str | None) -> None:
-        _patch(f"{base_path}/{resource_id}", _load_json_body(json_body))
+        _patch(f"{base_path}/{resource_id}", load_json_body(json_body))
 
     @group.command("delete")
     @click.argument("resource_id")
@@ -227,7 +217,7 @@ def pack_create(json_body: str | None) -> None:
     'severity', 'interaction_mode' and 'task_type' are ignored by the server:
     it aggregates them from the pack's prompts, so don't expect them back.
     """
-    _post("/api/v1/sdk/prompt-packs", _load_json_body(json_body))
+    _post("/api/v1/sdk/prompt-packs", load_json_body(json_body))
 
 
 @pack.command("list")
@@ -253,7 +243,7 @@ def pack_update(pack_id: str, json_body: str | None) -> None:
     'severity', 'interaction_mode' and 'task_type' are ignored by the server:
     they are aggregated from the pack's prompts.
     """
-    _patch(f"/api/v1/sdk/prompt-packs/{pack_id}", _load_json_body(json_body))
+    _patch(f"/api/v1/sdk/prompt-packs/{pack_id}", load_json_body(json_body))
 
 
 @pack.command("delete")
@@ -272,7 +262,7 @@ def pack_prompts(pack_id: str) -> None:
 @click.argument("pack_id")
 @_json_option("JSON with a 'prompts' array, or @file.")
 def pack_add_prompts(pack_id: str, json_body: str | None) -> None:
-    body = _load_json_body(json_body)
+    body = load_json_body(json_body)
     if "prompts" not in body:
         _fail("payload must contain a 'prompts' array")
     _post(f"/api/v1/sdk/prompt-packs/{pack_id}/prompts/bulk", body)
@@ -282,7 +272,7 @@ def pack_add_prompts(pack_id: str, json_body: str | None) -> None:
 @click.argument("pack_id")
 @_json_option("Optional duplicate-config JSON.")
 def pack_duplicate(pack_id: str, json_body: str | None) -> None:
-    _post(f"/api/v1/sdk/prompt-packs/{pack_id}/duplicate", _load_json_body(json_body))
+    _post(f"/api/v1/sdk/prompt-packs/{pack_id}/duplicate", load_json_body(json_body))
 
 
 @pack.command("publish")
@@ -321,14 +311,14 @@ def pack_export(pack_id: str) -> None:
 @click.argument("pack_id")
 @_json_option("Rating JSON, e.g. '{\"rating\": 5}'.")
 def pack_rate(pack_id: str, json_body: str | None) -> None:
-    _post(f"/api/v1/sdk/prompt-packs/{pack_id}/ratings", _load_json_body(json_body))
+    _post(f"/api/v1/sdk/prompt-packs/{pack_id}/ratings", load_json_body(json_body))
 
 
 @pack.command("review")
 @click.argument("pack_id")
 @_json_option("Review JSON.")
 def pack_review(pack_id: str, json_body: str | None) -> None:
-    _post(f"/api/v1/sdk/prompt-packs/{pack_id}/reviews", _load_json_body(json_body))
+    _post(f"/api/v1/sdk/prompt-packs/{pack_id}/reviews", load_json_body(json_body))
 
 
 # ---------------------------------------------------------------------------
@@ -355,7 +345,7 @@ def pp_run_create(
 ) -> None:
     """Create a run; target flags set top-level ids (api/prompt_pack_runs_handlers.go
     PromptPackRunRequest). Without a flag the --json body must carry the target."""
-    body = _load_json_body(json_body)
+    body = load_json_body(json_body)
     picked = optional_target(app_id, integration_id, endpoint)
     if picked:
         body = {**body, _TARGET_FIELDS[picked[0]]: picked[1]}
@@ -388,8 +378,11 @@ def pp_run_stats(pack_id: str) -> None:
 
 @pp_run.command("compare")
 @click.argument("pack_id")
-def pp_run_compare(pack_id: str) -> None:
-    _get(f"/api/v1/sdk/prompt-packs/{pack_id}/runs/compare")
+@click.option("--run1", "run1_id", required=True, help="First run id.")
+@click.option("--run2", "run2_id", required=True, help="Second run id.")
+def pp_run_compare(pack_id: str, run1_id: str, run2_id: str) -> None:
+    params = {"run1_id": run1_id, "run2_id": run2_id}
+    _get(f"/api/v1/sdk/prompt-packs/{pack_id}/runs/compare", params)
 
 
 @pp_run.command("outputs")
@@ -426,29 +419,22 @@ def pp_run_validate(run_id: str, json_body: str | None) -> None:
     /api/v1/sdk/prompt-packs/runs/:run_id/validate-outputs. Kept on the pp-run
     group for discoverability alongside outputs / trace / report.
     """
-    _post(f"/api/v1/sdk/prompt-packs/runs/{run_id}/validate-outputs", _load_json_body(json_body))
-
-
-# NOTE: `pp-run reveal` intentionally NOT added — no backend route exists for
-# prompt-pack run reveal. Only /test-plan-runs/*/results/*/reveal is
-# registered (see the `plan-run reveal` command). If prompt-pack outputs also
-# need to be revealed, a new backend endpoint must land first.
+    _post(f"/api/v1/sdk/prompt-packs/runs/{run_id}/validate-outputs", load_json_body(json_body))
 
 
 @pp_run.command("add-to-pack")
 @click.argument("run_id")
 @click.option(
-    "--output-id",
-    "output_ids",
+    "--entry-id",
+    "entry_ids",
     multiple=True,
     required=True,
-    help="Output ID to add. Repeat --output-id for multiple.",
+    help="An output's prompt_pack_entry_id to copy (repeatable).",
 )
 @click.option("--pack-id", required=True, help="Destination prompt pack ID.")
-def pp_run_add_to_pack(run_id: str, output_ids: tuple[str, ...], pack_id: str) -> None:
-    """Attach entries to a pack (api/prompt_pack_entry_handlers.go AddPromptsToPackRequest
-    binds only ``entry_ids``)."""
-    _post(f"/api/v1/sdk/prompt-packs/{pack_id}/prompts/add", {"entry_ids": list(output_ids)})
+def pp_run_add_to_pack(run_id: str, entry_ids: tuple[str, ...], pack_id: str) -> None:
+    """Copy the pack entries behind a run's outputs into another pack (``/prompts/add``)."""
+    _post(f"/api/v1/sdk/prompt-packs/{pack_id}/prompts/add", {"entry_ids": list(entry_ids)})
 
 
 # ---------------------------------------------------------------------------
@@ -465,7 +451,7 @@ def output_validation() -> None:
 @click.argument("run_id")
 @_json_option()
 def ov_create(run_id: str, json_body: str | None) -> None:
-    _post(f"/api/v1/sdk/prompt-packs/runs/{run_id}/validate-outputs", _load_json_body(json_body))
+    _post(f"/api/v1/sdk/prompt-packs/runs/{run_id}/validate-outputs", load_json_body(json_body))
 
 
 @output_validation.command("list-for-pack")
@@ -500,8 +486,11 @@ def ov_results_csv(validation_id: str) -> None:
 
 @output_validation.command("compare")
 @click.argument("pack_id")
-def ov_compare(pack_id: str) -> None:
-    _get(f"/api/v1/sdk/prompt-packs/{pack_id}/validations/compare")
+@click.option("--validation1", "validation1_id", required=True, help="First validation id.")
+@click.option("--validation2", "validation2_id", required=True, help="Second validation id.")
+def ov_compare(pack_id: str, validation1_id: str, validation2_id: str) -> None:
+    params = {"validation1_id": validation1_id, "validation2_id": validation2_id}
+    _get(f"/api/v1/sdk/prompt-packs/{pack_id}/validations/compare", params)
 
 
 @output_validation.command("delete")
@@ -529,7 +518,7 @@ def session() -> None:
 @session.command("create")
 @_json_option()
 def session_create(json_body: str | None) -> None:
-    _post("/api/v1/testing/sessions", _load_json_body(json_body))
+    _post("/api/v1/testing/sessions", load_json_body(json_body))
 
 
 @session.command("list")
@@ -553,7 +542,7 @@ def session_delete(session_id: str) -> None:
 @click.argument("session_id")
 @_json_option()
 def session_create_run(session_id: str, json_body: str | None) -> None:
-    _post(f"/api/v1/testing/sessions/{session_id}/runs", _load_json_body(json_body))
+    _post(f"/api/v1/testing/sessions/{session_id}/runs", load_json_body(json_body))
 
 
 @session.command("list-runs")
@@ -605,12 +594,12 @@ def byov() -> None:
 @byov.command("create")
 @_json_option()
 def byov_create(json_body: str | None) -> None:
-    _post("/api/v1/llm/custom-validators", _load_json_body(json_body))
+    _post("/api/v1/llm/custom-validators", load_json_body(json_body))
 
 
 @byov.command("list")
 def byov_list() -> None:
-    _get("/api/v1/llm/custom-validators")
+    _get("/api/v1/llm/custom-validators", {"project_id": resolve_project_id()})
 
 
 @byov.command("get")
@@ -623,7 +612,7 @@ def byov_get(validator_id: str) -> None:
 @click.argument("validator_id")
 @_json_option()
 def byov_update(validator_id: str, json_body: str | None) -> None:
-    _patch(f"/api/v1/llm/custom-validators/{validator_id}", _load_json_body(json_body))
+    _patch(f"/api/v1/llm/custom-validators/{validator_id}", load_json_body(json_body))
 
 
 @byov.command("delete")
@@ -636,14 +625,14 @@ def byov_delete(validator_id: str) -> None:
 @click.argument("validator_id")
 @_json_option()
 def byov_test(validator_id: str, json_body: str | None) -> None:
-    _post(f"/api/v1/llm/custom-validators/{validator_id}/test", _load_json_body(json_body))
+    _post(f"/api/v1/llm/custom-validators/{validator_id}/test", load_json_body(json_body))
 
 
 @byov.command("probe")
 @_json_option()
 def byov_probe(json_body: str | None) -> None:
     """Test-connection for a BYOV validator without saving."""
-    _post("/api/v1/llm/custom-validators/test-connection", _load_json_body(json_body))
+    _post("/api/v1/llm/custom-validators/test-connection", load_json_body(json_body))
 
 
 # ---------------------------------------------------------------------------
@@ -670,326 +659,40 @@ def vuln_get(vuln_id: str) -> None:
 @vulnerability.command("test")
 @click.argument("vuln_id")
 @_json_option()
-def vuln_test(vuln_id: str, json_body: str | None) -> None:
-    _post(f"/api/v1/vulnerabilities/{vuln_id}/test", _load_json_body(json_body))
-
-
-# ---------------------------------------------------------------------------
-# Test Plans (T3)   /api/v1/test-plans
-# ---------------------------------------------------------------------------
-
-
-@click.group("plan")
-def plan() -> None:
-    """Test plans (T3) — versioned red-team plan templates."""
-
-
-@plan.command("create")
-@_json_option("Plan payload JSON (recipe, inputs, categories...).")
-def plan_create(json_body: str | None) -> None:
-    _post("/api/v1/test-plans", _load_json_body(json_body))
-
-
-@plan.command("list")
-def plan_list() -> None:
-    _get("/api/v1/test-plans")
-
-
-@plan.command("gallery")
-def plan_gallery() -> None:
-    _get("/api/v1/test-plans/gallery")
-
-
-@plan.command("list-deleted")
-def plan_list_deleted() -> None:
-    _get("/api/v1/test-plans/deleted")
-
-
-@plan.command("options")
-@click.argument("ref")
-def plan_options(ref: str) -> None:
-    _get(f"/api/v1/test-plans/options/{ref}")
-
-
-@plan.command("get")
-@click.argument("plan_id")
-def plan_get(plan_id: str) -> None:
-    _get(f"/api/v1/test-plans/{plan_id}")
-
-
-@plan.command("summary")
-@click.argument("plan_id")
-def plan_summary(plan_id: str) -> None:
-    _get(f"/api/v1/test-plans/{plan_id}/summary")
-
-
-@plan.command("update")
-@click.argument("plan_id")
-@_json_option("PATCH body (must include expected_recipe_revision or expected_metadata_revision).")
-def plan_update(plan_id: str, json_body: str | None) -> None:
-    _patch(f"/api/v1/test-plans/{plan_id}", _load_json_body(json_body))
-
-
-@plan.command("delete")
-@click.argument("plan_id")
-def plan_delete(plan_id: str) -> None:
-    _delete(f"/api/v1/test-plans/{plan_id}")
-
-
-@plan.command("restore")
-@click.argument("plan_id")
-def plan_restore(plan_id: str) -> None:
-    _post(f"/api/v1/test-plans/{plan_id}/restore")
-
-
-@plan.command("copy")
-@click.argument("plan_id")
-@_json_option('Optional copy payload (e.g. {"name": "..."}).')
-def plan_copy(plan_id: str, json_body: str | None) -> None:
-    _post(f"/api/v1/test-plans/{plan_id}/copy", _load_json_body(json_body))
-
-
-@plan.command("versions")
-@click.argument("plan_id")
-def plan_versions(plan_id: str) -> None:
-    _get(f"/api/v1/test-plans/{plan_id}/versions")
-
-
-@plan.command("create-version")
-@click.argument("plan_id")
-@_json_option("New version payload (recipe + optional copy_inputs_from_version).")
-def plan_create_version(plan_id: str, json_body: str | None) -> None:
-    _post(f"/api/v1/test-plans/{plan_id}/versions", _load_json_body(json_body))
-
-
-@plan.command("publish")
-@click.argument("plan_id")
-@_json_option("Publish payload with sharing_scope + expected_sharing_scope.")
-def plan_publish(plan_id: str, json_body: str | None) -> None:
-    _post(f"/api/v1/test-plans/{plan_id}/publish", _load_json_body(json_body))
-
-
-@plan.command("generate-inputs")
-@_json_option("Payload with app_description + subcategories + organization_id.")
-def plan_generate_inputs(json_body: str | None) -> None:
-    _post("/api/v1/test-plans/generate-inputs", _load_json_body(json_body))
-
-
-@plan.command("generate-inputs-status")
-@click.argument("job_id")
-def plan_generate_inputs_status(job_id: str) -> None:
-    _get(f"/api/v1/test-plans/generate-inputs/{job_id}")
-
-
-# ---------------------------------------------------------------------------
-# Test Plan Runs (T6)   /api/v1/test-plan-runs
-# ---------------------------------------------------------------------------
-
-
-@click.group("plan-run")
-def plan_run() -> None:
-    """Test plan runs (T6) — execute a plan, poll status, fetch reports."""
-
-
-@plan_run.command("create")
-@click.argument("plan_id")
-@_json_option("Run payload (target + optional version_id).")
 @target_options(legacy=False)
-@click.option("--wait", is_flag=True, help="Poll until the run reaches a terminal status.")
 @click.option(
-    "--interval",
-    type=float,
-    default=5.0,
-    show_default=True,
-    help="Polling interval in seconds when --wait is set.",
+    "--organization-id",
+    envvar="DISSEQT_ORGANIZATION_ID",
+    help="Organization id (query param); defaults to the key's organization.",
 )
-@click.option(
-    "--max-wait",
-    type=float,
-    default=900.0,
-    show_default=True,
-    help="Give up (exit 1) after this many seconds when --wait is set.",
-)
-def plan_run_create(
-    plan_id: str,
+def vuln_test(
+    vuln_id: str,
     json_body: str | None,
     app_id: str | None,
     integration_id: str | None,
     endpoint: str | None,
-    wait: bool,
-    interval: float,
-    max_wait: float,
+    organization_id: str | None,
 ) -> None:
-    """Target flags build ``target`` (api/test_plan_runs_create_types.go)."""
-    body = _load_json_body(json_body)
+    """Test a vulnerability against an app (--app) or app integration (--integration)."""
+    body = load_json_body(json_body)
     picked = optional_target(app_id, integration_id, endpoint)
+    if picked and picked[0] == "endpoint":
+        raise click.UsageError("vulnerability test supports --app or --integration only")
     if picked:
-        kind, value = picked
-        body = {
-            **body,
-            "target": plan_run_target(
-                value if kind == "app" else None,
-                value if kind == "integration" else None,
-                value if kind == "endpoint" else None,
-            ),
-        }
-    resp = _http.request("POST", f"/api/v1/test-plans/{plan_id}/runs", json_body=body)
-    if not wait:
-        echo_json(resp)
-        return
-    run_id = (resp.get("run_id") or resp.get("id")) if isinstance(resp, dict) else None
-    if not isinstance(run_id, str) or not run_id:
-        _fail("--wait requires a run_id in the create response")
-    # ponytail: naive poll loop, no jitter/backoff; upgrade if runs commonly outlive 30-60 min.
+        body = {**body, _TARGET_FIELDS[picked[0]]: picked[1]}
+    params = scope_params(organization_id)
     echo_json(
-        _http.wait_terminal(
-            f"/api/v1/test-plan-runs/{run_id}",
-            interval,
-            max_wait,
-            on_abort=lambda: _http.request("POST", f"/api/v1/test-plan-runs/{run_id}/cancel"),
-            hint=f"Inspect with: disseqt plan-run get {run_id}",
-            status_of=_plan_run_status,
+        _http.request(
+            "POST", f"/api/v1/vulnerabilities/{vuln_id}/test", json_body=body, params=params
         )
     )
 
 
-def _plan_run_status(latest: Any) -> str:
-    """Run status lives at ``status`` or ``header.status``."""
-    if not isinstance(latest, dict):
-        return ""
-    header = latest.get("header")
-    return str(latest.get("status") or (header or {}).get("status") or "")
-
-
-@plan_run.command("list")
-@click.argument("plan_id")
-def plan_run_list(plan_id: str) -> None:
-    _get(f"/api/v1/test-plans/{plan_id}/runs")
-
-
-@plan_run.command("list-deleted")
-def plan_run_list_deleted() -> None:
-    _get("/api/v1/test-plan-runs/deleted")
-
-
-@plan_run.command("get")
-@click.argument("run_id")
-def plan_run_get(run_id: str) -> None:
-    _get(f"/api/v1/test-plan-runs/{run_id}")
-
-
-@plan_run.command("stage")
-@click.argument("run_id")
-@click.argument("stage_key")
-def plan_run_stage(run_id: str, stage_key: str) -> None:
-    _get(f"/api/v1/test-plan-runs/{run_id}/stages/{stage_key}")
-
-
-@plan_run.command("trace")
-@click.argument("run_id")
-@click.option("--prompt-ref", required=True, help="Prompt reference UUID.")
-def plan_run_trace(run_id: str, prompt_ref: str) -> None:
-    _get(f"/api/v1/test-plan-runs/{run_id}/trace", params={"prompt_ref": prompt_ref})
-
-
-@plan_run.command("report")
-@click.argument("run_id")
-@click.option("--stage-key", help="Stage key (required by backend for the results page).")
-def plan_run_report(run_id: str, stage_key: str | None) -> None:
-    params = {"stage_key": stage_key} if stage_key else None
-    _get(f"/api/v1/test-plan-runs/{run_id}/report", params=params)
-
-
-@plan_run.command("prompts")
-@click.argument("run_id")
-def plan_run_prompts(run_id: str) -> None:
-    _get(f"/api/v1/test-plan-runs/{run_id}/prompts")
-
-
-@plan_run.command("cancel")
-@click.argument("run_id")
-def plan_run_cancel(run_id: str) -> None:
-    _post(f"/api/v1/test-plan-runs/{run_id}/cancel")
-
-
-@plan_run.command("delete")
-@click.argument("run_id")
-def plan_run_delete(run_id: str) -> None:
-    _delete(f"/api/v1/test-plan-runs/{run_id}")
-
-
-@plan_run.command("restore")
-@click.argument("run_id")
-def plan_run_restore(run_id: str) -> None:
-    _post(f"/api/v1/test-plan-runs/{run_id}/restore")
-
-
-@plan_run.command("reveal")
-@click.argument("run_id")
-@click.argument("result_id")
-def plan_run_reveal(run_id: str, result_id: str) -> None:
-    _post(f"/api/v1/test-plan-runs/{run_id}/results/{result_id}/reveal")
-
-
-# ---------------------------------------------------------------------------
-# AI Systems (applications): list via policy-management, link via dataset
-# ---------------------------------------------------------------------------
-
-
-@click.group("app")
-def app() -> None:
-    """AI Systems: list them and link one to an app integration."""
-
-
-@app.command("list")
-def app_list() -> None:
-    """GET /api/v1/applications on policy-management (DISSEQT_POLICIES_BASE_URL)."""
-    echo_json(_http.request("GET", "/api/v1/applications", base=_http.policies_base_url()))
-
-
-@app.command("link")
-@click.argument("application_id")
-@click.option("--integration", "integration_id", required=True, help="App integration id.")
-@click.option(
-    "--role",
-    type=click.Choice(["primary", "fallback", "candidate", "staging"]),
-    help="Link role (server default: primary).",
-)
-def app_link(application_id: str, integration_id: str, role: str | None) -> None:
-    """Link an AI System to an app integration (api/application_links.go)."""
-    body = {
-        "application_id": application_id,
-        "integration_type": "app_integration",
-        "integration_id": integration_id,
-    }
-    _post("/api/v1/llm/application-links", {**body, **({"role": role} if role else {})})
-
-
-@app.command("unlink")
-@click.argument("application_id")
-def app_unlink(application_id: str) -> None:
-    """Delete every link of the AI System (any integration kind); exit 1 if none."""
-    links = _http.request(
-        "GET", "/api/v1/llm/application-links", params={"application_id": application_id}
-    )
-    ids = [row["id"] for bucket in _LINK_BUCKETS for row in (links or {}).get(bucket) or []]
-    if not ids:
-        raise click.ClickException(f"AI System {application_id} has no linked integration")
-    for link_id in ids:
-        _delete(f"/api/v1/llm/application-links/{link_id}")
-
-
-_LINK_BUCKETS = ("app_integrations", "llm_integrations", "rag_integrations", "mcp_integrations")
-
-
 __all__ = [
-    "app",
     "byov",
     "mcp_target",
     "output_validation",
     "pack",
-    "plan",
-    "plan_run",
     "pp_run",
     "rag_target",
     "session",

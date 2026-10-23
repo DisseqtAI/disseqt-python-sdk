@@ -172,10 +172,8 @@ class Client:
        passed to :meth:`validate`. Hits
        ``/api/v1/sdk/validators/composite-score``. No policy involved.
 
-    The prior *policies=[...]* shape (server-side realtime-policy
-    evaluation) is not exposed in this release — the runtime evaluate
-    endpoint it targeted is not currently served by any in-scope backend.
-    Class-based validators are unaffected.
+    ``policies=[...]`` (server-side realtime-policy evaluation) is a deprecated
+    shim that emits :class:`DeprecationWarning`.
     """
 
     def __init__(
@@ -231,15 +229,11 @@ class Client:
             realtime_policy_base_url or "https://api.disseqt.ai/realtime-validations"
         )
         self.policies = default_policies
-        # Validators live on their own gateway; the stored base_url is the dataset one.
         self.base_url = base_url or "https://api.disseqt.ai/realtime-validations"
         self.timeout = timeout
         self.application_name = application_name
 
-        # Factory namespaces mirror the Node SDK's ``client.input.*`` /
-        # ``client.rag.*`` / etc. ergonomics. Each method builds and returns
-        # the appropriate validator instance; the caller then passes it to
-        # ``validate()`` — additive over the class-based API.
+        # Node-style factories: ``client.input.toxicity(...)`` returns a validator for validate().
         self.input = _InputValidatorFactory()
         self.output = _OutputValidatorFactory()
         self.rag = _RagFactory()
@@ -310,7 +304,7 @@ class Client:
         ),
         policies: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Alias for :meth:`validate` retained for API stability."""
+        """Alias for :meth:`validate` (Node ``validateSync`` parity)."""
         return self.validate(request, policies=policies)
 
     def _validate_with_policies(

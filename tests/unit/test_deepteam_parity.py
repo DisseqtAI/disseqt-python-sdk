@@ -311,6 +311,43 @@ class TestCliRedteamExpansion:
         assert plan["execution"]["max_total_prompts"] == 7
         assert set(run.last_request.json()) == {"run_name", "trigger_metadata"}
 
+    @pytest.mark.parametrize(
+        "yaml_text, needle",
+        [
+            ("target: {application_id: '${UNSET_APP_ID}'}\n", "UNSET_APP_ID"),
+            ("target: {application_id: a, endpoint_url: 'http://x'}\n", "exactly one"),
+            ("target: {}\n", "exactly one"),
+        ],
+    )
+    def test_redteam_run_rejects_bad_config(self, monkeypatch, tmp_path, yaml_text, needle):
+        pytest.importorskip("yaml")
+        self._env(monkeypatch)
+        monkeypatch.delenv("UNSET_APP_ID", raising=False)
+        cfg = tmp_path / "rt.yaml"
+        cfg.write_text(yaml_text + "prompt_packs: [p]\ntechniques: [t]\nvalidators: [v]\n")
+        r = CliRunner().invoke(cli, ["redteam", "run", str(cfg)])
+        assert r.exit_code == 2, r.output
+        assert needle in r.output
+
+    def test_redteam_run_quoted_false_is_false(self, monkeypatch, requests_mock, tmp_path):
+        pytest.importorskip("yaml")
+        self._env(monkeypatch)
+        sess = requests_mock.post(
+            f"{self.RT_BASE}/api/v1/testing/sessions",
+            json={"status": "success", "data": {"id": "s"}},
+        )
+        requests_mock.post(
+            f"{self.RT_BASE}/api/v1/testing/sessions/s/runs",
+            json={"status": "success", "data": {"id": "r"}},
+        )
+        cfg = tmp_path / "rt.yaml"
+        cfg.write_text("target: {application_id: a}\nstop_on_first_breach: 'false'\n")
+        r = CliRunner().invoke(cli, ["redteam", "run", str(cfg)])
+        assert r.exit_code == 0, r.output
+        assert (
+            sess.last_request.json()["testing_plan"]["execution"]["stop_on_first_breach"] is False
+        )
+
     def test_attack_single_turn_end_to_end(self, monkeypatch, requests_mock):
         self._env(monkeypatch)
         monkeypatch.setattr("disseqt_sdk.cli.redteam.time.sleep", lambda _s: None)
@@ -440,15 +477,20 @@ class TestCliRedteamExpansion:
         assert m.last_request.json() == {"app_integration_id": "int-1"}
         assert m.last_request.qs == {"project_id": ["proj"], "organization_id": ["org-1"]}
 
-    def test_vuln_test_omits_org_when_unset(self, monkeypatch, requests_mock):
+    def test_vuln_test_resolves_org_from_whoami(self, monkeypatch, requests_mock):
+        # vulnerabilityTestOrgProjectGate requires both query ids.
         self._env(monkeypatch)
         monkeypatch.delenv("DISSEQT_ORGANIZATION_ID", raising=False)
+        requests_mock.get(
+            f"{self.RT_BASE}/api/v1/whoami",
+            json={"status": "success", "data": {"project_id": "p2", "organization_id": "org-2"}},
+        )
         m = requests_mock.post(f"{self.RT_BASE}/api/v1/vulnerabilities/v1/test/poll", json={})
         r = CliRunner().invoke(
             cli, ["redteam", "vuln-test", "--vulnerability", "v1", "--target", "int-1"]
         )
         assert r.exit_code == 0, r.output
-        assert m.last_request.qs == {"project_id": ["proj"]}
+        assert m.last_request.qs == {"project_id": ["proj"], "organization_id": ["org-2"]}
 
     def test_redteam_report_json(self, monkeypatch, requests_mock):
         self._env(monkeypatch)

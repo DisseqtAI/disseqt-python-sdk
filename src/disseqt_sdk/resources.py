@@ -304,22 +304,15 @@ class RunsResource(_Base):
     def report(self, run_id: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         return self._req("GET", f"{self._BASE}/runs/{run_id}/report", params=params)
 
-    # NOTE: reveal_output removed — no backend route exists for prompt-pack
-    # runs. The only reveal endpoint is on test-plan runs
-    # (test_plan_runs_routes.go:80), already exposed via
-    # TestPlanRunsResource.reveal(). If prompt-pack run outputs also need a
-    # reveal path, a new backend endpoint must land first.
-
     def add_to_pack(
         self,
         run_id: str,
-        output_ids: builtins.list[str],
+        entry_ids: builtins.list[str],
         pack_id: str,
     ) -> dict[str, Any]:
-        """Attach entries to a pack: ``/prompts/add`` binds only ``entry_ids``
-        (api/prompt_pack_entry_handlers.go AddPromptsToPackRequest); ``run_id`` is unused."""
+        """Copy entries (outputs' ``prompt_pack_entry_id``) into ``pack_id``; ``run_id`` is unused."""
         return self._req(
-            "POST", f"{self._BASE}/{pack_id}/prompts/add", json_payload={"entry_ids": output_ids}
+            "POST", f"{self._BASE}/{pack_id}/prompts/add", json_payload={"entry_ids": entry_ids}
         )
 
 
@@ -462,53 +455,6 @@ class SessionsResource(_Base):
         return self._req("POST", f"{self._BASE}/runs/{run_id}/cancel")
 
 
-class JailbreakResource(_Base):
-    """Jailbreak technique + prompt CRUD and generated-prompt controls.
-
-    Routes registered under ``/api/v1/jailbreak/*`` — see
-    ``dataset-backend api/jailbreak_routes.go`` on stage.
-    """
-
-    _BASE = "/api/v1/jailbreak"
-
-    # Techniques
-    def create_technique(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._req("POST", f"{self._BASE}/techniques", json_payload=payload)
-
-    def get_technique(self, technique_id: str) -> dict[str, Any]:
-        return self._req("GET", f"{self._BASE}/techniques/{technique_id}")
-
-    def list_techniques(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        return self._req("GET", f"{self._BASE}/techniques", params=params)
-
-    def update_technique(self, technique_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._req("PATCH", f"{self._BASE}/techniques/{technique_id}", json_payload=payload)
-
-    def delete_technique(self, technique_id: str) -> dict[str, Any]:
-        return self._req("DELETE", f"{self._BASE}/techniques/{technique_id}")
-
-    # Prompts
-    def create_prompt(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._req("POST", f"{self._BASE}/prompts", json_payload=payload)
-
-    def get_prompt(self, prompt_id: str) -> dict[str, Any]:
-        return self._req("GET", f"{self._BASE}/prompts/{prompt_id}")
-
-    def list_prompts(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        return self._req("GET", f"{self._BASE}/prompts", params=params)
-
-    def update_prompt(self, prompt_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._req("PATCH", f"{self._BASE}/prompts/{prompt_id}", json_payload=payload)
-
-    def delete_prompt(self, prompt_id: str) -> dict[str, Any]:
-        return self._req("DELETE", f"{self._BASE}/prompts/{prompt_id}")
-
-    # Generated prompts
-    def mark_generated_prompt_successful(self, generated_prompt_id: str) -> dict[str, Any]:
-        """PATCH /generated-prompts/:id/success — mark a generated prompt successful."""
-        return self._req("PATCH", f"{self._BASE}/generated-prompts/{generated_prompt_id}/success")
-
-
 class ByovValidatorsResource(_Base):
     """Bring-your-own-validator custom validators."""
 
@@ -518,7 +464,10 @@ class ByovValidatorsResource(_Base):
         return self._req("POST", self._BASE, json_payload=payload)
 
     def list(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        return self._req("GET", self._BASE, params=params)
+        """``project_id`` (required query) defaults to the client's project."""
+        return self._req(
+            "GET", self._BASE, params={"project_id": self._client.project_id, **(params or {})}
+        )
 
     def get(self, validator_id: str) -> dict[str, Any]:
         return self._req("GET", f"{self._BASE}/{validator_id}")
@@ -555,11 +504,20 @@ class VulnerabilitiesResource(_Base):
         *,
         application_id: str | None = None,
         app_integration_id: str | None = None,
+        project_id: str | None = None,
+        organization_id: str | None = None,
     ) -> dict[str, Any]:
-        """api/vulnerability_types.go VulnerabilityTestRequest; app integrations only."""
+        """api/vulnerability_types.go VulnerabilityTestRequest; app integrations only.
+        project/organization ids default to the client's, then ``whoami()``."""
         target = _one_target(application_id=application_id, app_integration_id=app_integration_id)
         body = _with_fields(payload, **dict([target])) if target else dict(payload or {})
-        return self._req("POST", f"{self._BASE}/{vuln_id}/test", json_payload=body)
+        project_id = project_id or self._client.project_id
+        if not (project_id and organization_id):
+            who = self._client.whoami()
+            project_id = project_id or who.get("project_id")
+            organization_id = organization_id or who.get("organization_id")
+        params = {"project_id": project_id, "organization_id": organization_id}
+        return self._req("POST", f"{self._BASE}/{vuln_id}/test", json_payload=body, params=params)
 
 
 def plan_run_target(
@@ -697,124 +655,6 @@ class TestPlanRunsResource(_Base):
         return self._req("POST", f"{self._BASE}/{run_id}/results/{result_id}/reveal")
 
 
-class MrResource(_Base):
-    """Multi-round (MR) jailbreak techniques, agents, jobs, and strategies.
-
-    Mirrors Node's ``RedteamClient`` MR surface. All routes live under
-    ``/api/v1/mr-jailbreak/*`` on the redteam service. Existing usages —
-    the CLI (:mod:`disseqt_sdk.cli.redteam`) and the parity test suite —
-    already exercise the ``techniques``, ``agents``, ``jobs/:id``,
-    ``jobs/:id/interactions``, and ``batch-automate`` paths; the CRUD +
-    strategy verbs added here mirror the Node SDK method set.
-    """
-
-    _BASE = "/api/v1/mr-jailbreak"
-
-    # ---- Techniques -----------------------------------------------------
-    def create_technique(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._req("POST", f"{self._BASE}/techniques", json_payload=payload)
-
-    def list_techniques(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        return self._req("GET", f"{self._BASE}/techniques", params=params)
-
-    def get_technique(self, technique_id: str) -> dict[str, Any]:
-        return self._req("GET", f"{self._BASE}/techniques/{technique_id}")
-
-    def update_technique(self, technique_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._req("PATCH", f"{self._BASE}/techniques/{technique_id}", json_payload=payload)
-
-    def delete_technique(self, technique_id: str) -> dict[str, Any]:
-        return self._req("DELETE", f"{self._BASE}/techniques/{technique_id}")
-
-    def register_technique(self, framework: str, payload: dict[str, Any]) -> dict[str, Any]:
-        """Register a technique implementation under a framework.
-
-        ``framework`` ∈ {race, goat, crescendo, badlikertjudge, asja, agent}.
-        """
-        return self._req(
-            "POST",
-            f"{self._BASE}/techniques/{framework}/register",
-            json_payload=payload,
-        )
-
-    # ---- Agents ---------------------------------------------------------
-    def create_agent(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._req("POST", f"{self._BASE}/agents", json_payload=payload)
-
-    def list_agents(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        return self._req("GET", f"{self._BASE}/agents", params=params)
-
-    def get_agent(self, agent_id: str) -> dict[str, Any]:
-        return self._req("GET", f"{self._BASE}/agents/{agent_id}")
-
-    def update_agent(self, agent_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._req("PATCH", f"{self._BASE}/agents/{agent_id}", json_payload=payload)
-
-    def delete_agent(self, agent_id: str) -> dict[str, Any]:
-        return self._req("DELETE", f"{self._BASE}/agents/{agent_id}")
-
-    # ---- Jobs -----------------------------------------------------------
-    def create_job(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._req("POST", f"{self._BASE}/jobs", json_payload=payload)
-
-    def list_jobs(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        return self._req("GET", f"{self._BASE}/jobs", params=params)
-
-    def get_job(self, job_id: str) -> dict[str, Any]:
-        return self._req("GET", f"{self._BASE}/jobs/{job_id}")
-
-    def update_job_status(self, job_id: str, status: str) -> dict[str, Any]:
-        return self._req(
-            "PATCH", f"{self._BASE}/jobs/{job_id}/status", json_payload={"status": status}
-        )
-
-    def get_job_interactions(
-        self, job_id: str, params: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        return self._req("GET", f"{self._BASE}/jobs/{job_id}/interactions", params=params)
-
-    def get_job_available_states(self, job_id: str) -> dict[str, Any]:
-        return self._req("GET", f"{self._BASE}/jobs/{job_id}/available-states")
-
-    # ---- Interactions + batch ------------------------------------------
-    def analyze_interaction(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._req("POST", f"{self._BASE}/interactions/analyze", json_payload=payload)
-
-    def generate_next_interaction(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._req("POST", f"{self._BASE}/interactions/generate-next", json_payload=payload)
-
-    def batch_automate(
-        self,
-        payload: dict[str, Any],
-        *,
-        application_id: str | None = None,
-        app_integration_id: str | None = None,
-    ) -> dict[str, Any]:
-        """api/mr_jailbreak_batch_automation.go: ``app_integration_id`` is top-level,
-        the AI System is ``jailbreak_config.application_id``; either replaces the template."""
-        target = _one_target(application_id=application_id, app_integration_id=app_integration_id)
-        body = dict(payload)
-        if target and target[0] == "application_id":
-            body["jailbreak_config"] = _with_fields(
-                body.get("jailbreak_config"), application_id=target[1]
-            )
-        elif target:
-            body["app_integration_id"] = target[1]
-        return self._req("POST", f"{self._BASE}/batch-automate", json_payload=body)
-
-    # ---- Strategies -----------------------------------------------------
-    def strategy_successful_paths(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        return self._req("GET", f"{self._BASE}/strategies/successful-paths", params=params)
-
-    def strategy_agents_in_phase(self, phase: str) -> dict[str, Any]:
-        return self._req("GET", f"{self._BASE}/strategies/phase/agents", params={"phase": phase})
-
-    def strategy_techniques_in_phase(self, phase: str) -> dict[str, Any]:
-        return self._req(
-            "GET", f"{self._BASE}/strategies/phase/techniques", params={"phase": phase}
-        )
-
-
 class ApplicationsResource(_Base):
     """AI Systems: list via policy-management, link/unlink via dataset-backend."""
 
@@ -862,6 +702,9 @@ class ApplicationsResource(_Base):
             self._req("DELETE", f"{self._LINKS}/{link_id}")
         return ids
 
+
+# Re-exported; defined there to keep this module small.
+from .jailbreak_resources import JailbreakResource, MrResource  # noqa: E402
 
 __all__ = [
     "ApplicationsResource",

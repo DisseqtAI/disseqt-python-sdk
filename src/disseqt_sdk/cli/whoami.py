@@ -39,6 +39,18 @@ def resolve_project_id() -> str:
     return str(project_id)
 
 
+def scope_params(organization_id: str | None) -> dict[str, str]:
+    """``{project_id, organization_id}`` query params; gaps are filled from the gateway."""
+    project_id, _ = require_credentials()
+    if not (project_id and organization_id):
+        server = server_identity()
+        project_id = project_id or server.get("project_id")
+        organization_id = organization_id or server.get("organization_id")
+    if not (project_id and organization_id):
+        raise click.ClickException("could not resolve project_id and organization_id from the key")
+    return {"project_id": str(project_id), "organization_id": str(organization_id)}
+
+
 def _collect() -> dict[str, Any]:
     project_id, api_key, source = load_credentials()
     require_credentials()

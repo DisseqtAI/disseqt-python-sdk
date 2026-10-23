@@ -285,6 +285,7 @@ class TestByovValidatorsResource:
     def test_list(self, requests_mock, client: DisseqtAPIClient) -> None:
         requests_mock.get(self.PATH, json={"data": []})
         assert client.byov_validators.list() == {"data": []}
+        assert requests_mock.last_request.qs == {"project_id": [client.project_id.lower()]}
 
     def test_get(self, requests_mock, client: DisseqtAPIClient) -> None:
         requests_mock.get(f"{self.PATH}/b1", json={"id": "b1"})
@@ -312,7 +313,9 @@ class TestVulnerabilitiesResource:
 
     def test_test(self, requests_mock, client: DisseqtAPIClient) -> None:
         requests_mock.post(f"{self.PATH}/v1/test", json={"job_id": "j1"})
-        assert client.vulnerabilities.test("v1", {"target": "t1"}) == {"job_id": "j1"}
+        assert client.vulnerabilities.test("v1", {"target": "t1"}, organization_id="o1") == {
+            "job_id": "j1"
+        }
 
 
 class TestTestPlansResource:
@@ -673,9 +676,9 @@ class TestMrResourceStrategies:
         requests_mock.get(f"{self.BASE}/phase/agents", json=[{"name": "a1"}])
         assert client.mr.strategy_agents_in_phase("exploit") == {"data": [{"name": "a1"}]}
         # Confirm phase went as a query param.
-        assert requests_mock.last_request.qs.get("phase") == ["exploit"]
+        assert requests_mock.last_request.qs.get("phase_name") == ["exploit"]
 
     def test_techniques_in_phase(self, requests_mock, client: DisseqtAPIClient) -> None:
         requests_mock.get(f"{self.BASE}/phase/techniques", json=[{"id": "t1"}])
         assert client.mr.strategy_techniques_in_phase("recon") == {"data": [{"id": "t1"}]}
-        assert requests_mock.last_request.qs.get("phase") == ["recon"]
+        assert requests_mock.last_request.qs.get("phase_name") == ["recon"]

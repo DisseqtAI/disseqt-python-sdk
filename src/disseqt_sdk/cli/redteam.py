@@ -10,10 +10,9 @@ disseqt-dataset-backend-service (``api/testing_types.go``,
 
 from __future__ import annotations
 
-import csv
-import io
 import json
 import os
+import re
 import sys
 import time
 from collections.abc import Callable
@@ -23,12 +22,11 @@ import click
 
 from ..models.redteam import has_more_pages
 from . import _http
-from ._common import echo_json, pick_target, target_options
-from .whoami import resolve_project_id
+from ._common import echo_json, load_json_body, pick_target, target_options
+from .whoami import resolve_project_id, scope_params
 
-# api/jailbreak_agents_handlers.go ListJailbreakAgentsRequest: page_id (min 1) and
-# kebab-case page-size (5..100) are required. ponytail: first page of 100 only;
-# add --page when a project has more agents than that.
+# ListJailbreakAgentsRequest requires page_id + kebab-case page-size (5..100).
+# ponytail: first 100 agents only; add --page when a project has more.
 _AGENTS_PAGE = {"page_id": 1, "page-size": 100}
 
 
@@ -183,7 +181,7 @@ def list_attacks(kind: str, page: int, page_size: int, fetch_all: bool) -> None:
         out["multi_turn"] = _pages(
             "/api/v1/mr-jailbreak/techniques",
             page,
-            page_size,
+            max(page_size, 5),
             fetch_all,
             page_key="page_id",
             list_key="techniques",
@@ -205,6 +203,8 @@ _SINGLE_TURN_KEYS = {
     "integration": "app_integration_id",
     "endpoint": "endpoint_url",
 }
+_TARGET_KEYS = tuple(_SINGLE_TURN_KEYS.values())
+_NIL_UUID = "00000000-0000-0000-0000-000000000000"
 
 
 def _is_template(value: str) -> bool:
@@ -311,7 +311,7 @@ def _multi_turn(
             "multi-turn --endpoint takes an app-integration template (JSON or @file); "
             "use --integration for a saved target"
         )
-    template = _load_json_body(value) if kind in ("endpoint", "template") else None
+    template = load_json_body(value) if kind in ("endpoint", "template") else None
     if template is not None:
         missing = [
             k for k in ("name", "base_url", "integration_type", "send_step") if k not in template
@@ -347,7 +347,12 @@ def _multi_turn(
 def _poll_jobs(batch: Any, poll_interval: float, max_wait: float) -> None:
     """Poll each MR job; no MR cancel route, so Ctrl-C/timeout only prints a hint."""
     results = (batch or {}).get("results") if isinstance(batch, dict) else None
-    job_ids = [str(r["job_id"]) for r in results or [] if isinstance(r, dict) and r.get("job_id")]
+    # Failed rows carry the nil UUID (TargetPromptResult.JobID is not a pointer).
+    job_ids = [
+        str(r["job_id"])
+        for r in results or []
+        if isinstance(r, dict) and r.get("job_id") and r["job_id"] != _NIL_UUID
+    ]
     jobs = [
         _http.wait_terminal(
             f"/api/v1/mr-jailbreak/jobs/{job_id}",
@@ -384,7 +389,7 @@ def session_get(session_id: str) -> None:
 @click.option(
     "--organization-id",
     envvar="DISSEQT_ORGANIZATION_ID",
-    help="Organization id (query param); omitted when unset.",
+    help="Organization id (query param); defaults to the key's organization.",
 )
 def vuln_test(
     vuln_id: str,
@@ -405,9 +410,7 @@ def vuln_test(
             "vuln-test supports app integrations only: use --app or --integration"
         )
     body = {"application_id" if kind == "app" else "app_integration_id": value}
-    params = {"project_id": resolve_project_id()}
-    if organization_id:
-        params["organization_id"] = organization_id
+    params = scope_params(organization_id)
     echo_json(
         _http.request(
             "POST", f"/api/v1/vulnerabilities/{vuln_id}/test/poll", json_body=body, params=params
@@ -442,10 +445,16 @@ def _load_yaml(path: str) -> dict[str, Any]:
     return loaded
 
 
+_ENV_REF = re.compile(r"\$\{(\w+)\}")
+
+
 def _expand_env(value: Any) -> Any:
-    """Recursively expand ``${VAR}`` placeholders using ``os.environ``."""
+    """Recursively expand ``${VAR}`` from ``os.environ``; an unset VAR is a usage error."""
     if isinstance(value, str):
-        return os.path.expandvars(value)
+        missing = [v for v in _ENV_REF.findall(value) if v not in os.environ]
+        if missing:
+            raise click.UsageError(f"config references unset env var(s): {', '.join(missing)}")
+        return _ENV_REF.sub(lambda m: os.environ[m.group(1)], value)
     if isinstance(value, list):
         return [_expand_env(v) for v in value]
     if isinstance(value, dict):
@@ -487,15 +496,14 @@ def run(config_path: str | None, as_json: bool) -> None:
         list(cfg.get("prompt_packs") or []),
         list(cfg.get("techniques") or []),
         list(cfg.get("validators") or []),
-        stop_on_first_breach=bool(cfg.get("stop_on_first_breach", False)),
+        stop_on_first_breach=cfg.get("stop_on_first_breach") is True,
         max_total_prompts=int(cfg.get("max_total_prompts") or 0),
     )
+    target = cfg.get("target") or {}
+    if not isinstance(target, dict) or sum(bool(target.get(k)) for k in _TARGET_KEYS) != 1:
+        raise click.UsageError(f"target: needs exactly one of {', '.join(_TARGET_KEYS)}")
     session_body = _session_body(
-        name,
-        str(app.get("name") or name),
-        str(app.get("type") or "web"),
-        cfg.get("target") or {},
-        plan,
+        name, str(app.get("name") or name), str(app.get("type") or "web"), target, plan
     )
     session, launched = _create_session_and_run(session_body, str(cfg.get("run_name") or name))
     if as_json:
@@ -623,28 +631,6 @@ def _rows(payload: Any) -> list[Any]:
     return rows if isinstance(rows, list) else []
 
 
-def _results_to_csv(payload: Any) -> str:
-    """Flatten a results payload into CSV. Best-effort — dicts/list only."""
-    rows = _rows(payload)
-    if not isinstance(rows, list) or not rows:
-        return ""
-    fieldnames: list[str] = []
-    seen: set[str] = set()
-    for row in rows:
-        if isinstance(row, dict):
-            for k in row.keys():
-                if k not in seen:
-                    seen.add(k)
-                    fieldnames.append(k)
-    buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
-    writer.writeheader()
-    for row in rows:
-        if isinstance(row, dict):
-            writer.writerow({k: _stringify(v) for k, v in row.items()})
-    return buf.getvalue()
-
-
 def _results_to_markdown(payload: Any) -> str:
     rows = _rows(payload)
     if not isinstance(rows, list) or not rows:
@@ -697,306 +683,3 @@ def report(run_id: str | None, session_id: str | None, fmt: str) -> None:
         echo_json(payload)
     else:  # markdown
         click.echo(_results_to_markdown(payload))
-
-
-# ---------------------------------------------------------------------------
-# analytics / recommend / parse-curl / test-connection
-# ---------------------------------------------------------------------------
-
-_JAILBREAK_BASE = "/api/v1/jailbreak"
-_BOT_BASE = "/api/v1/testing/bot"
-
-
-def _render_kv_table(title: str, payload: Any) -> None:
-    """Best-effort rich table for a dict payload; fall back to JSON."""
-    try:
-        from rich.console import Console
-        from rich.table import Table
-    except ImportError:  # pragma: no cover — rich is a first-party dep
-        click.secho(title, fg="cyan", bold=True)
-        echo_json(payload)
-        return
-    if not isinstance(payload, dict):
-        # Non-dict (list/scalar) — render as JSON under the title.
-        click.secho(title, fg="cyan", bold=True)
-        echo_json(payload)
-        return
-    table = Table(title=title, show_header=True, header_style="bold cyan")
-    table.add_column("field")
-    table.add_column("value")
-    for key, value in payload.items():
-        table.add_row(str(key), _stringify(value))
-    Console().print(table)
-
-
-@redteam.command("analytics")
-@click.option("--summary", "summary_only", is_flag=True, help="Only fetch the summary endpoint.")
-@click.option(
-    "--prompts-stats", "prompts_only", is_flag=True, help="Only fetch the prompts-stats endpoint."
-)
-@click.option(
-    "--format", "fmt", type=click.Choice(["table", "json"]), default="table", help="Output format."
-)
-def analytics(summary_only: bool, prompts_only: bool, fmt: str) -> None:
-    """Show jailbreak analytics (summary + prompts-stats)."""
-    if summary_only and prompts_only:
-        raise click.UsageError("pass at most one of --summary or --prompts-stats")
-
-    want_summary = summary_only or not prompts_only
-    want_prompts = prompts_only or not summary_only
-
-    out: dict[str, Any] = {}
-    if want_summary:
-        out["summary"] = _http.request("GET", f"{_JAILBREAK_BASE}/analytics/summary")
-    if want_prompts:
-        # Backend registers /prompts-stats (not /analytics/prompts-stats) at
-        # jailbreak_routes.go:57. /analytics/ only prefixes /analytics/summary.
-        out["prompts_stats"] = _http.request("GET", f"{_JAILBREAK_BASE}/prompts-stats")
-
-    if fmt == "json":
-        # Unwrap single-key output when only one endpoint was requested.
-        echo_json(next(iter(out.values())) if len(out) == 1 else out)
-        return
-    for title, payload in out.items():
-        _render_kv_table(title.replace("_", " ").title(), payload)
-
-
-_RECOMMEND_PATHS = {
-    "packs": f"{_BOT_BASE}/recommend-packs",
-    "attacks": f"{_BOT_BASE}/recommend-attacks",
-    "validators": f"{_BOT_BASE}/recommend-validators",
-}
-_MIN_APP_DESCRIPTION = 10  # api/testing_bot_types.go RecommendPacksRequest binding min=10
-
-
-@redteam.command("recommend")
-@click.argument("kind", type=click.Choice(sorted(_RECOMMEND_PATHS)))
-@click.option("--app-name", help="Application name (packs only).")
-@click.option("--app-description", help="Application description, at least 10 characters.")
-@click.option(
-    "--config",
-    "config_path",
-    type=click.Path(exists=True, dir_okay=False),
-    help="Full JSON body to send instead of the flags.",
-)
-def recommend(
-    kind: str, app_name: str | None, app_description: str | None, config_path: str | None
-) -> None:
-    """Ask the bot to recommend packs / attacks / validators
-    (api/testing_bot_types.go Recommend*Request)."""
-    if config_path:
-        if app_name or app_description:
-            raise click.UsageError("pass --config alone, or --app-name/--app-description")
-        with open(config_path, encoding="utf-8") as f:
-            body = json.load(f)
-        if not isinstance(body, dict):
-            raise click.ClickException(f"{config_path}: top-level must be a JSON object")
-    else:
-        if not app_description or len(app_description) < _MIN_APP_DESCRIPTION:
-            raise click.UsageError(
-                f"--app-description of at least {_MIN_APP_DESCRIPTION} characters is required"
-            )
-        body = {"app_description": app_description}
-        if kind == "packs":
-            if not app_name:
-                raise click.UsageError("recommend packs needs --app-name")
-            body["app_name"] = app_name
-    echo_json(_http.request("POST", _RECOMMEND_PATHS[kind], json_body=body))
-
-
-@redteam.command("parse-curl")
-@click.argument("source", required=False, type=click.Path(exists=True, dir_okay=False))
-@click.option("--stdin", "from_stdin", is_flag=True, help="Read curl string from stdin.")
-def parse_curl(source: str | None, from_stdin: bool) -> None:
-    """Parse a curl command into a structured request payload."""
-    if source == "-" or from_stdin or (source is None and not sys.stdin.isatty()):
-        curl_text = sys.stdin.read()
-    elif source:
-        with open(source, encoding="utf-8") as f:
-            curl_text = f.read()
-    else:
-        raise click.UsageError("provide a FILE path, --stdin, or pipe curl on stdin")
-    curl_text = curl_text.strip()
-    if not curl_text:
-        raise click.UsageError("empty curl input")
-    # api/testing_bot_handlers.go parseCurlForBot binds {"curl_command"}.
-    echo_json(
-        _http.request("POST", f"{_BOT_BASE}/parse-curl", json_body={"curl_command": curl_text})
-    )
-
-
-@redteam.command("test-connection")
-@click.option(
-    "--endpoint", default="", help="Target endpoint URL (blank for name-routed providers)."
-)
-@click.option("--provider", default="", help="Provider name, e.g. openai.")
-@click.option("--model", default="", help="Model name, e.g. gpt-4o.")
-@click.option("--api-key", "api_key", help="Target credential (prefer --api-key-env).")
-@click.option("--api-key-env", "api_key_env", help="Env var holding the target credential.")
-def test_connection(
-    endpoint: str, provider: str, model: str, api_key: str | None, api_key_env: str | None
-) -> None:
-    """Ping a target through the bot connectivity endpoint
-    (api/testing_bot_handlers.go testTargetConnectionDirect: flat body, api_key required)."""
-    if api_key_env:
-        api_key = os.environ.get(api_key_env)
-        if not api_key:
-            raise click.UsageError(f"{api_key_env} is not set")
-    if not api_key:
-        raise click.UsageError("pass --api-key or --api-key-env")
-    body = {"endpoint": endpoint, "provider": provider, "model": model, "api_key": api_key}
-    echo_json(_http.request("POST", f"{_BOT_BASE}/test-connection", json_body=body))
-
-
-# ---------------------------------------------------------------------------
-# Jailbreak technique / prompt CRUD + generated-prompt mark-successful +
-# breach get. Wire contract: dataset-backend api/jailbreak_routes.go on stage.
-# ---------------------------------------------------------------------------
-
-
-def _load_json_body(json_body: str | None) -> dict[str, Any]:
-    """Parse a --json value: literal JSON, or @file for a JSON file.
-
-    Mirrors :func:`cli.resources._load_json_body` — kept local to avoid
-    a cross-module import cycle (resources.py imports from _http, this
-    module already owns its _http import).
-    """
-    if not json_body:
-        return {}
-    if json_body.startswith("@"):
-        with open(json_body[1:], encoding="utf-8") as f:
-            data = json.load(f)
-    else:
-        try:
-            data = json.loads(json_body)
-        except json.JSONDecodeError as e:
-            raise click.ClickException(f"invalid --json: {e}") from None
-    if not isinstance(data, dict):
-        raise click.ClickException("--json body must be a JSON object")
-    return data
-
-
-@redteam.group("technique")
-def technique() -> None:
-    """Jailbreak techniques CRUD (/api/v1/jailbreak/techniques)."""
-
-
-@technique.command("create")
-@click.option("--json", "json_body", help="Technique payload as JSON literal or @file.")
-def technique_create(json_body: str | None) -> None:
-    echo_json(
-        _http.request(
-            "POST",
-            f"{_JAILBREAK_BASE}/techniques",
-            json_body=_load_json_body(json_body),
-        )
-    )
-
-
-@technique.command("update")
-@click.argument("technique_id")
-@click.option("--json", "json_body", help="Patch payload as JSON literal or @file.")
-def technique_update(technique_id: str, json_body: str | None) -> None:
-    echo_json(
-        _http.request(
-            "PATCH",
-            f"{_JAILBREAK_BASE}/techniques/{technique_id}",
-            json_body=_load_json_body(json_body),
-        )
-    )
-
-
-@technique.command("delete")
-@click.argument("technique_id")
-def technique_delete(technique_id: str) -> None:
-    echo_json(
-        _http.request(
-            "DELETE",
-            f"{_JAILBREAK_BASE}/techniques/{technique_id}",
-        )
-    )
-
-
-@redteam.group("prompt")
-def prompt() -> None:
-    """Jailbreak prompts CRUD (/api/v1/jailbreak/prompts)."""
-
-
-@prompt.command("create")
-@click.option("--json", "json_body", help="Prompt payload as JSON literal or @file.")
-def prompt_create(json_body: str | None) -> None:
-    echo_json(
-        _http.request(
-            "POST",
-            f"{_JAILBREAK_BASE}/prompts",
-            json_body=_load_json_body(json_body),
-        )
-    )
-
-
-@prompt.command("get")
-@click.argument("prompt_id")
-def prompt_get(prompt_id: str) -> None:
-    echo_json(_http.request("GET", f"{_JAILBREAK_BASE}/prompts/{prompt_id}"))
-
-
-@prompt.command("update")
-@click.argument("prompt_id")
-@click.option("--json", "json_body", help="Patch payload as JSON literal or @file.")
-def prompt_update(prompt_id: str, json_body: str | None) -> None:
-    echo_json(
-        _http.request(
-            "PATCH",
-            f"{_JAILBREAK_BASE}/prompts/{prompt_id}",
-            json_body=_load_json_body(json_body),
-        )
-    )
-
-
-@prompt.command("delete")
-@click.argument("prompt_id")
-def prompt_delete(prompt_id: str) -> None:
-    echo_json(_http.request("DELETE", f"{_JAILBREAK_BASE}/prompts/{prompt_id}"))
-
-
-@redteam.group("generated-prompt")
-def generated_prompt() -> None:
-    """Generated jailbreak prompts."""
-
-
-@generated_prompt.command("mark-successful")
-@click.argument("generated_prompt_id")
-def generated_prompt_mark_successful(generated_prompt_id: str) -> None:
-    """PATCH /generated-prompts/:id/success — flag a generated prompt as successful."""
-    echo_json(
-        _http.request(
-            "PATCH",
-            f"{_JAILBREAK_BASE}/generated-prompts/{generated_prompt_id}/success",
-        )
-    )
-
-
-@redteam.group("breach")
-def breach() -> None:
-    """Breach ("finding") lookup on a red-team run."""
-
-
-@breach.command("list")
-@click.argument("run_id")
-@page_options
-def breach_list(run_id: str, page: int, page_size: int, fetch_all: bool) -> None:
-    """List breaches for a run (GET /testing/runs/:id/results/breaches)."""
-    echo_json(_pages(f"/api/v1/testing/runs/{run_id}/results/breaches", page, page_size, fetch_all))
-
-
-@breach.command("get")
-@click.argument("run_id")
-@click.argument("breach_id")
-def breach_get(run_id: str, breach_id: str) -> None:
-    """Get one breach by id — client-side filter (no /findings/:id server route)."""
-    payload = _pages(f"/api/v1/testing/runs/{run_id}/results/breaches", 1, 100, True)
-    for row in _rows(payload):
-        if isinstance(row, dict) and str(row.get("id", "")) == breach_id:
-            echo_json(row)
-            return
-    raise click.ClickException(f"breach {breach_id} not found in run {run_id}")
