@@ -184,3 +184,33 @@ def test_verbs_refuse_insecure_config(runner: CliRunner, _isolated_config: Path)
     result = runner.invoke(cli, ["redteam", "list-attacks"])
     assert result.exit_code == 2
     assert "permissions" in result.output
+
+
+@pytest.mark.parametrize("key", ["abcd", "abcdefgh", "abcdefghi", "a" * 40])
+def test_masked_key_never_shows_more_than_half(key: str) -> None:
+    from disseqt_sdk.cli._common import mask_key
+
+    shown = mask_key(key).rstrip(".")
+    assert len(shown) <= min(8, len(key) // 2)
+    assert key.startswith(shown)
+
+
+@pytest.mark.parametrize("content, mode", [("{not json", 0o600), ('{"auth": {}}', 0o644)])
+def test_logout_removes_corrupt_or_open_config(
+    runner: CliRunner, _isolated_config: Path, content: str, mode: int
+) -> None:
+    _isolated_config.parent.mkdir(parents=True, exist_ok=True)
+    _isolated_config.write_text(content)
+    _isolated_config.chmod(mode)
+    result = runner.invoke(cli, ["logout"])
+    assert result.exit_code == 0, result.output
+    assert not _isolated_config.exists()
+
+
+def test_save_tightens_existing_perms(_isolated_config: Path) -> None:
+    _isolated_config.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+    _isolated_config.write_text("{}")
+    _isolated_config.chmod(0o644)
+    token_store.save({"api_key": "k"})
+    assert _isolated_config.stat().st_mode & 0o777 == 0o600
+    assert _isolated_config.parent.stat().st_mode & 0o777 == 0o700

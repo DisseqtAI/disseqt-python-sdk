@@ -378,7 +378,7 @@ def test_whoami_text_output(runner: CliRunner, monkeypatch, requests_mock) -> No
     assert "proj_123" in result.output
     # API key is masked — never the full value.
     assert "sk_test_abcdef" not in result.output
-    assert "sk_...def" in result.output
+    assert "sk_test..." in result.output
     assert "(unset)" in result.output  # organization_id
 
 
@@ -571,3 +571,17 @@ def test_list_attacks_multi_clamps_page_size(runner: CliRunner, requests_mock) -
     r = runner.invoke(cli, ["redteam", "list-attacks", "--kind", "multi", "--page-size", "2"])
     assert r.exit_code == 0, r.output
     assert m.last_request.qs["page-size"] == ["5"]
+
+
+def test_list_techniques_requests_full_pages(runner: CliRunner, requests_mock) -> None:
+    single = requests_mock.get(f"{DATASET_BASE}/api/v1/testing/attack-techniques", json={})
+    multi = requests_mock.get(f"{DATASET_BASE}/api/v1/mr-jailbreak/techniques", json={})
+    assert runner.invoke(cli, ["redteam", "list-techniques"]).exit_code == 0
+    assert single.last_request.qs["page-size"] == ["100"]
+    assert multi.last_request.qs["page-size"] == ["100"]
+
+
+@pytest.mark.parametrize("flag", ["--poll-interval", "--max-wait"])
+def test_non_numeric_poll_flags_exit_2(runner: CliRunner, flag: str) -> None:
+    argv = ["redteam", "attack", "--single-turn", "--technique", "t", "--app", "a", flag, "x"]
+    assert runner.invoke(cli, argv).exit_code == 2

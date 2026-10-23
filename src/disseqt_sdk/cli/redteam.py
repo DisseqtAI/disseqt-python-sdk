@@ -615,11 +615,19 @@ def list_techniques(single_turn: bool, multi_turn: bool) -> None:
     """List techniques, optionally filtered by turn kind."""
     if single_turn and multi_turn:
         raise click.UsageError("pass at most one of --single-turn or --multi-turn")
+    # Every page: the routes default to 20 items.
     out: dict[str, Any] = {}
     if single_turn or not multi_turn:
-        out["single_turn"] = _http.request("GET", "/api/v1/testing/attack-techniques")
+        out["single_turn"] = _pages("/api/v1/testing/attack-techniques", 1, 100, True)
     if multi_turn or not single_turn:
-        out["multi_turn"] = _http.request("GET", "/api/v1/mr-jailbreak/techniques")
+        out["multi_turn"] = _pages(
+            "/api/v1/mr-jailbreak/techniques",
+            1,
+            100,
+            True,
+            page_key="page_id",
+            list_key="techniques",
+        )
     echo_json(out)
 
 

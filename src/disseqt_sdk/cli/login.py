@@ -16,24 +16,16 @@ import click
 import requests
 
 from .._version import sdk_identity_headers
-from ..auth import AuthConfigPermissionError
 from ..auth import clear as auth_clear
-from ..auth import load as auth_load
 from ..auth import save as auth_save
+from ..auth import token_store
 from . import _http
-from ._common import _fail
+from ._common import _fail, mask_key
 
 _SMOKE_PATH = "/api/v1/testing/attack-techniques"
 # Public key-management page — printed for humans, never fetched.
 _KEY_MGMT_URL = "https://app.disseqt.ai/settings/api-keys"
 _TIMEOUT_S = 30
-
-
-def _mask(api_key: str) -> str:
-    """``sk_live_ab...`` — safe to print / log."""
-    if len(api_key) <= 8:
-        return "***"
-    return f"{api_key[:8]}..."
 
 
 def _smoke_test(base_url: str, api_key: str, project_id: str | None) -> requests.Response:
@@ -103,7 +95,7 @@ def login(
             json.dumps(
                 {
                     "status": "logged_in",
-                    "api_key_prefix": _mask(api_key),
+                    "api_key_prefix": mask_key(api_key),
                     "project_id": project_id,
                 },
                 indent=2,
@@ -111,17 +103,14 @@ def login(
             )
         )
     else:
-        click.echo(f"logged in (key {_mask(api_key)}, project {project_id or 'from key'})")
+        click.echo(f"logged in (key {mask_key(api_key)}, project {project_id or 'from key'})")
 
 
 @click.command("logout")
 def logout() -> None:
     """Clear the locally stored credentials (~/.disseqt/config.json)."""
-    try:
-        stored = auth_load()
-    except AuthConfigPermissionError as exc:
-        _fail(str(exc))
-    if stored is None:
+    # Delete without reading, so a corrupt or over-permissive file is removed too.
+    if not token_store.CONFIG_PATH.exists():
         click.echo("not logged in; nothing to do")
         return
     auth_clear()

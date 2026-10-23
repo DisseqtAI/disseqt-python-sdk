@@ -417,6 +417,24 @@ def test_parse_diff_range_rejects_bad_spec():
         parse_diff_range("main")
 
 
+@pytest.mark.parametrize("spec", ["--output=/tmp/x..HEAD", "main..-p", "-x...HEAD"])
+def test_parse_diff_range_rejects_option_like_refs(spec: str):
+    with pytest.raises(GitDiffError):
+        parse_diff_range(spec)
+
+
+def test_changed_files_keeps_three_dot(monkeypatch, tmp_path: Path):
+    seen: list[list[str]] = []
+
+    def fake_run(argv, **_kw):
+        seen.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("disseqt_sdk.scan.git_diff.subprocess.run", fake_run)
+    changed_files("main...HEAD", cwd=tmp_path)
+    assert "main...HEAD" in seen[0]
+
+
 def _init_git_repo(tmp: Path) -> None:
     subprocess.run(["git", "init", "-q"], cwd=tmp, check=True)
     subprocess.run(["git", "config", "user.email", "t@t"], cwd=tmp, check=True)

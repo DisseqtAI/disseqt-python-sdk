@@ -12,16 +12,7 @@ from typing import Any
 import click
 
 from . import _http
-from ._common import load_credentials, require_credentials
-
-
-def _mask_api_key(api_key: str | None) -> str | None:
-    """Show only a shape hint: ``sk_...abc``. Never echo the full key."""
-    if not api_key:
-        return None
-    if len(api_key) <= 7:
-        return "***"
-    return f"{api_key[:3]}...{api_key[-3:]}"
+from ._common import load_credentials, mask_key, require_credentials
 
 
 def server_identity() -> dict[str, Any]:
@@ -63,7 +54,7 @@ def _collect() -> dict[str, Any]:
             raise
         click.secho("warning: gateway has no /api/v1/whoami; showing local credentials", err=True)
         identity, source = local, "local"
-    return {**identity, "api_key": _mask_api_key(api_key), "source": source}
+    return {**identity, "api_key": mask_key(api_key) if api_key else None, "source": source}
 
 
 @click.command("whoami")

@@ -47,6 +47,11 @@ def require_credentials() -> tuple[str | None, str]:
     return project_id, api_key
 
 
+def mask_key(api_key: str) -> str:
+    """At most 8 chars and never more than half the key (Node ``maskedPrefix``)."""
+    return f"{api_key[: min(8, len(api_key) // 2)]}..."
+
+
 def load_json_body(json_body: str | None) -> dict[str, Any]:
     """Parse a --json value (literal JSON or @file) into an object; bad input exits 2."""
     if not json_body:
