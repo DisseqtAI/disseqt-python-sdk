@@ -16,23 +16,15 @@ import json
 import os
 import sys
 import time
+from collections.abc import Callable
 from typing import Any
 
 import click
 
+from ..models.redteam import has_more_pages
 from . import _http
-from ._common import echo_json, require_credentials
-
-_TERMINAL_STATES = {
-    "completed",
-    "completed_with_errors",
-    "complete",
-    "failed",
-    "cancelled",
-    "error",
-    "done",
-}
-
+from ._common import echo_json, pick_target, target_options
+from .whoami import resolve_project_id
 
 # api/jailbreak_agents_handlers.go ListJailbreakAgentsRequest: page_id (min 1) and
 # kebab-case page-size (5..100) are required. ponytail: first page of 100 only;
@@ -50,16 +42,36 @@ def _resolve_id(payload: Any, *keys: str) -> str | None:
     return None
 
 
-def _wait_terminal(path: str, poll_interval: float, max_wait: float) -> Any:
-    """Poll an unwrapped status payload until ``status`` is terminal."""
-    deadline = time.monotonic() + max_wait
-    while time.monotonic() < deadline:
-        payload = _http.request("GET", path)
-        state = str((payload or {}).get("status") or "") if isinstance(payload, dict) else ""
-        if state.lower() in _TERMINAL_STATES:
-            return payload
-        time.sleep(poll_interval)
-    raise click.ClickException(f"{path} did not finish within {max_wait}s")
+def page_options(f: Callable[..., Any]) -> Callable[..., Any]:
+    """--page / --page-size / --all for ``{items, pagination}`` list routes."""
+    f = click.option("--all", "fetch_all", is_flag=True, help="Fetch every page.")(f)
+    f = click.option("--page-size", default=100, show_default=True, type=click.IntRange(1, 100))(f)
+    return click.option("--page", default=1, show_default=True, type=click.IntRange(1))(f)
+
+
+def _pages(
+    path: str,
+    page: int,
+    page_size: int,
+    fetch_all: bool,
+    *,
+    page_key: str = "page",
+    list_key: str = "items",
+) -> Any:
+    """GET one page, or every page with ``fetch_all`` (pagination.has_next / total_count)."""
+
+    def get(n: int) -> Any:
+        return _http.request("GET", path, params={page_key: n, "page-size": page_size})
+
+    data = get(page)
+    if not fetch_all or not isinstance(data, dict):
+        return data
+    items = list(data.get(list_key) or [])
+    while has_more_pages(data, page, len(items), list_key):
+        page += 1
+        data = get(page)
+        items.extend(data.get(list_key) or [])
+    return {**data, list_key: items}
 
 
 def _testing_plan(
@@ -160,16 +172,43 @@ def redteam(ctx: click.Context) -> None:
 
 @redteam.command("list-attacks")
 @click.option("--kind", type=click.Choice(["single", "multi", "agents", "all"]), default="all")
-def list_attacks(kind: str) -> None:
+@page_options
+def list_attacks(kind: str, page: int, page_size: int, fetch_all: bool) -> None:
     """List available attack techniques (single-turn, multi-turn, agents)."""
     out: dict[str, Any] = {}
     if kind in ("single", "all"):
-        out["single_turn"] = _http.request("GET", "/api/v1/testing/attack-techniques")
+        out["single_turn"] = _pages("/api/v1/testing/attack-techniques", page, page_size, fetch_all)
+    # mr-jailbreak lists page with page_id and return {techniques|agents, total_count}.
     if kind in ("multi", "all"):
-        out["multi_turn"] = _http.request("GET", "/api/v1/mr-jailbreak/techniques")
+        out["multi_turn"] = _pages(
+            "/api/v1/mr-jailbreak/techniques",
+            page,
+            page_size,
+            fetch_all,
+            page_key="page_id",
+            list_key="techniques",
+        )
     if kind in ("agents", "all"):
-        out["agents"] = _http.request("GET", "/api/v1/mr-jailbreak/agents", params=_AGENTS_PAGE)
+        out["agents"] = _pages(
+            "/api/v1/mr-jailbreak/agents",
+            page,
+            max(page_size, 5),
+            fetch_all,
+            page_key="page_id",
+            list_key="agents",
+        )
     echo_json(out)
+
+
+_SINGLE_TURN_KEYS = {
+    "app": "application_id",
+    "integration": "app_integration_id",
+    "endpoint": "endpoint_url",
+}
+
+
+def _is_template(value: str) -> bool:
+    return value.lstrip().startswith(("{", "@"))
 
 
 @redteam.command("attack")
@@ -180,12 +219,7 @@ def list_attacks(kind: str) -> None:
     required=True,
     help="Single-turn: attack technique key. Multi-turn: MR jailbreak technique UUID.",
 )
-@click.option(
-    "--target",
-    required=True,
-    help="Single-turn: application id (target_config.application_id). "
-    "Multi-turn: app-integration template as JSON literal or @file.",
-)
+@target_options(legacy=True)
 @click.option("--pack", "pack_ids", multiple=True, help="Single-turn: prompt pack id (repeatable).")
 @click.option(
     "--validator", "validators", multiple=True, help="Single-turn: validator name (repeatable)."
@@ -193,78 +227,137 @@ def list_attacks(kind: str) -> None:
 @click.option(
     "--prompt", "prompts", multiple=True, help="Multi-turn: target prompt (repeatable, 1..10)."
 )
+@click.option("--app-name", default=None, help="Multi-turn app_name (default: template name).")
 @click.option("--app-description", default="", help="Multi-turn: short app description.")
+@click.option("--app-type", default="chatbot", show_default=True, help="Multi-turn app_type.")
 @click.option(
     "--max-depth", default=5, type=click.IntRange(1, 10), help="Multi-turn: conversation depth."
 )
 @click.option("--poll-interval", default=2.0, help="Seconds between status polls.")
-@click.option("--max-wait", default=300.0, help="Max seconds to wait for completion.")
+@click.option("--max-wait", default=300.0, help="Max seconds to wait; the run is cancelled after.")
 def attack(
     single_turn: bool,
     multi_turn: bool,
     technique: str,
-    target: str,
+    app_id: str | None,
+    integration_id: str | None,
+    endpoint: str | None,
+    legacy_target: str | None,
     pack_ids: tuple[str, ...],
     validators: tuple[str, ...],
     prompts: tuple[str, ...],
+    app_name: str | None,
     app_description: str,
+    app_type: str,
     max_depth: int,
     poll_interval: float,
     max_wait: float,
 ) -> None:
-    """Run one red-team attack end to end."""
+    """Run one red-team attack end to end against exactly one target."""
     if single_turn == multi_turn:
         raise click.UsageError("pass exactly one of --single-turn or --multi-turn")
-
+    kind, value = pick_target(
+        app_id,
+        integration_id,
+        endpoint,
+        legacy_target,
+        legacy_kind=lambda v: "template" if _is_template(v) else "app",
+    )
     if multi_turn:
-        if not 1 <= len(prompts) <= 10:
-            raise click.UsageError("--multi-turn needs 1..10 --prompt values")
-        template = _load_json_body(target)
-        missing = [
-            k for k in ("name", "base_url", "integration_type", "send_step") if k not in template
-        ]
-        if missing:
-            raise click.UsageError(f"--target template is missing {missing}")
-        # api/mr_jailbreak_batch_automation.go BatchAutomateJailbreakRequest / JailbreakJobConfig.
-        body = {
-            "target_prompts": list(prompts),
-            "app_integration_template": template,
-            "jailbreak_config": {
-                "project_id": require_credentials()[0],
-                "job_name_prefix": "cli",
-                "app_name": template["name"],
-                "app_description_short": app_description or f"{template['name']} (disseqt CLI)",
-                "app_type": "chatbot",
-                "max_depth": max_depth,
-                "orchestration_mode": "single",
-                "technique_id": technique,
-            },
-            "ecid_prefix": "cli",
-            "ecid_start_number": 1,
-        }
-        batch = _http.request("POST", "/api/v1/mr-jailbreak/batch-automate", json_body=body)
-        results = (batch or {}).get("results") if isinstance(batch, dict) else None
-        jobs = [
-            _wait_terminal(f"/api/v1/mr-jailbreak/jobs/{r['job_id']}", poll_interval, max_wait)
-            for r in (results or [])
-            if isinstance(r, dict) and r.get("job_id")
-        ]
-        echo_json({"batch": batch, "jobs": jobs})
+        batch = _multi_turn(
+            kind, value, technique, prompts, app_name, app_description, app_type, max_depth
+        )
+        _poll_jobs(batch, poll_interval, max_wait)
         return
-
+    if kind == "template":
+        raise click.UsageError(
+            "single-turn takes --app, --integration or --endpoint, not a template"
+        )
     if not pack_ids or not validators:
         raise click.UsageError("--single-turn needs at least one --pack and one --validator")
     name = f"cli-{technique}-{int(time.time())}"
     plan = _testing_plan(list(pack_ids), [technique], list(validators))
-    _, run = _create_session_and_run(
-        _session_body(name, name, "web", {"application_id": target}, plan), name
-    )
+    target = {_SINGLE_TURN_KEYS[kind]: value}
+    _, run = _create_session_and_run(_session_body(name, name, "web", target, plan), name)
     run_id = _resolve_id(run, "id", "run_id")
     if not run_id:
         raise click.ClickException(f"could not resolve run id from response: {run!r}")
-    status = _wait_terminal(f"/api/v1/testing/runs/{run_id}", poll_interval, max_wait)
+    status = _http.wait_terminal(
+        f"/api/v1/testing/runs/{run_id}",
+        poll_interval,
+        max_wait,
+        on_abort=lambda: _http.request("POST", f"/api/v1/testing/runs/{run_id}/cancel"),
+        hint=f"Inspect with: disseqt redteam status {run_id}",
+    )
     results = _http.request("GET", f"/api/v1/testing/runs/{run_id}/results")
     echo_json({"status": status, "results": results})
+
+
+def _multi_turn(
+    kind: str,
+    value: str,
+    technique: str,
+    prompts: tuple[str, ...],
+    app_name: str | None,
+    app_description: str,
+    app_type: str,
+    max_depth: int,
+) -> Any:
+    """POST batch-automate (api/mr_jailbreak_batch_automation.go BatchAutomateJailbreakRequest)."""
+    if not 1 <= len(prompts) <= 10:
+        raise click.UsageError("--multi-turn needs 1..10 --prompt values")
+    if kind == "endpoint" and not _is_template(value):
+        raise click.UsageError(
+            "multi-turn --endpoint takes an app-integration template (JSON or @file); "
+            "use --integration for a saved target"
+        )
+    template = _load_json_body(value) if kind in ("endpoint", "template") else None
+    if template is not None:
+        missing = [
+            k for k in ("name", "base_url", "integration_type", "send_step") if k not in template
+        ]
+        if missing:
+            raise click.UsageError(f"template is missing {missing}")
+    name = app_name or (template or {}).get("name") or "disseqt-cli"
+    config: dict[str, Any] = {
+        "project_id": resolve_project_id(),
+        "job_name_prefix": "cli",
+        "app_name": name,
+        "app_description_short": app_description or f"{name} (disseqt CLI)",
+        "app_type": app_type,
+        "max_depth": max_depth,
+        "orchestration_mode": "single",
+        "technique_id": technique,
+    }
+    body: dict[str, Any] = {
+        "target_prompts": list(prompts),
+        "jailbreak_config": config,
+        "ecid_prefix": "cli",
+        "ecid_start_number": 1,
+    }
+    if template is not None:
+        body["app_integration_template"] = template
+    elif kind == "integration":
+        body["app_integration_id"] = value
+    else:
+        config["application_id"] = value
+    return _http.request("POST", "/api/v1/mr-jailbreak/batch-automate", json_body=body)
+
+
+def _poll_jobs(batch: Any, poll_interval: float, max_wait: float) -> None:
+    """Poll each MR job; no MR cancel route, so Ctrl-C/timeout only prints a hint."""
+    results = (batch or {}).get("results") if isinstance(batch, dict) else None
+    job_ids = [str(r["job_id"]) for r in results or [] if isinstance(r, dict) and r.get("job_id")]
+    jobs = [
+        _http.wait_terminal(
+            f"/api/v1/mr-jailbreak/jobs/{job_id}",
+            poll_interval,
+            max_wait,
+            hint=f"Jobs keep running server-side; inspect with: disseqt redteam status {job_id}",
+        )
+        for job_id in job_ids
+    ]
+    echo_json({"batch": batch, "jobs": jobs})
 
 
 @redteam.group("session")
@@ -287,24 +380,37 @@ def session_get(session_id: str) -> None:
 
 @redteam.command("vuln-test")
 @click.option("--vulnerability", "vuln_id", required=True, help="Vulnerability id to test.")
-@click.option("--target", "app_integration_id", required=True, help="App integration id.")
+@target_options(legacy=True)
 @click.option(
     "--organization-id",
     envvar="DISSEQT_ORGANIZATION_ID",
     help="Organization id (query param); omitted when unset.",
 )
-def vuln_test(vuln_id: str, app_integration_id: str, organization_id: str | None) -> None:
+def vuln_test(
+    vuln_id: str,
+    app_id: str | None,
+    integration_id: str | None,
+    endpoint: str | None,
+    legacy_target: str | None,
+    organization_id: str | None,
+) -> None:
     """POST /api/v1/vulnerabilities/{id}/test/poll (api/vulnerability_types.go
-    VulnerabilityTestRequest; org/project ids travel as query params)."""
-    params = {"project_id": require_credentials()[0]}
+    VulnerabilityTestRequest; app integrations only, ids travel as query params)."""
+    # Old --target meant app_integration_id here; keep that meaning.
+    kind, value = pick_target(
+        app_id, integration_id, endpoint, legacy_target, legacy_kind=lambda _: "integration"
+    )
+    if kind == "endpoint":
+        raise click.UsageError(
+            "vuln-test supports app integrations only: use --app or --integration"
+        )
+    body = {"application_id" if kind == "app" else "app_integration_id": value}
+    params = {"project_id": resolve_project_id()}
     if organization_id:
         params["organization_id"] = organization_id
     echo_json(
         _http.request(
-            "POST",
-            f"/api/v1/vulnerabilities/{vuln_id}/test/poll",
-            json_body={"app_integration_id": app_integration_id},
-            params=params,
+            "POST", f"/api/v1/vulnerabilities/{vuln_id}/test/poll", json_body=body, params=params
         )
     )
 
@@ -316,10 +422,14 @@ def vuln_test(vuln_id: str, app_integration_id: str, organization_id: str | None
 
 
 def _load_yaml(path: str) -> dict[str, Any]:
-    """Parse a YAML config; fall back to JSON when PyYAML isn't installed."""
+    """Parse a YAML config; JSON configs work without PyYAML."""
     try:
         import yaml  # type: ignore[import-untyped]
-    except ImportError:  # pragma: no cover — optional dep
+    except ImportError:
+        if path.lower().endswith((".yaml", ".yml")):
+            raise click.ClickException(
+                f"{path}: reading YAML needs PyYAML — pip install 'disseqt-ai-sdk[cli]'"
+            ) from None
         with open(path, encoding="utf-8") as f:
             loaded = json.load(f)
         if not isinstance(loaded, dict):
@@ -467,25 +577,27 @@ def cancel(job_id: str) -> None:
 
 @redteam.command("results")
 @click.argument("job_id")
-def results(job_id: str) -> None:
-    """Pretty-print results for a completed job or run."""
+@page_options
+def results(job_id: str, page: int, page_size: int, fetch_all: bool) -> None:
+    """Results for a run (``{items, pagination}``); falls back to MR job interactions on 404."""
     try:
-        payload = _http.request("GET", f"/api/v1/testing/runs/{job_id}/results")
-    except SystemExit:
+        payload = _pages(f"/api/v1/testing/runs/{job_id}/results", page, page_size, fetch_all)
+    except _http.APIError as exc:
+        if exc.status_code != 404:
+            raise
         payload = _http.request("GET", f"/api/v1/mr-jailbreak/jobs/{job_id}/interactions")
     echo_json(payload)
 
 
 @redteam.command("list-personas")
-@click.option("--attack-type", help="Filter personas by attack_type field if present.")
+@click.option("--attack-type", help="Server-side attack_type filter.")
 def list_personas(attack_type: str | None) -> None:
-    """Enumerate persona agents (`/api/v1/mr-jailbreak/agents`)."""
-    payload = _http.request("GET", "/api/v1/mr-jailbreak/agents", params=_AGENTS_PAGE)
-    if attack_type and isinstance(payload, list):
-        payload = [
-            p for p in payload if isinstance(p, dict) and p.get("attack_type") == attack_type
-        ]
-    echo_json(payload)
+    """Enumerate persona agents (api/jailbreak_agents_handlers.go ListJailbreakAgentsRequest)."""
+    params: dict[str, Any] = {
+        **_AGENTS_PAGE,
+        **({"attack_type": attack_type} if attack_type else {}),
+    }
+    echo_json(_http.request("GET", "/api/v1/mr-jailbreak/agents", params=params))
 
 
 @redteam.command("list-techniques")
@@ -503,9 +615,17 @@ def list_techniques(single_turn: bool, multi_turn: bool) -> None:
     echo_json(out)
 
 
+def _rows(payload: Any) -> list[Any]:
+    """Rows of a ``{items, pagination}`` page (api/testing_types.go ListTestingResultsResponse)."""
+    if isinstance(payload, list):
+        return payload
+    rows = (payload or {}).get("items") if isinstance(payload, dict) else None
+    return rows if isinstance(rows, list) else []
+
+
 def _results_to_csv(payload: Any) -> str:
     """Flatten a results payload into CSV. Best-effort — dicts/list only."""
-    rows = payload if isinstance(payload, list) else (payload or {}).get("results") or []
+    rows = _rows(payload)
     if not isinstance(rows, list) or not rows:
         return ""
     fieldnames: list[str] = []
@@ -526,7 +646,7 @@ def _results_to_csv(payload: Any) -> str:
 
 
 def _results_to_markdown(payload: Any) -> str:
-    rows = payload if isinstance(payload, list) else (payload or {}).get("results") or []
+    rows = _rows(payload)
     if not isinstance(rows, list) or not rows:
         return "_no results_\n"
     headers: list[str] = []
@@ -565,12 +685,14 @@ def report(run_id: str | None, session_id: str | None, fmt: str) -> None:
     if fmt == "csv":
         if not session_id:
             raise click.UsageError("--format csv needs --session <id>")
-        payload = _http.request("GET", f"/api/v1/testing/sessions/{session_id}/report/csv")
-        click.echo(payload if isinstance(payload, str) else _results_to_csv(payload))
+        csv_text = _http.request(
+            "GET", f"/api/v1/testing/sessions/{session_id}/report/csv", raw=True
+        )
+        click.echo(csv_text, nl=False)
         return
     if not run_id:
         raise click.UsageError("RUN_ID is required for --format json|markdown")
-    payload = _http.request("GET", f"/api/v1/testing/runs/{run_id}/results")
+    payload = _pages(f"/api/v1/testing/runs/{run_id}/results", 1, 100, True)
     if fmt == "json":
         echo_json(payload)
     else:  # markdown
@@ -861,9 +983,10 @@ def breach() -> None:
 
 @breach.command("list")
 @click.argument("run_id")
-def breach_list(run_id: str) -> None:
+@page_options
+def breach_list(run_id: str, page: int, page_size: int, fetch_all: bool) -> None:
     """List breaches for a run (GET /testing/runs/:id/results/breaches)."""
-    echo_json(_http.request("GET", f"/api/v1/testing/runs/{run_id}/results/breaches"))
+    echo_json(_pages(f"/api/v1/testing/runs/{run_id}/results/breaches", page, page_size, fetch_all))
 
 
 @breach.command("get")
@@ -871,20 +994,9 @@ def breach_list(run_id: str) -> None:
 @click.argument("breach_id")
 def breach_get(run_id: str, breach_id: str) -> None:
     """Get one breach by id — client-side filter (no /findings/:id server route)."""
-    payload = _http.request("GET", f"/api/v1/testing/runs/{run_id}/results/breaches")
-    rows: list[Any]
-    if isinstance(payload, list):
-        rows = payload
-    elif isinstance(payload, dict):
-        data = payload.get("data") or payload.get("breaches") or []
-        rows = data if isinstance(data, list) else []
-    else:
-        rows = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        for key in ("id", "breach_id", "finding_id"):
-            if str(row.get(key, "")) == breach_id:
-                echo_json(row)
-                return
+    payload = _pages(f"/api/v1/testing/runs/{run_id}/results/breaches", 1, 100, True)
+    for row in _rows(payload):
+        if isinstance(row, dict) and str(row.get("id", "")) == breach_id:
+            echo_json(row)
+            return
     raise click.ClickException(f"breach {breach_id} not found in run {run_id}")

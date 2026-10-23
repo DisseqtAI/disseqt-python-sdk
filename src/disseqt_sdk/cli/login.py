@@ -1,8 +1,9 @@
 """``disseqt login`` / ``disseqt logout`` — pragmatic API-key-paste auth.
 
-Login prompts for a project API key + project id, smoke-tests them with the
-cheapest authenticated dataset call (``GET /api/v1/testing/attack-techniques``)
-and stores them in ``~/.disseqt/config.json`` (``0600``). Logout only clears
+Login prompts for an API key (the project is derived from it; ``--project-id``
+is optional), smoke-tests it with the cheapest authenticated dataset call
+(``GET /api/v1/testing/attack-techniques``) and stores it, plus ``--base-url``
+when given, in ``~/.disseqt/config.json`` (``0600``). Logout only clears
 that file — the gateway exposes no key-revocation route for API-key callers.
 """
 
@@ -35,24 +36,25 @@ def _mask(api_key: str) -> str:
     return f"{api_key[:8]}..."
 
 
-def _smoke_test(base_url: str, api_key: str, project_id: str) -> requests.Response:
-    headers = {
-        "X-API-Key": api_key,
-        "X-Project-Id": project_id,
-        **sdk_identity_headers(),
-    }
+def _smoke_test(base_url: str, api_key: str, project_id: str | None) -> requests.Response:
+    headers = {"X-API-Key": api_key, **sdk_identity_headers()}
+    if project_id:
+        headers["X-Project-Id"] = project_id
     return requests.get(f"{base_url.rstrip('/')}{_SMOKE_PATH}", headers=headers, timeout=_TIMEOUT_S)
 
 
 @click.command("login")
 @click.option("--api-key", "api_key_flag", default=None, help="Skip prompt; use this key.")
 @click.option(
-    "--project-id", "project_id_flag", default=None, help="Skip prompt; use this project id."
+    "--project-id",
+    "project_id_flag",
+    default=None,
+    help="Optional project id (the gateway derives it from the key).",
 )
 @click.option(
     "--base-url",
     default=None,
-    help=f"Dataset gateway base URL (default: $DISSEQT_BASE_URL or {_http.DEFAULT_BASE_URL}).",
+    help=f"Dataset gateway base URL, saved for later commands (default: {_http.DEFAULT_BASE_URL}).",
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit a machine-readable status envelope.")
 def login(
@@ -61,39 +63,40 @@ def login(
     base_url: str | None,
     as_json: bool,
 ) -> None:
-    """Store a Disseqt API key + project id locally, after verifying them."""
-    interactive = api_key_flag is None or project_id_flag is None
-    if interactive and not sys.stdin.isatty():
+    """Store a Disseqt API key (and optional project id / base URL), after verifying it."""
+    if api_key_flag is None and not sys.stdin.isatty():
         _fail(
-            "non-interactive shell detected. For CI, set DISSEQT_API_KEY and "
-            "DISSEQT_PROJECT_ID as env vars, or pass --api-key / --project-id."
+            "non-interactive shell detected. For CI, set DISSEQT_API_KEY "
+            "(optionally DISSEQT_PROJECT_ID), or pass --api-key."
         )
-
     if api_key_flag is None:
         click.echo(f"Create or copy an API key at: {_KEY_MGMT_URL}")
         api_key = click.prompt("Paste your API key", hide_input=True)
     else:
         api_key = api_key_flag
-    project_id = project_id_flag or click.prompt("Enter your project ID")
-
     api_key = (api_key or "").strip()
-    project_id = (project_id or "").strip()
-    if not api_key or not project_id:
-        _fail("api key and project id are both required")
+    project_id = (project_id_flag or "").strip() or None
+    if not api_key:
+        _fail("api key is required")
 
-    base_url = base_url or _http.base_url()
+    resolved_base = (base_url or _http.base_url()).rstrip("/")
     try:
-        resp = _smoke_test(base_url, api_key, project_id)
+        resp = _smoke_test(resolved_base, api_key, project_id)
     except requests.RequestException as exc:
         # Never include the token in an error path.
-        _fail(f"could not reach {base_url}: {type(exc).__name__}", code=1)
+        _fail(f"could not reach {resolved_base}: {type(exc).__name__}", code=1)
 
     if resp.status_code in (401, 403):
         _fail("invalid API key or project ID")
     if not resp.ok:
         _fail(f"unexpected HTTP {resp.status_code} verifying credentials", code=1)
 
-    auth_save({"api_key": api_key, "project_id": project_id})
+    stored: dict[str, str] = {"api_key": api_key}
+    if project_id:
+        stored["project_id"] = project_id
+    if base_url:
+        stored["base_url"] = resolved_base
+    auth_save(stored)
 
     if as_json:
         click.echo(
@@ -108,7 +111,7 @@ def login(
             )
         )
     else:
-        click.echo(f"logged in as project {project_id} (key {_mask(api_key)})")
+        click.echo(f"logged in (key {_mask(api_key)}, project {project_id or 'from key'})")
 
 
 @click.command("logout")

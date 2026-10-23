@@ -9,13 +9,13 @@ backend registers.
 from __future__ import annotations
 
 import json
-import os
+from collections.abc import Callable
 from typing import Any, NoReturn
 
 import click
 
 from ..auth import AuthConfigPermissionError
-from ..auth import load as auth_load
+from ..auth import resolve as auth_resolve
 
 ENV_PROJECT_ID = "DISSEQT_PROJECT_ID"
 ENV_API_KEY = "DISSEQT_API_KEY"
@@ -28,26 +28,22 @@ def _fail(message: str, code: int = 2) -> NoReturn:
 
 
 def load_credentials() -> tuple[str | None, str | None, str]:
-    """``(project_id, api_key, source)`` from env, else ``~/.disseqt/config.json``
-    (written by ``disseqt login``). A config file with permissions wider than
-    0600 is a hard error, never silently skipped."""
-    project_id = os.environ.get(ENV_PROJECT_ID)
-    api_key = os.environ.get(ENV_API_KEY)
-    if project_id and api_key:
-        return project_id, api_key, "env"
+    """``(project_id, api_key, source)``: env beats ``~/.disseqt/config.json``
+    (same precedence as the library). A config wider than 0600 is a hard error."""
     try:
-        stored = auth_load()
+        api_key, project_id, source = auth_resolve()
     except AuthConfigPermissionError as exc:
         _fail(str(exc))
-    if stored is None:
-        return project_id, api_key, "env"
-    return project_id or stored.get("project_id"), api_key or stored.get("api_key"), "config"
+    return project_id, api_key, source
 
 
-def require_credentials() -> tuple[str, str]:
+def require_credentials() -> tuple[str | None, str]:
+    """``(project_id or None, api_key)``; the project is optional (derived from the key)."""
     project_id, api_key, _ = load_credentials()
-    if not project_id or not api_key:
-        _fail(f"no credentials: set {ENV_PROJECT_ID} and {ENV_API_KEY}, or run `disseqt login`")
+    if not api_key:
+        _fail(
+            f"no credentials: set {ENV_API_KEY} (optionally {ENV_PROJECT_ID}), or run `disseqt login`"
+        )
     return project_id, api_key
 
 
@@ -58,3 +54,65 @@ def echo_json(payload: Any) -> None:
 
 def print_error(exc: Exception) -> None:
     click.secho(f"error: {exc}", fg="red", err=True)
+
+
+def target_options(*, legacy: bool) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """--app / --integration / --endpoint (+ deprecated --target when ``legacy``)."""
+    opts = [
+        click.option("--app", "app_id", help="AI System (application) id."),
+        click.option("--integration", "integration_id", help="App integration id."),
+        click.option("--endpoint", "endpoint", help="Target endpoint URL."),
+    ]
+    if legacy:
+        opts.append(
+            click.option(
+                "--target", "legacy_target", help="Deprecated: use --app/--integration/--endpoint."
+            )
+        )
+
+    def wrap(f: Callable[..., Any]) -> Callable[..., Any]:
+        for opt in reversed(opts):
+            f = opt(f)
+        return f
+
+    return wrap
+
+
+def pick_target(
+    app_id: str | None,
+    integration_id: str | None,
+    endpoint: str | None,
+    legacy_target: str | None = None,
+    *,
+    legacy_kind: Callable[[str], str] = lambda _: "app",
+) -> tuple[str, str]:
+    """``(kind, value)`` for exactly one target flag; kind is app|integration|endpoint|template."""
+    if legacy_target:
+        click.secho(
+            "warning: --target is deprecated; use --app, --integration or --endpoint",
+            fg="yellow",
+            err=True,
+        )
+    given = [
+        (kind, value)
+        for kind, value in (
+            ("app", app_id),
+            ("integration", integration_id),
+            ("endpoint", endpoint),
+            ("legacy", legacy_target),
+        )
+        if value
+    ]
+    if len(given) != 1:
+        raise click.UsageError("pass exactly one of --app, --integration or --endpoint")
+    kind, value = given[0]
+    return (legacy_kind(value), value) if kind == "legacy" else (kind, value)
+
+
+def optional_target(
+    app_id: str | None, integration_id: str | None, endpoint: str | None
+) -> tuple[str, str] | None:
+    """Like :func:`pick_target`, but no flag means "target is in the --json body"."""
+    if not (app_id or integration_id or endpoint):
+        return None
+    return pick_target(app_id, integration_id, endpoint)

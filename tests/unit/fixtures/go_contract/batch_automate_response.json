@@ -1,0 +1,6 @@
+{
+  "total_target_prompts": 1,
+  "successful_jobs": 1,
+  "failed_jobs": 0,
+  "results": [{"target_prompt": "p", "job_id": "99999999-9999-4999-8999-999999999999"}]
+}

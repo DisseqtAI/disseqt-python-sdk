@@ -123,7 +123,8 @@ def test_target_parse_curl(runner: CliRunner, requests_mock) -> None:
     result = runner.invoke(cli, ["target", "parse-curl", "--curl", "curl https://x"])
     assert result.exit_code == 0
     sent = json.loads(requests_mock.request_history[0].text)
-    assert sent == {"curl": "curl https://x"}
+    # api/app_integration_types.go CurlCommands `json:"curl_commands"`.
+    assert sent == {"curl_commands": "curl https://x"}
 
 
 def test_target_delete(runner: CliRunner, requests_mock) -> None:
@@ -361,10 +362,12 @@ def test_pp_run_add_to_pack(runner: CliRunner, requests_mock) -> None:
     )
     assert result.exit_code == 0, result.output
     sent = requests_mock.request_history[0].json()
-    assert sent == {"run_id": "r1", "output_ids": ["o1", "o2"]}
+    # api/prompt_pack_entry_handlers.go AddPromptsToPackRequest.
+    assert sent == {"entry_ids": ["o1", "o2"]}
 
 
-def test_whoami_text_output(runner: CliRunner, monkeypatch) -> None:
+def test_whoami_text_output(runner: CliRunner, monkeypatch, requests_mock) -> None:
+    requests_mock.get(f"{DATASET_BASE}/api/v1/whoami", status_code=404, text="no route")
     monkeypatch.setenv("DISSEQT_PROJECT_ID", "proj_123")
     monkeypatch.setenv("DISSEQT_API_KEY", "sk_test_abcdef")
     monkeypatch.delenv("DISSEQT_ORGANIZATION_ID", raising=False)
@@ -377,7 +380,11 @@ def test_whoami_text_output(runner: CliRunner, monkeypatch) -> None:
     assert "(unset)" in result.output  # organization_id
 
 
-def test_whoami_json_output(runner: CliRunner, monkeypatch) -> None:
+def test_whoami_json_output(runner: CliRunner, monkeypatch, requests_mock) -> None:
+    requests_mock.get(
+        f"{DATASET_BASE}/api/v1/whoami",
+        json={"status": "success", "data": {"project_id": "proj_x", "organization_id": None}},
+    )
     monkeypatch.setenv("DISSEQT_PROJECT_ID", "proj_x")
     monkeypatch.setenv("DISSEQT_API_KEY", "sk_test_xyz")
     monkeypatch.delenv("DISSEQT_ORGANIZATION_ID", raising=False)
@@ -432,7 +439,7 @@ def test_plan_run_create_with_wait_polls_to_terminal(
 ) -> None:
     """--wait polls plan-run get until a terminal status appears."""
     # Zero-sleep polling so the test stays fast.
-    monkeypatch.setattr("disseqt_sdk.cli.resources.time.sleep", lambda _s: None)
+    monkeypatch.setattr("disseqt_sdk.cli._http.time.sleep", lambda _s: None)
     requests_mock.post(
         f"{DATASET_BASE}/api/v1/test-plans/p1/runs",
         json={"run_id": "r1", "status": "queued"},
@@ -454,14 +461,16 @@ def test_plan_run_create_with_wait_polls_to_terminal(
 
 
 def test_plan_run_create_with_wait_times_out(runner: CliRunner, requests_mock, monkeypatch) -> None:
-    monkeypatch.setattr("disseqt_sdk.cli.resources.time.sleep", lambda _s: None)
+    monkeypatch.setattr("disseqt_sdk.cli._http.time.sleep", lambda _s: None)
     requests_mock.post(f"{DATASET_BASE}/api/v1/test-plans/p1/runs", json={"run_id": "r1"})
     requests_mock.get(f"{DATASET_BASE}/api/v1/test-plan-runs/r1", json={"status": "running"})
+    cancel = requests_mock.post(f"{DATASET_BASE}/api/v1/test-plan-runs/r1/cancel", json={})
     result = runner.invoke(
         cli, ["plan-run", "create", "p1", "--json", "{}", "--wait", "--max-wait", "0"]
     )
     assert result.exit_code == 1
     assert "did not finish" in result.output
+    assert cancel.called  # a timed-out run is cancelled server-side
 
 
 def test_plan_run_cancel(runner: CliRunner, requests_mock) -> None:

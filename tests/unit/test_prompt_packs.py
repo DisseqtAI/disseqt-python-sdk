@@ -308,7 +308,7 @@ class TestDisseqtAPIClientInit:
     def test_default_values(self):
         """Test default base URL and timeout."""
         client = DisseqtAPIClient(project_id="p", api_key="k")
-        assert client.base_url == "http://localhost:8000"
+        assert client.base_url == "https://api.disseqt.ai/dataset"
         assert client.timeout == 30
 
     def test_custom_values(self, api_client):
@@ -576,14 +576,11 @@ class TestOutputValidationEndpoints:
         assert sent["metric_evaluations"][1]["category"] == "output-validation"
 
     def test_list_run_output_validations(self, requests_mock, api_client):
-        """Test listing output validations for a run."""
+        """No per-run route: the registered one is /:id/output-validations (pack id)."""
         mock_response = {"data": []}
-        requests_mock.get(
-            f"{PREFIX}/runs/{self.RUN_ID}/output-validations",
-            json=mock_response,
-        )
+        requests_mock.get(f"{PREFIX}/{self.PACK_ID}/output-validations", json=mock_response)
 
-        result = api_client.list_run_output_validations(self.RUN_ID)
+        result = api_client.list_run_output_validations(self.PACK_ID)
 
         assert result == mock_response
 

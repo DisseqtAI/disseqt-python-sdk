@@ -13,16 +13,15 @@ all on the dataset gateway (``DISSEQT_BASE_URL``).
 from __future__ import annotations
 
 import json
-import time
 from collections.abc import Callable
 from typing import Any
 
 import click
 
 from ..api_client import DisseqtAPIClient
-from ..resources import PACK_SHARING_SCOPES
+from ..resources import PACK_SHARING_SCOPES, plan_run_target
 from . import _http
-from ._common import _fail, echo_json, require_credentials
+from ._common import _fail, echo_json, optional_target, require_credentials, target_options
 
 
 def _json_option(
@@ -65,10 +64,23 @@ def _delete(path: str) -> None:
     echo_json(_http.request("DELETE", path))
 
 
+def _get_raw(path: str) -> None:
+    """Print a non-JSON body (CSV) verbatim."""
+    click.echo(_http.request("GET", path, raw=True), nl=False)
+
+
+_TARGET_FIELDS = {
+    "app": "application_id",
+    "integration": "app_integration_id",
+    "endpoint": "endpoint_url",
+}
+
+
 def _api_client() -> DisseqtAPIClient:
     """Construct a :class:`DisseqtAPIClient` from the CLI credentials."""
     project_id, api_key = require_credentials()
-    return DisseqtAPIClient(project_id=project_id, api_key=api_key, base_url=_http.base_url())
+    # No base_url: it resolves env > login config > default, same as _http.
+    return DisseqtAPIClient(project_id=project_id, api_key=api_key)
 
 
 # ---------------------------------------------------------------------------
@@ -142,7 +154,8 @@ def target_parse_curl(curl_source: str | None, curl_text: str | None) -> None:
     if curl_source:
         with open(curl_source, encoding="utf-8") as f:
             curl_text = f.read()
-    _post("/api/v1/llm/app-integrations/parse-curl", {"curl": (curl_text or "").strip()})
+    # api/app_integration_types.go CurlCommands `json:"curl_commands"`.
+    _post("/api/v1/llm/app-integrations/parse-curl", {"curl_commands": (curl_text or "").strip()})
 
 
 # ---------------------------------------------------------------------------
@@ -332,8 +345,21 @@ def pp_run() -> None:
 @pp_run.command("create")
 @click.argument("pack_id")
 @_json_option("Run payload JSON.")
-def pp_run_create(pack_id: str, json_body: str | None) -> None:
-    _post(f"/api/v1/sdk/prompt-packs/{pack_id}/runs", _load_json_body(json_body))
+@target_options(legacy=False)
+def pp_run_create(
+    pack_id: str,
+    json_body: str | None,
+    app_id: str | None,
+    integration_id: str | None,
+    endpoint: str | None,
+) -> None:
+    """Create a run; target flags set top-level ids (api/prompt_pack_runs_handlers.go
+    PromptPackRunRequest). Without a flag the --json body must carry the target."""
+    body = _load_json_body(json_body)
+    picked = optional_target(app_id, integration_id, endpoint)
+    if picked:
+        body = {**body, _TARGET_FIELDS[picked[0]]: picked[1]}
+    _post(f"/api/v1/sdk/prompt-packs/{pack_id}/runs", body)
 
 
 @pp_run.command("list")
@@ -420,11 +446,9 @@ def pp_run_validate(run_id: str, json_body: str | None) -> None:
 )
 @click.option("--pack-id", required=True, help="Destination prompt pack ID.")
 def pp_run_add_to_pack(run_id: str, output_ids: tuple[str, ...], pack_id: str) -> None:
-    """Add selected run outputs to a prompt pack."""
-    _post(
-        f"/api/v1/sdk/prompt-packs/{pack_id}/prompts/add",
-        {"run_id": run_id, "output_ids": list(output_ids)},
-    )
+    """Attach entries to a pack (api/prompt_pack_entry_handlers.go AddPromptsToPackRequest
+    binds only ``entry_ids``)."""
+    _post(f"/api/v1/sdk/prompt-packs/{pack_id}/prompts/add", {"entry_ids": list(output_ids)})
 
 
 # ---------------------------------------------------------------------------
@@ -471,7 +495,7 @@ def ov_rca_status(validation_id: str) -> None:
 @output_validation.command("results-csv")
 @click.argument("validation_id")
 def ov_results_csv(validation_id: str) -> None:
-    _get(f"/api/v1/sdk/prompt-packs/output-validations/{validation_id}/results/csv")
+    _get_raw(f"/api/v1/sdk/prompt-packs/output-validations/{validation_id}/results/csv")
 
 
 @output_validation.command("compare")
@@ -541,7 +565,7 @@ def session_list_runs(session_id: str) -> None:
 @session.command("report-csv")
 @click.argument("session_id")
 def session_report_csv(session_id: str) -> None:
-    _get(f"/api/v1/testing/sessions/{session_id}/report/csv")
+    _get_raw(f"/api/v1/testing/sessions/{session_id}/report/csv")
 
 
 @session.command("run-get")
@@ -761,9 +785,6 @@ def plan_generate_inputs_status(job_id: str) -> None:
 # Test Plan Runs (T6)   /api/v1/test-plan-runs
 # ---------------------------------------------------------------------------
 
-# Terminal statuses per pkg/testplan/walk.go + stage.go.
-_PLAN_RUN_TERMINAL = frozenset({"completed", "completed_with_errors", "cancelled", "failed"})
-
 
 @click.group("plan-run")
 def plan_run() -> None:
@@ -773,6 +794,7 @@ def plan_run() -> None:
 @plan_run.command("create")
 @click.argument("plan_id")
 @_json_option("Run payload (target + optional version_id).")
+@target_options(legacy=False)
 @click.option("--wait", is_flag=True, help="Poll until the run reaches a terminal status.")
 @click.option(
     "--interval",
@@ -789,13 +811,29 @@ def plan_run() -> None:
     help="Give up (exit 1) after this many seconds when --wait is set.",
 )
 def plan_run_create(
-    plan_id: str, json_body: str | None, wait: bool, interval: float, max_wait: float
+    plan_id: str,
+    json_body: str | None,
+    app_id: str | None,
+    integration_id: str | None,
+    endpoint: str | None,
+    wait: bool,
+    interval: float,
+    max_wait: float,
 ) -> None:
-    resp = _http.request(
-        "POST",
-        f"/api/v1/test-plans/{plan_id}/runs",
-        json_body=_load_json_body(json_body),
-    )
+    """Target flags build ``target`` (api/test_plan_runs_create_types.go)."""
+    body = _load_json_body(json_body)
+    picked = optional_target(app_id, integration_id, endpoint)
+    if picked:
+        kind, value = picked
+        body = {
+            **body,
+            "target": plan_run_target(
+                value if kind == "app" else None,
+                value if kind == "integration" else None,
+                value if kind == "endpoint" else None,
+            ),
+        }
+    resp = _http.request("POST", f"/api/v1/test-plans/{plan_id}/runs", json_body=body)
     if not wait:
         echo_json(resp)
         return
@@ -803,19 +841,24 @@ def plan_run_create(
     if not isinstance(run_id, str) or not run_id:
         _fail("--wait requires a run_id in the create response")
     # ponytail: naive poll loop, no jitter/backoff; upgrade if runs commonly outlive 30-60 min.
-    deadline = time.monotonic() + max_wait
-    while time.monotonic() < deadline:
-        latest = _http.request("GET", f"/api/v1/test-plan-runs/{run_id}")
-        status = (latest.get("status") if isinstance(latest, dict) else None) or (
-            latest.get("header", {}).get("status")
-            if isinstance(latest, dict) and isinstance(latest.get("header"), dict)
-            else None
+    echo_json(
+        _http.wait_terminal(
+            f"/api/v1/test-plan-runs/{run_id}",
+            interval,
+            max_wait,
+            on_abort=lambda: _http.request("POST", f"/api/v1/test-plan-runs/{run_id}/cancel"),
+            hint=f"Inspect with: disseqt plan-run get {run_id}",
+            status_of=_plan_run_status,
         )
-        if status in _PLAN_RUN_TERMINAL:
-            echo_json(latest)
-            return
-        time.sleep(interval)
-    raise click.ClickException(f"run {run_id} did not finish within {max_wait}s")
+    )
+
+
+def _plan_run_status(latest: Any) -> str:
+    """Run status lives at ``status`` or ``header.status``."""
+    if not isinstance(latest, dict):
+        return ""
+    header = latest.get("header")
+    return str(latest.get("status") or (header or {}).get("status") or "")
 
 
 @plan_run.command("list")
@@ -888,7 +931,59 @@ def plan_run_reveal(run_id: str, result_id: str) -> None:
     _post(f"/api/v1/test-plan-runs/{run_id}/results/{result_id}/reveal")
 
 
+# ---------------------------------------------------------------------------
+# AI Systems (applications): list via policy-management, link via dataset
+# ---------------------------------------------------------------------------
+
+
+@click.group("app")
+def app() -> None:
+    """AI Systems: list them and link one to an app integration."""
+
+
+@app.command("list")
+def app_list() -> None:
+    """GET /api/v1/applications on policy-management (DISSEQT_POLICIES_BASE_URL)."""
+    echo_json(_http.request("GET", "/api/v1/applications", base=_http.policies_base_url()))
+
+
+@app.command("link")
+@click.argument("application_id")
+@click.option("--integration", "integration_id", required=True, help="App integration id.")
+@click.option(
+    "--role",
+    type=click.Choice(["primary", "fallback", "candidate", "staging"]),
+    help="Link role (server default: primary).",
+)
+def app_link(application_id: str, integration_id: str, role: str | None) -> None:
+    """Link an AI System to an app integration (api/application_links.go)."""
+    body = {
+        "application_id": application_id,
+        "integration_type": "app_integration",
+        "integration_id": integration_id,
+    }
+    _post("/api/v1/llm/application-links", {**body, **({"role": role} if role else {})})
+
+
+@app.command("unlink")
+@click.argument("application_id")
+def app_unlink(application_id: str) -> None:
+    """Delete every link of the AI System (any integration kind); exit 1 if none."""
+    links = _http.request(
+        "GET", "/api/v1/llm/application-links", params={"application_id": application_id}
+    )
+    ids = [row["id"] for bucket in _LINK_BUCKETS for row in (links or {}).get(bucket) or []]
+    if not ids:
+        raise click.ClickException(f"AI System {application_id} has no linked integration")
+    for link_id in ids:
+        _delete(f"/api/v1/llm/application-links/{link_id}")
+
+
+_LINK_BUCKETS = ("app_integrations", "llm_integrations", "rag_integrations", "mcp_integrations")
+
+
 __all__ = [
+    "app",
     "byov",
     "mcp_target",
     "output_validation",

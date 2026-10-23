@@ -1,19 +1,18 @@
-"""``disseqt whoami`` — introspect the credentials the CLI will use.
+"""``disseqt whoami`` — the identity the gateway derives from the API key.
 
-Same resolution as every other verb (env, then ``~/.disseqt/config.json``);
-prints them with the API key masked. No backend ``/auth/whoami`` exists.
+Calls the gateway's ``GET /api/v1/whoami``; on a 404 (gateway without the
+route) it falls back to the locally resolved credentials. The key is masked.
 """
 
 from __future__ import annotations
 
 import json
-import os
+from typing import Any
 
 import click
 
-from ._common import load_credentials
-
-ENV_ORGANIZATION_ID = "DISSEQT_ORGANIZATION_ID"
+from . import _http
+from ._common import load_credentials, require_credentials
 
 
 def _mask_api_key(api_key: str | None) -> str | None:
@@ -25,14 +24,34 @@ def _mask_api_key(api_key: str | None) -> str | None:
     return f"{api_key[:3]}...{api_key[-3:]}"
 
 
-def _collect() -> dict[str, str | None]:
+def server_identity() -> dict[str, Any]:
+    """``{project_id, organization_id, user_id}`` from the gateway."""
+    data = _http.request("GET", "/api/v1/whoami")
+    return data if isinstance(data, dict) else {}
+
+
+def resolve_project_id() -> str:
+    """Configured project, else the one the gateway derives from the key."""
+    project_id, _ = require_credentials()
+    project_id = project_id or server_identity().get("project_id")
+    if not project_id:
+        raise click.ClickException("could not resolve project_id from the API key")
+    return str(project_id)
+
+
+def _collect() -> dict[str, Any]:
     project_id, api_key, source = load_credentials()
-    return {
-        "project_id": project_id,
-        "api_key": _mask_api_key(api_key),
-        "organization_id": os.environ.get(ENV_ORGANIZATION_ID),
-        "source": source,
-    }
+    require_credentials()
+    local = {"project_id": project_id, "organization_id": None, "user_id": None}
+    try:
+        server = server_identity()
+        identity = {k: server.get(k) or v for k, v in local.items()}
+    except _http.APIError as exc:
+        if exc.status_code != 404:
+            raise
+        click.secho("warning: gateway has no /api/v1/whoami; showing local credentials", err=True)
+        identity, source = local, "local"
+    return {**identity, "api_key": _mask_api_key(api_key), "source": source}
 
 
 @click.command("whoami")

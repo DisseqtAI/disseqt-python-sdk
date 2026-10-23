@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, cast
 
 import requests
 
 from ._version import check_version_notice, sdk_identity_headers
+from .auth import AuthMissingError, resolve, resolve_base_url
 from .client import HTTPError, _version_blocked_error
 from .models.prompt_packs import (
     CreateRunRequest,
@@ -16,9 +18,13 @@ from .models.prompt_packs import (
     PromptPackOutputValidationRequest,
 )
 
-# Service-key mount for prompt packs (api/server.go sdkPromptPackRoutes), on the
-# same dataset gateway base as every other /api/v1/* resource.
-_PROMPT_PACKS_BASE = "/api/v1/sdk/prompt-packs"
+# Legacy Kong route + service path: used by the 0.11 methods when the caller passes
+# the Kong root as base_url (the old default was http://localhost:8000).
+_PROMPT_PACKS_BASE = "/sdk/prompt-packs/api/v1/sdk/prompt-packs"
+# Service-key mount (api/server.go sdkPromptPackRoutes) on the dataset gateway base.
+_PROMPT_PACKS_MOUNT = "/api/v1/sdk/prompt-packs"
+ENV_POLICIES_BASE_URL = "DISSEQT_POLICIES_BASE_URL"
+DEFAULT_POLICIES_BASE_URL = "https://api.disseqt.ai/policy"
 
 
 def unwrap_envelope(raw: Any, status_code: int = 200) -> Any:
@@ -76,26 +82,44 @@ class DisseqtAPIClient:
 
     def __init__(
         self,
-        project_id: str,
-        api_key: str,
-        base_url: str = "http://localhost:8000",
+        project_id: str | None = None,
+        api_key: str | None = None,
+        base_url: str | None = None,
         timeout: int = 30,
+        policies_base_url: str | None = None,
     ) -> None:
         """Initialize the Disseqt API client.
 
         Args:
-            project_id: Project ID for the Disseqt API
-            api_key: API key for authentication
-            base_url: Kong gateway base URL
+            project_id: Optional; the gateway derives the project from the key.
+            api_key: API key; falls back to ``DISSEQT_API_KEY`` then ``disseqt login``.
+            base_url: Dataset gateway; falls back to ``DISSEQT_BASE_URL``, the login
+                config, then ``https://api.disseqt.ai/dataset``. An explicit value keeps
+                the legacy Kong prompt-packs prefix for the 0.11 methods.
             timeout: Request timeout in seconds
+            policies_base_url: policy-management base for :attr:`applications`
+                (``DISSEQT_POLICIES_BASE_URL``, default ``https://api.disseqt.ai/policy``).
+
+        Raises:
+            AuthMissingError: No API key from args, env or the login config.
         """
-        self.project_id = project_id
-        self.api_key = api_key
-        self.base_url = base_url.rstrip("/")
+        api_key, project_id, _ = resolve(api_key, project_id)
+        if not api_key:
+            raise AuthMissingError(
+                "Missing api_key: pass api_key=, set DISSEQT_API_KEY, or run `disseqt login`"
+            )
+        self.project_id: str | None = project_id
+        self.api_key: str = api_key
+        self.base_url = resolve_base_url(base_url)
+        self._packs_prefix = _PROMPT_PACKS_BASE if base_url else _PROMPT_PACKS_MOUNT
+        self.policies_base_url = (
+            policies_base_url or os.environ.get(ENV_POLICIES_BASE_URL) or DEFAULT_POLICIES_BASE_URL
+        ).rstrip("/")
         self.timeout = timeout
         # Resource clients — lazy imports to avoid a circular reference at
         # module load time (resources.py depends on this file's exports).
         from .resources import (
+            ApplicationsResource,
             ByovValidatorsResource,
             JailbreakResource,
             McpTargetsResource,
@@ -124,23 +148,26 @@ class DisseqtAPIClient:
         self.test_plan_runs = TestPlanRunsResource(self)
         self.jailbreak = JailbreakResource(self)
         self.mr = MrResource(self)
+        self.applications = ApplicationsResource(self)
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def _build_headers(self) -> dict[str, str]:
-        """Build HTTP headers for API requests."""
-        return {
+        """Build HTTP headers; X-Project-Id only when a project is known."""
+        headers = {
             "X-API-Key": self.api_key,
-            "X-Project-Id": self.project_id,
             "Content-Type": "application/json",
             **sdk_identity_headers(),
         }
+        if self.project_id:
+            headers["X-Project-Id"] = self.project_id
+        return headers
 
     def _url(self, path: str) -> str:
         """Build a full URL from a relative path under the prompt-packs prefix."""
-        return f"{self.base_url}{_PROMPT_PACKS_BASE}{path}"
+        return f"{self.base_url}{self._packs_prefix}{path}"
 
     def _request(
         self,
@@ -220,15 +247,16 @@ class DisseqtAPIClient:
         *,
         json_payload: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
+        base: str | None = None,
     ) -> dict[str, Any]:
-        """HTTP request against ``base_url + path`` (skips the packs prefix).
+        """HTTP request against ``(base or base_url) + path`` (skips the packs prefix).
 
         Used by the resource clients (``client.targets``, ``client.packs``,
         …) whose endpoints live at absolute ``/api/v1/*`` paths on the same
         gateway. Same headers, same 426 handling, same error envelope as
         :meth:`_request`.
         """
-        url = f"{self.base_url}{path}"
+        url = f"{base or self.base_url}{path}"
         headers = self._build_headers()
         query_params: dict[str, str] | None = None
         if params:
@@ -346,6 +374,13 @@ class DisseqtAPIClient:
                 message=f"Network error: {e}",
                 response_body="",
             ) from e
+
+    def whoami(self) -> dict[str, Any]:
+        """``{project_id, organization_id, user_id}`` the gateway derives from the key.
+
+        Served by the gateway (``GET /api/v1/whoami``), not by dataset-backend.
+        """
+        return self._request_abs("GET", "/api/v1/whoami")
 
     # ------------------------------------------------------------------
     # Generation
@@ -513,16 +548,13 @@ class DisseqtAPIClient:
             json_payload=request.to_payload(),
         )
 
-    def list_run_output_validations(self, run_id: str) -> dict[str, Any]:
-        """List output validations for a specific run.
+    def list_run_output_validations(self, pack_id: str) -> dict[str, Any]:
+        """List output validations for a prompt pack.
 
-        Args:
-            run_id: ID of the run
-
-        Returns:
-            List of output validations
+        No per-run route exists; the registered one is ``/:id/output-validations``
+        keyed by pack id (api/server.go sdkPromptPackRoutes).
         """
-        return self._request("GET", f"/runs/{run_id}/output-validations")
+        return self._request("GET", f"/{pack_id}/output-validations")
 
     def get_output_validation(self, validation_id: str) -> dict[str, Any]:
         """Get details of a specific output validation.

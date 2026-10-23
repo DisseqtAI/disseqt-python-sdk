@@ -12,7 +12,7 @@ seeding requests. Shape::
       "auth": {
         "api_key":    "sk_live_...",
         "project_id": "...",
-        "base_url":   "https://api.disseqt.ai/realtime-validations"
+        "base_url":   "https://api.disseqt.ai/dataset"
       }
     }
 """
@@ -26,6 +26,10 @@ from pathlib import Path
 from typing import Any
 
 CONFIG_DIR = Path.home() / ".disseqt"
+ENV_API_KEY = "DISSEQT_API_KEY"
+ENV_PROJECT_ID = "DISSEQT_PROJECT_ID"
+ENV_BASE_URL = "DISSEQT_BASE_URL"
+DEFAULT_BASE_URL = "https://api.disseqt.ai/dataset"
 CONFIG_PATH = CONFIG_DIR / "config.json"
 
 # 0o600 file, 0o700 dir — owner-only rw / rwx.
@@ -65,6 +69,26 @@ def load() -> dict[str, Any] | None:
         return None
     auth = data.get("auth")
     return auth if isinstance(auth, dict) else None
+
+
+def resolve(
+    api_key: str | None = None, project_id: str | None = None
+) -> tuple[str | None, str | None, str]:
+    """``(api_key, project_id, source)``: explicit args, then env, then config.
+    The key's own source supplies the project, so env and config never mix."""
+    if api_key:
+        return api_key, project_id or None, "args"
+    env_key = os.environ.get(ENV_API_KEY)
+    if env_key:
+        return env_key, project_id or os.environ.get(ENV_PROJECT_ID) or None, "env"
+    stored = load() or {}
+    return stored.get("api_key") or None, project_id or stored.get("project_id") or None, "config"
+
+
+def resolve_base_url(base_url: str | None = None) -> str:
+    """Dataset gateway base: explicit, then ``DISSEQT_BASE_URL``, then config, then default."""
+    url = base_url or os.environ.get(ENV_BASE_URL) or (load() or {}).get("base_url")
+    return str(url or DEFAULT_BASE_URL).rstrip("/")
 
 
 def save(auth: dict[str, Any]) -> None:

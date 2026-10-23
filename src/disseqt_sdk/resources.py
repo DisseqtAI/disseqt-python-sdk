@@ -18,12 +18,27 @@ from __future__ import annotations
 import builtins
 from typing import TYPE_CHECKING, Any
 
+from .models.redteam import TestingRunStatus, TestingValidateResult, has_more_pages
+
 if TYPE_CHECKING:
     from .api_client import DisseqtAPIClient
 
 # Server-side enum for pack publishing (api/prompt_packs_handlers.go
 # publishPromptPack: binding:"required,oneof=PRIVATE PROJECT ORGANIZATION PUBLIC").
 PACK_SHARING_SCOPES = ("PRIVATE", "PROJECT", "ORGANIZATION", "PUBLIC")
+
+
+def _one_target(**ids: str | None) -> tuple[str, str] | None:
+    """The single ``(field, value)`` among target kwargs; >1 is a ValueError."""
+    given = [(k, v) for k, v in ids.items() if v]
+    if len(given) > 1:
+        raise ValueError(f"pass at most one target, got {[k for k, _ in given]}")
+    return given[0] if given else None
+
+
+def _with_fields(payload: dict[str, Any] | None, **fields: Any) -> dict[str, Any]:
+    """Shallow copy of ``payload`` with ``fields`` added (never mutates the caller's dict)."""
+    return {**(payload or {}), **fields}
 
 
 class _Base:
@@ -99,8 +114,10 @@ class TargetsResource(_Base):
         return self._req("POST", f"{self._BASE}/test-connection", json_payload=payload)
 
     def parse_curl(self, curl_text: str) -> dict[str, Any]:
-        """Parse a curl command into a target-integration preview."""
-        return self._req("POST", f"{self._BASE}/parse-curl", json_payload={"curl": curl_text})
+        """Parse a curl command (api/app_integration_types.go ``curl_commands``)."""
+        return self._req(
+            "POST", f"{self._BASE}/parse-curl", json_payload={"curl_commands": curl_text}
+        )
 
 
 class RagTargetsResource(_Base):
@@ -241,8 +258,23 @@ class RunsResource(_Base):
 
     _BASE = "/api/v1/sdk/prompt-packs"
 
-    def create(self, pack_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._req("POST", f"{self._BASE}/{pack_id}/runs", json_payload=payload)
+    def create(
+        self,
+        pack_id: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        application_id: str | None = None,
+        app_integration_id: str | None = None,
+        endpoint_url: str | None = None,
+    ) -> dict[str, Any]:
+        """api/prompt_pack_runs_handlers.go PromptPackRunRequest; target ids are top-level."""
+        target = _one_target(
+            application_id=application_id,
+            app_integration_id=app_integration_id,
+            endpoint_url=endpoint_url,
+        )
+        body = _with_fields(payload, **dict([target])) if target else dict(payload or {})
+        return self._req("POST", f"{self._BASE}/{pack_id}/runs", json_payload=body)
 
     def list(self, pack_id: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         return self._req("GET", f"{self._BASE}/{pack_id}/runs", params=params)
@@ -284,15 +316,10 @@ class RunsResource(_Base):
         output_ids: builtins.list[str],
         pack_id: str,
     ) -> dict[str, Any]:
-        """Add selected run outputs to a prompt pack.
-
-        POST /prompt-packs/{pack_id}/prompts/add with body
-        {"run_id": ..., "output_ids": [...]}.
-        """
+        """Attach entries to a pack: ``/prompts/add`` binds only ``entry_ids``
+        (api/prompt_pack_entry_handlers.go AddPromptsToPackRequest); ``run_id`` is unused."""
         return self._req(
-            "POST",
-            f"{self._BASE}/{pack_id}/prompts/add",
-            json_payload={"run_id": run_id, "output_ids": output_ids},
+            "POST", f"{self._BASE}/{pack_id}/prompts/add", json_payload={"entry_ids": output_ids}
         )
 
 
@@ -318,8 +345,11 @@ class OutputValidationsResource(_Base):
     def rca_status(self, validation_id: str) -> dict[str, Any]:
         return self._req("GET", f"{self._BASE}/output-validations/{validation_id}/rca-status")
 
-    def results_csv(self, validation_id: str) -> dict[str, Any]:
-        return self._req("GET", f"{self._BASE}/output-validations/{validation_id}/results/csv")
+    def results_csv(self, validation_id: str) -> bytes:
+        """Raw CSV bytes."""
+        return self._req_bytes(
+            "GET", f"{self._BASE}/output-validations/{validation_id}/results/csv"
+        )
 
     def compare(self, pack_id: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         return self._req("GET", f"{self._BASE}/{pack_id}/validations/compare", params=params)
@@ -337,8 +367,24 @@ class SessionsResource(_Base):
 
     _BASE = "/api/v1/testing"
 
-    def create(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._req("POST", f"{self._BASE}/sessions", json_payload=payload)
+    def create(
+        self,
+        payload: dict[str, Any],
+        *,
+        application_id: str | None = None,
+        app_integration_id: str | None = None,
+        endpoint_url: str | None = None,
+    ) -> dict[str, Any]:
+        """Target kwargs go into ``target_config`` (api/testing_handlers.go)."""
+        target = _one_target(
+            application_id=application_id,
+            app_integration_id=app_integration_id,
+            endpoint_url=endpoint_url,
+        )
+        body = dict(payload)
+        if target:
+            body["target_config"] = _with_fields(body.get("target_config"), **dict([target]))
+        return self._req("POST", f"{self._BASE}/sessions", json_payload=body)
 
     def list(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
         return self._req("GET", f"{self._BASE}/sessions", params=params)
@@ -355,11 +401,38 @@ class SessionsResource(_Base):
     def list_runs(self, session_id: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         return self._req("GET", f"{self._BASE}/sessions/{session_id}/runs", params=params)
 
-    def report_csv(self, session_id: str) -> dict[str, Any]:
-        return self._req("GET", f"{self._BASE}/sessions/{session_id}/report/csv")
+    def report_csv(self, session_id: str) -> bytes:
+        """Raw CSV bytes."""
+        return self._req_bytes("GET", f"{self._BASE}/sessions/{session_id}/report/csv")
 
     def get_run(self, run_id: str) -> dict[str, Any]:
         return self._req("GET", f"{self._BASE}/runs/{run_id}")
+
+    def run_status(self, run_id: str) -> TestingRunStatus:
+        """Typed run status incl. ``stop_reason``; ``is_terminal`` covers ``stopped``."""
+        return TestingRunStatus.from_dict(self.get_run(run_id))
+
+    def validate(
+        self,
+        input: str,
+        validators: builtins.list[str],
+        *,
+        output: str = "",
+        input_context: str = "",
+        threshold: float | None = None,
+    ) -> TestingValidateResult:
+        """POST /testing/validate (api/testing_validate_handler.go TestingValidateRequest)."""
+        body: dict[str, Any] = {
+            "input": input,
+            "output": output,
+            "validators": validators,
+            "input_context": input_context,
+        }
+        if threshold is not None:
+            body["threshold"] = threshold
+        return TestingValidateResult.from_dict(
+            self._req("POST", f"{self._BASE}/validate", json_payload=body)
+        )
 
     def run_results(self, run_id: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         return self._req("GET", f"{self._BASE}/runs/{run_id}/results", params=params)
@@ -370,26 +443,20 @@ class SessionsResource(_Base):
     def get_breach(self, run_id: str, breach_id: str) -> dict[str, Any]:
         """Fetch one breach ("finding") from a run.
 
-        The dataset-backend has no standalone ``/findings/:id`` endpoint —
-        it returns the whole breach list on ``/runs/:id/results/breaches``.
-        We client-side filter by id (matching the field the backend uses:
-        one of ``id`` / ``breach_id`` / ``finding_id``).
+        No ``/findings/:id`` route exists, so walk the paginated breach list
+        (api/testing_types.go ListTestingResultsResponse ``{items, pagination}``).
         """
-        payload: Any = self.run_breaches(run_id)
-        if isinstance(payload, builtins.list):
-            rows: builtins.list[Any] = payload
-        elif isinstance(payload, dict):
-            data = payload.get("data") or payload.get("breaches") or []
-            rows = data if isinstance(data, builtins.list) else []
-        else:
-            rows = []
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            for key in ("id", "breach_id", "finding_id"):
-                if str(row.get(key, "")) == breach_id:
+        page, seen = 1, 0
+        while True:
+            payload = self.run_breaches(run_id, params={"page": page, "page-size": 100})
+            rows = payload.get("items") or []
+            for row in rows:
+                if isinstance(row, dict) and str(row.get("id", "")) == breach_id:
                     return row
-        raise KeyError(f"breach {breach_id} not found in run {run_id}")
+            seen += len(rows)
+            if not has_more_pages(payload, page, seen):
+                raise KeyError(f"breach {breach_id} not found in run {run_id}")
+            page += 1
 
     def cancel_run(self, run_id: str) -> dict[str, Any]:
         return self._req("POST", f"{self._BASE}/runs/{run_id}/cancel")
@@ -481,8 +548,33 @@ class VulnerabilitiesResource(_Base):
     def get(self, vuln_id: str) -> dict[str, Any]:
         return self._req("GET", f"{self._BASE}/{vuln_id}")
 
-    def test(self, vuln_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._req("POST", f"{self._BASE}/{vuln_id}/test", json_payload=payload)
+    def test(
+        self,
+        vuln_id: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        application_id: str | None = None,
+        app_integration_id: str | None = None,
+    ) -> dict[str, Any]:
+        """api/vulnerability_types.go VulnerabilityTestRequest; app integrations only."""
+        target = _one_target(application_id=application_id, app_integration_id=app_integration_id)
+        body = _with_fields(payload, **dict([target])) if target else dict(payload or {})
+        return self._req("POST", f"{self._BASE}/{vuln_id}/test", json_payload=body)
+
+
+def plan_run_target(
+    application_id: str | None, app_integration_id: str | None, endpoint_url: str | None
+) -> dict[str, str] | None:
+    """api/test_plan_runs_create_types.go TestPlanRunTargetConfig for one target id."""
+    target = _one_target(
+        application_id=application_id,
+        app_integration_id=app_integration_id,
+        endpoint_url=endpoint_url,
+    )
+    if target is None:
+        return None
+    mode = "direct" if target[0] == "endpoint_url" else "app_integration"
+    return {"execution_mode": mode, target[0]: target[1]}
 
 
 class TestPlansResource(_Base):
@@ -557,8 +649,19 @@ class TestPlanRunsResource(_Base):
     _BASE = "/api/v1/test-plan-runs"
     _PLAN_BASE = "/api/v1/test-plans"
 
-    def create(self, plan_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._req("POST", f"{self._PLAN_BASE}/{plan_id}/runs", json_payload=payload)
+    def create(
+        self,
+        plan_id: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        application_id: str | None = None,
+        app_integration_id: str | None = None,
+        endpoint_url: str | None = None,
+    ) -> dict[str, Any]:
+        """Target kwargs build ``target`` (api/test_plan_runs_create_types.go)."""
+        target = plan_run_target(application_id, app_integration_id, endpoint_url)
+        body = _with_fields(payload, target=target) if target else dict(payload or {})
+        return self._req("POST", f"{self._PLAN_BASE}/{plan_id}/runs", json_payload=body)
 
     def list_for_plan(self, plan_id: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         return self._req("GET", f"{self._PLAN_BASE}/{plan_id}/runs", params=params)
@@ -680,8 +783,24 @@ class MrResource(_Base):
     def generate_next_interaction(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._req("POST", f"{self._BASE}/interactions/generate-next", json_payload=payload)
 
-    def batch_automate(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._req("POST", f"{self._BASE}/batch-automate", json_payload=payload)
+    def batch_automate(
+        self,
+        payload: dict[str, Any],
+        *,
+        application_id: str | None = None,
+        app_integration_id: str | None = None,
+    ) -> dict[str, Any]:
+        """api/mr_jailbreak_batch_automation.go: ``app_integration_id`` is top-level,
+        the AI System is ``jailbreak_config.application_id``; either replaces the template."""
+        target = _one_target(application_id=application_id, app_integration_id=app_integration_id)
+        body = dict(payload)
+        if target and target[0] == "application_id":
+            body["jailbreak_config"] = _with_fields(
+                body.get("jailbreak_config"), application_id=target[1]
+            )
+        elif target:
+            body["app_integration_id"] = target[1]
+        return self._req("POST", f"{self._BASE}/batch-automate", json_payload=body)
 
     # ---- Strategies -----------------------------------------------------
     def strategy_successful_paths(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -696,7 +815,56 @@ class MrResource(_Base):
         )
 
 
+class ApplicationsResource(_Base):
+    """AI Systems: list via policy-management, link/unlink via dataset-backend."""
+
+    _LINKS = "/api/v1/llm/application-links"
+
+    def list(self) -> dict[str, Any]:
+        """``{applications, count}`` (policy-management handlers_applications.go)."""
+        return self._client._request_abs(
+            "GET", "/api/v1/applications", base=self._client.policies_base_url
+        )
+
+    def links(self, application_id: str) -> dict[str, Any]:
+        """Bucketed links (api/application_links.go ListApplicationLinks)."""
+        return self._req("GET", self._LINKS, params={"application_id": application_id})
+
+    def link(
+        self, application_id: str, app_integration_id: str, role: str | None = None
+    ) -> dict[str, Any]:
+        """api/application_links.go createApplicationLinkRequest (app integrations only)."""
+        body: dict[str, Any] = {
+            "application_id": application_id,
+            "integration_type": "app_integration",
+            "integration_id": app_integration_id,
+        }
+        if role:
+            body["role"] = role
+        return self._req("POST", self._LINKS, json_payload=body)
+
+    def unlink(self, application_id: str) -> builtins.list[str]:
+        """Delete every link of the AI System; returns the deleted link ids."""
+        listing = self.links(application_id)
+        ids = [
+            str(row["id"])
+            for bucket in (
+                "app_integrations",
+                "llm_integrations",
+                "rag_integrations",
+                "mcp_integrations",
+            )
+            for row in listing.get(bucket) or []
+        ]
+        if not ids:
+            raise KeyError(f"AI System {application_id} has no linked integration")
+        for link_id in ids:
+            self._req("DELETE", f"{self._LINKS}/{link_id}")
+        return ids
+
+
 __all__ = [
+    "ApplicationsResource",
     "ByovValidatorsResource",
     "JailbreakResource",
     "McpTargetsResource",

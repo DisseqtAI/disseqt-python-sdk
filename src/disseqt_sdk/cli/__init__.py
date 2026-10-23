@@ -17,6 +17,7 @@ from .redteam import redteam as redteam_group
 from .scan import scan as scan_cmd
 from .whoami import whoami as whoami_cmd
 
+app_group = _resources.app
 byov_group = _resources.byov
 mcp_target_group = _resources.mcp_target
 output_validation_group = _resources.output_validation
@@ -42,6 +43,7 @@ def cli() -> None:
 
 
 cli.add_command(redteam_group)
+cli.add_command(app_group)
 cli.add_command(scan_cmd)
 cli.add_command(target_group)
 cli.add_command(rag_target_group)

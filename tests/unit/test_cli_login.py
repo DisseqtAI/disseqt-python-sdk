@@ -156,8 +156,12 @@ def test_no_env_no_config_mentions_login(runner: CliRunner) -> None:
     assert "disseqt login" in result.output
 
 
-def test_whoami_reads_stored_config(runner: CliRunner) -> None:
+def test_whoami_reads_stored_config(runner: CliRunner, requests_mock) -> None:
     token_store.save({"api_key": "sk_stored_abc", "project_id": "p_stored"})
+    requests_mock.get(
+        "https://api.disseqt.ai/dataset/api/v1/whoami",
+        json={"status": "success", "data": {"project_id": "p_stored", "user_id": "u"}},
+    )
     result = runner.invoke(cli, ["whoami", "--json"])
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)

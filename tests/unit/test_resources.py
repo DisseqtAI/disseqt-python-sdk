@@ -226,9 +226,9 @@ class TestRunsResource:
         requests_mock.post(f"{self.PATH}/p1/prompts/add", json={"added": 2})
         result = client.runs.add_to_pack("r1", ["o1", "o2"], "p1")
         assert result == {"added": 2}
-        # Body shape: {"run_id": ..., "output_ids": [...]}
+        # api/prompt_pack_entry_handlers.go AddPromptsToPackRequest binds only entry_ids.
         sent = requests_mock.request_history[0].json()
-        assert sent == {"run_id": "r1", "output_ids": ["o1", "o2"]}
+        assert sent == {"entry_ids": ["o1", "o2"]}
 
 
 class TestOutputValidationsResource:
@@ -528,19 +528,28 @@ class TestJailbreakResource:
 class TestSessionsGetBreach:
     BREACHES_URL = f"{BASE_URL}/api/v1/testing/runs/run-1/results/breaches"
 
-    def test_get_breach_from_list_payload(self, requests_mock, client: DisseqtAPIClient) -> None:
+    def test_get_breach_from_items_page(self, requests_mock, client: DisseqtAPIClient) -> None:
+        # api/testing_types.go ListTestingResultsResponse {items, pagination}.
         requests_mock.get(
             self.BREACHES_URL,
-            json=[{"id": "b1", "detail": "one"}, {"id": "b2", "detail": "two"}],
+            json={
+                "items": [{"id": "b1"}, {"id": "b2", "detail": "two"}],
+                "pagination": {"page": 1, "page_size": 100, "total": 2, "has_next": False},
+            },
         )
         assert client.sessions.get_breach("run-1", "b2") == {"id": "b2", "detail": "two"}
 
-    def test_get_breach_from_dict_payload(self, requests_mock, client: DisseqtAPIClient) -> None:
+    def test_get_breach_walks_pages(self, requests_mock, client: DisseqtAPIClient) -> None:
+        page = {"page_size": 1, "total": 2, "total_pages": 2}
         requests_mock.get(
             self.BREACHES_URL,
-            json={"data": [{"breach_id": "b1"}, {"breach_id": "b2", "note": "hit"}]},
+            [
+                {"json": {"items": [{"id": "b1"}], "pagination": {**page, "has_next": True}}},
+                {"json": {"items": [{"id": "b2"}], "pagination": {**page, "has_next": False}}},
+            ],
         )
-        assert client.sessions.get_breach("run-1", "b2") == {"breach_id": "b2", "note": "hit"}
+        assert client.sessions.get_breach("run-1", "b2") == {"id": "b2"}
+        assert requests_mock.last_request.qs["page"] == ["2"]
 
     def test_get_breach_missing_raises(self, requests_mock, client: DisseqtAPIClient) -> None:
         requests_mock.get(self.BREACHES_URL, json=[{"id": "b1"}])
