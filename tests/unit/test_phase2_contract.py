@@ -668,3 +668,20 @@ def requests_mock_any_link() -> Any:
     import re
 
     return re.compile(rf"{BASE}/api/v1/llm/application-links/.+")
+
+
+def test_wait_terminal_reads_mr_job_status_nested_under_job(requests_mock, monkeypatch):
+    # GET /mr-jailbreak/jobs/:id returns {job: {status}, interactions} (api/mr_jailbreak_handlers.go).
+    from disseqt_sdk.cli import _http
+
+    monkeypatch.setenv("DISSEQT_API_KEY", "k")
+    monkeypatch.setenv("DISSEQT_BASE_URL", "http://x")
+    requests_mock.get(
+        "http://x/api/v1/mr-jailbreak/jobs/j1",
+        json={
+            "status": "success",
+            "data": {"job": {"status": "FAILED", "stop_reason": "max_depth"}, "interactions": []},
+        },
+    )
+    out = _http.wait_terminal("/api/v1/mr-jailbreak/jobs/j1", 0.01, 0.2)
+    assert out["job"]["status"] == "FAILED"

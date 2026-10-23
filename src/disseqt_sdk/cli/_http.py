@@ -109,7 +109,12 @@ def request(
 
 
 def _status(payload: Any) -> str:
-    return str(payload.get("status") or "") if isinstance(payload, dict) else ""
+    if not isinstance(payload, dict):
+        return ""
+    # MR jobs nest it: GET /mr-jailbreak/jobs/:id -> {job: {status}, interactions}.
+    job = payload.get("job")
+    nested = job.get("status") if isinstance(job, dict) else None
+    return str(payload.get("status") or nested or "")
 
 
 def wait_terminal(
