@@ -21,16 +21,37 @@ npm install -g @disseqt-ai/sdk      # Node 18.18+   -> `disseqt` on PATH
 
 ## Sign in
 
+Initialise with one value: your **project API key** in `DISSEQT_API_KEY`. No project id is needed; the key
+resolves to its project, organization and user.
+
+```bash
+export DISSEQT_API_KEY=<your project API key>
+```
+
+```python
+from disseqt_sdk import DisseqtAPIClient
+
+client = DisseqtAPIClient()  # reads DISSEQT_API_KEY; or DisseqtAPIClient(api_key="...")
+```
+
+```ts
+import { DisseqtResourceClient } from '@disseqt-ai/sdk';
+
+const client = new DisseqtResourceClient(); // reads DISSEQT_API_KEY; or { apiKey: '...' }
+```
+
+For the CLI on your own machine, you can store the key once instead:
+
 ```bash
 disseqt login            # paste the key; it is verified, then stored in ~/.disseqt/config.json (0600)
 disseqt whoami           # project, organization and user the key resolves to
 ```
 
-Or set environment variables (they win over the stored login; handy in CI):
+Environment variables win over a stored login, so CI only needs `DISSEQT_API_KEY`:
 
 | Variable                                        | Purpose                                                     |
 | ----------------------------------------------- | ----------------------------------------------------------- |
-| `DISSEQT_API_KEY`                               | API key (required)                                          |
+| `DISSEQT_API_KEY`                               | Project API key (required)                                  |
 | `DISSEQT_BASE_URL`                              | Gateway, default `https://api.disseqt.ai/dataset`           |
 | `DISSEQT_POLICIES_BASE_URL`                     | AI System registry, default `https://api.disseqt.ai/policy` |
 | `DISSEQT_PROJECT_ID`, `DISSEQT_ORGANIZATION_ID` | Optional; derived from the key when unset                   |
