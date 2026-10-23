@@ -7,60 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed (agentic SDK only, backward-compatible)
-- **`project_id` on `DisseqtAgenticClient` is now optional.** Kong traces-auth plugin 2.2.1+
-  resolves the owning project (plus org + user) server-side from
-  `api_key` alone via auth-svc's `validate-api-key` endpoint
-  (`user_api_keys` has a `UNIQUE (api_key_hash)` index — the api_key is a
-  deterministic pointer to exactly one project), so new call sites can
-  omit `project_id=`. Deployments on older Kong plugin versions that
-  still require `project.id` in the OTLP body keep working unchanged:
-  pass `project_id=...` and it is stamped onto every payload as the
-  `project.id` resource attribute and the `X-Project-Id` request header,
-  exactly as before.
-  - `DisseqtTrace`, `DisseqtSpan`, and `EnrichedSpan` no longer carry a
-    per-span `project_id` field — those were never read anywhere beyond
-    the resource-level stamp; the client-level kwarg is the single
-    source of truth.
-  - No code change required at any existing call site. New call sites
-    may choose to drop `project_id=` once their deployment runs
-    Kong traces-auth plugin 2.2.1+.
-  - **Release coordination:** the README quick-start now shows
-    `project_id=` as optional. The current prod plugin (2.2.0) still
-    returns 400 when both `project.id` and `X-Project-Id` are missing,
-    so this SDK revision should not ship in a release until
-    [disseqt-platform PR #487](https://github.com/DisseqtAI/disseqt-platform/pull/487)
-    (plugin 2.2.1) is deployed to every environment customers may hit.
+### Added
+- New `disseqt` CLI (`pip install "disseqt-ai-sdk[cli]"` for YAML configs): `login`/`logout`/`whoami`, `redteam`, `scan`, and resource groups `target`, `rag-target`, `mcp-target`, `pack`, `pp-run`, `output-validation`, `session`, `byov`, `vulnerability`, `plan`, `plan-run` and `app`.
+- `disseqt redteam` runs single-turn and multi-turn attacks, YAML suites (`redteam run`, see `docs/redteam-example.yaml`), validations, results, reports, analytics and recommendations against the dataset gateway.
+- Every red-team entry point takes exactly one target, `--app`, `--integration` or `--endpoint`, and exits 2 on zero or several.
+- `disseqt scan` sends your code to the `llm-judge-*` app-sec validators and exits 1 when findings remain or a batch fails (`--diff BASE..HEAD` scans only changed files).
+- Ctrl-C or `--max-wait` expiry while polling cancels the run server-side and exits 130 or 1.
+- `--page`, `--page-size` and `--all` on `redteam results`, `list-attacks` and `breach list`.
+- `DisseqtAPIClient` resource clients (`targets`, `packs`, `runs`, `output_validations`, `sessions`, `byov_validators`, `vulnerabilities`, `test_plans`, `test_plan_runs`, `jailbreak`, `mr`, `applications`) and `whoami()`.
+- `Client` validator factories (`client.input.toxicity(...)`, `client.rag...`) and `validate_sync()`, matching the Node SDK.
+- Extension base classes `BaseAttack`, `BaseSingleTurnAttack`, `BaseMultiTurnAttack`, `BaseVulnerability`, `BaseLLM` and `BaseMetric`.
+- `SDKConfigInput.evaluation_examples` sends few-shot `Example`s to quality LLM judges.
+- `CreateRunRequest.application_id` lets the backend pick the AI System's linked integration.
+
+### Changed
+- `project_id` is optional everywhere (`Client`, `DisseqtAPIClient`, `disseqt login`, `DisseqtAgenticClient`) because the gateway derives it from the API key.
+- **BREAKING:** credentials resolve as explicit arguments, then `DISSEQT_API_KEY`/`DISSEQT_PROJECT_ID`, then `~/.disseqt/config.json`, and `Client()` previously preferred the config file.
+- **BREAKING:** a config file readable by anyone but its owner raises `AuthConfigPermissionError` (CLI exit 2) instead of being ignored.
+- **BREAKING:** `DisseqtAPIClient` defaults to `https://api.disseqt.ai/dataset` (was `http://localhost:8000`) and raises `AuthMissingError` when no API key resolves.
+- **BREAKING:** `DisseqtAPIClient.list_run_output_validations()` takes a pack id, the only route the backend serves.
+- **BREAKING:** `results_csv()` and `report_csv()` return raw `bytes`.
+- **BREAKING:** `PacksResource.publish()` requires a sharing scope (default `PRIVATE`) and `add_prompt()` is replaced by `attach_entries(pack_id, entry_ids)`.
+- `DisseqtTrace`, `DisseqtSpan` and `EnrichedSpan` no longer carry a per-span `project_id`.
 
 ### Fixed
-- **``CreateRunRequest.run_name`` now actually reaches the server.** Since
-  this SDK's first release, ``to_payload()`` sent the run name under the
-  key ``"run_name"``, but the backend has only ever bound
-  ``"prompt_pack_run_name"``. Every ``run_name`` a caller supplied was
-  silently ignored — no error, no warning — and the backend fell back to
-  its own auto-generated name. If your runs have shown auto-generated
-  names regardless of what you passed as ``run_name``, this was why.
-  **No code change is required on your part** — the constructor argument
-  is still ``run_name``; only the wire key changed. Runs you create after
-  upgrading will use the name you actually give them. If anything of
-  yours (a dashboard, a script, a test) keys off the auto-generated name
-  pattern, expect that to change.
-- ``CreateRunRequest.run_type`` is no longer sent to the server. The
-  backend has never had a matching field — verified against its full git
-  history back to this endpoint's first commit — and always computes its
-  own run type server-side. This argument has done nothing since it was
-  introduced; it remains a required constructor argument so no existing
-  caller breaks, but is now omitted from the payload rather than sent as
-  dead weight. No observable behavior change from the caller's side of a
-  successful call.
+- `CreateRunRequest.run_name` now reaches the server instead of being silently replaced by an auto-generated name.
+- `CreateRunRequest.run_type` is no longer sent, since the backend never read it.
 
-### Added
-- ``CreateRunRequest`` (prompt packs) gained an optional ``application_id``
-  field. When set and no explicit ``llm_id``/``app_integration_id``/
-  ``custom_llm_id`` is otherwise supplied on the run, the backend
-  auto-resolves it to that Application's ("AI System") one linked
-  integration. Omitted from the request payload entirely when unset --
-  existing callers see no change on the wire.
+### Deprecated
+- `Client(policies=..., realtime_policy_base_url=...)`, `validate(..., policies=...)` and the `disseqt_sdk.policy` helpers emit `DeprecationWarning` and will be removed.
+- `--target` on `redteam attack` and `redteam vuln-test` is replaced by `--app`, `--integration` or `--endpoint`.
 
 ## [0.11.2] - 2026-08-26
 

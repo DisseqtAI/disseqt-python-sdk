@@ -2,8 +2,25 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
+
+
+@dataclass(frozen=True, slots=True)
+class Example:
+    """One judge few-shot example used for calibration (Phase 1d).
+
+    Passed inside ``SDKConfigInput.evaluation_examples`` and serialized
+    into the ``judge.evaluation_examples`` block on the wire. Quality
+    judges only — safety judges ignore caller-supplied criteria and
+    examples (server stamps ``others.criteria_ignored=true`` when
+    supplied).
+    """
+
+    input: str
+    expected_output: str
+    rationale: str = ""
+    score: float | None = None
 
 
 @dataclass(slots=True)
@@ -65,6 +82,9 @@ class SDKConfigInput:
     # default 0.1). Both are ignored by validators that do not use them.
     requested_language: str | None = None
     min_share: float | None = None
+    # Few-shot judge calibration examples (quality judges only), sent as
+    # ``judge.evaluation_examples``.
+    evaluation_examples: list[Example] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         has_integration_id = bool(self.llm_id or (self.judge or {}).get("custom_llm_id"))
@@ -101,6 +121,16 @@ class SDKConfigInput:
         judge_block = dict(self.judge) if self.judge else {}
         if self.llm_id:
             judge_block["custom_llm_id"] = self.llm_id
+        if self.evaluation_examples:
+            judge_block["evaluation_examples"] = [
+                {
+                    "input": e.input,
+                    "expected_output": e.expected_output,
+                    **({"rationale": e.rationale} if e.rationale else {}),
+                    **({"score": e.score} if e.score is not None else {}),
+                }
+                for e in self.evaluation_examples
+            ]
         if judge_block:
             out["judge"] = judge_block
         return out

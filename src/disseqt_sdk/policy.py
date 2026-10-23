@@ -1,5 +1,9 @@
 """Helpers for the realtime-policy evaluation response.
 
+.. deprecated:: 0.12.0
+    Kept for 0.11 callers; every helper emits :class:`DeprecationWarning`. The
+    policy-evaluate endpoint is not served by any in-scope backend.
+
 The server-side endpoint POST /api/v1/sdk/policies/{policy_id}/evaluate
 returns a structured response with a per-rule breakdown. These helpers
 parse it into typed dataclasses and answer the common "should I block?"
@@ -39,8 +43,18 @@ caller just records the request id and moves on.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
+
+
+def _deprecated(name: str) -> None:
+    warnings.warn(
+        f"disseqt_sdk.policy.{name} is deprecated and will be removed",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+
 
 # decision values
 DECISION_BLOCK = "BLOCK"
@@ -122,6 +136,7 @@ def parse(response: dict[str, Any]) -> PolicyDecision | None:
     Returns None when the response doesn't carry a policy verdict (e.g.
     server returned an error envelope with no policy_id).
     """
+    _deprecated("parse")
     payload = _unwrap_envelope(response)
     if not payload.get("policy_id"):
         return None
@@ -170,6 +185,7 @@ def is_blocking(response: dict[str, Any]) -> bool:
     check. Reads ``decision``, which is the actual verdict — independent
     of sync/async.
     """
+    _deprecated("is_blocking")
     payload = _unwrap_envelope(response)
     return str(payload.get("decision", "")) == DECISION_BLOCK
 
@@ -183,6 +199,7 @@ def is_async(response: dict[str, Any]) -> bool:
     background processing completes. Callers usually log and move on
     instead of acting on ``is_blocking``.
     """
+    _deprecated("is_async")
     payload = _unwrap_envelope(response)
     return str(payload.get("enforcement", "")) == ENFORCEMENT_ASYNC
 
@@ -204,6 +221,7 @@ def any_blocking(result: Any) -> bool:
         if any_blocking(result):
             ...  # at least one policy said BLOCK
     """
+    _deprecated("any_blocking")
     if isinstance(result, dict) and isinstance(result.get("policies"), list):
         return any(is_blocking(p) for p in result["policies"] if isinstance(p, dict))
     if isinstance(result, list):

@@ -1,0 +1,7 @@
+{
+  "results": [
+    {"validator_name": "toxicity", "score": 0.0, "failed": false, "rule_status": "error", "error": "timeout"}
+  ],
+  "aggregate_decision": "BORDERLINE",
+  "processed_at": "2026-10-23T10:00:00Z"
+}

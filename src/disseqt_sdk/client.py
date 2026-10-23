@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+import warnings
 from collections.abc import Mapping
 from typing import Any, Protocol, cast, runtime_checkable
 
@@ -12,6 +13,16 @@ import requests
 from disseqt_logging import digest, get_logger
 
 from ._version import check_version_notice, sdk_identity_headers
+from .auth import AuthMissingError, resolve
+from .factories import (
+    _AgenticFactory,
+    _CompositeFactory,
+    _InputValidatorFactory,
+    _McpFactory,
+    _OutputValidatorFactory,
+    _RagFactory,
+    _ThemesFactory,
+)
 from .models.composite_score import CompositeScoreRequest
 from .models.themes_classifier import ThemesClassifierRequest
 from .registry import get_validator_metadata
@@ -22,12 +33,15 @@ from .validators.composite.evaluate import CompositeScoreEvaluator
 logger = get_logger(__name__)
 
 
+_POLICY_DEPRECATION = (
+    "policies=/realtime_policy_base_url= are deprecated and will be removed; the "
+    "policy-evaluate endpoint is not served by any in-scope backend"
+)
+
+
 @runtime_checkable
 class SupportsInputData(Protocol):
-    """Anything that can serialize itself to the wire-shape ``input_data``
-    dict — every ``disseqt_sdk.models`` request object implements this, so
-    a bare model (e.g. ``InputValidationRequest``) can be passed straight
-    to :meth:`Client.validate` together with ``policies=[...]``."""
+    """A bare ``disseqt_sdk.models`` request; deprecated ``policies=`` input."""
 
     def to_input_data(self) -> dict[str, Any]: ...
 
@@ -158,39 +172,18 @@ class Client:
        passed to :meth:`validate`. Hits
        ``/api/v1/sdk/validators/composite-score``. No policy involved.
 
-    3. **Run one or more published realtime policies** — pass
-       ``policies=[...]`` to :meth:`validate`, with or without a
-       validator::
-
-           from disseqt_sdk import any_blocking
-
-           result = client.validate(
-               InputValidationRequest(prompt="user prompt here"),
-               policies=["b1f8…"],
-           )
-           if any_blocking(result):
-               ...  # at least one policy said BLOCK
-
-       For each policy id, the server fetches the policy from
-       disseqt-realtime-policies-service, runs every validator the policy
-       specifies (with the policy's thresholds and decision strategy),
-       aggregates a BLOCK/PASS verdict, and publishes the result to
-       ``policy.validation.result.v1`` so it shows up on the Decisions
-       dashboard. The policy endpoints live on their own base URL
-       (``realtime_policy_base_url``) so they can be mocked or pointed at
-       a local server during tests without disturbing the validator base
-       URL. Requires ``application_name`` on the client.
-
+    ``policies=[...]`` (server-side realtime-policy evaluation) is a deprecated
+    shim that emits :class:`DeprecationWarning`.
     """
 
     def __init__(
         self,
-        project_id: str,
-        api_key: str,
-        base_url: str = "https://api.disseqt.ai/realtime-validations",
+        project_id: str | None = None,
+        api_key: str | None = None,
+        base_url: str | None = None,
         timeout: int = 30,
         application_name: str | None = None,
-        realtime_policy_base_url: str = "https://api.disseqt.ai/realtime-validations",
+        realtime_policy_base_url: str | None = None,
         policies: list[str] | None = None,
     ) -> None:
         """Initialize the Disseqt SDK client.
@@ -202,65 +195,52 @@ class Client:
                 ``/sdk/validators/...`` endpoints).
             timeout: Request timeout in seconds
             application_name: Logical name of the calling application
-                (e.g. ``"checkout-bot"``). REQUIRED to evaluate policies
-                (a client-level ``policies`` default or per-call
-                ``validate(..., policies=[...])``) — the
-                ``policy.validation.result.v1`` ledger uses this to
-                show which application produced each decision. Mirrors
-                ``service_name`` on :class:`DisseqtAgenticClient`.
-            realtime_policy_base_url: Base URL of the realtime-policy
-                evaluate endpoint. Defaults to the
-                ``/realtime-validations`` gateway — the evaluate
-                endpoint is served by production-monitoring, the same
-                service that hosts the validators (the
-                ``/realtime-policies`` gateway is the policy CRUD
-                dashboard and has no SDK routes). Kept separate from
-                ``base_url`` so the two endpoints can be mocked /
-                routed independently — override for local testing
-                (e.g. ``http://localhost:9010``) without disturbing
-                ``base_url`` callers.
-            policies: Optional default list of published policy ids.
-                When set, EVERY ``validate()`` call evaluates these
-                policies unless the call passes its own ``policies=``
-                (per-call always wins; there is no per-call opt-out —
-                use a second Client for ungoverned paths). Composite-
-                score and themes-classifier requests are incompatible
-                with policies and run classically, without the default.
-                An empty list means "no default", so env-driven config
-                degrades naturally::
-
-                    ids = [p for p in os.environ.get("DISSEQT_POLICIES", "").split(",") if p]
-                    client = Client(..., application_name="checkout-bot", policies=ids)
-
-                The list is copied defensively; later mutation of the
-                caller's list does not affect the client.
+                (e.g. ``"checkout-bot"``). Recorded on outbound requests
+                for observability. Mirrors ``service_name`` on
+                :class:`DisseqtAgenticClient`.
 
         Raises:
-            ValueError: When ``policies`` is set without an
-                ``application_name``, or contains a blank / non-string
-                entry.
+            AuthMissingError: No API key from kwargs, env or
+                ``~/.disseqt/config.json``. Fails at construction
+                instead of the first API call.
         """
-        default_policies: list[str] | None = None
-        if policies:
-            default_policies = list(policies)
+        # Precedence: kwargs, then env, then ~/.disseqt/config.json (env beats config).
+        api_key, project_id, _ = resolve(api_key, project_id)
+        if not api_key:
+            raise AuthMissingError(
+                "Missing api_key. Provide it via:\n"
+                "  1. Client(api_key=...)\n"
+                "  2. env var DISSEQT_API_KEY (DISSEQT_PROJECT_ID optional)\n"
+                "  3. `disseqt login` (writes ~/.disseqt/config.json)"
+            )
+        if realtime_policy_base_url is not None or policies:
+            warnings.warn(_POLICY_DEPRECATION, DeprecationWarning, stacklevel=2)
+        default_policies = list(policies) if policies else None
+        if default_policies is not None:
             if not all(isinstance(p, str) and p.strip() for p in default_policies):
                 raise ValueError(
-                    "Client(policies=...) must be a list of policy-id strings "
-                    f"(got {default_policies!r})"
+                    f"Client(policies=...) must be a list of policy-id strings (got {default_policies!r})"
                 )
             if not (application_name and application_name.strip()):
-                raise ValueError(
-                    "application_name is required when Client(policies=...) is "
-                    "set — the Decisions ledger attributes each decision to "
-                    "the calling application"
-                )
-        self.project_id = project_id
-        self.api_key = api_key
-        self.base_url = base_url
+                raise ValueError("application_name is required when Client(policies=...) is set")
+        self.project_id: str | None = project_id
+        self.api_key: str = api_key
+        self.realtime_policy_base_url = (
+            realtime_policy_base_url or "https://api.disseqt.ai/realtime-validations"
+        )
+        self.policies = default_policies
+        self.base_url = base_url or "https://api.disseqt.ai/realtime-validations"
         self.timeout = timeout
         self.application_name = application_name
-        self.realtime_policy_base_url = realtime_policy_base_url
-        self.policies = default_policies
+
+        # Node-style factories: ``client.input.toxicity(...)`` returns a validator for validate().
+        self.input = _InputValidatorFactory()
+        self.output = _OutputValidatorFactory()
+        self.rag = _RagFactory()
+        self.agentic = _AgenticFactory()
+        self.mcp = _McpFactory()
+        self.themes = _ThemesFactory()
+        self.composite = _CompositeFactory()
 
     def _build_headers(self) -> dict[str, str]:
         """Build HTTP headers for API requests.
@@ -268,12 +248,14 @@ class Client:
         Returns:
             Dictionary of HTTP headers
         """
-        return {
+        headers = {
             "X-API-Key": self.api_key,
-            "X-Project-Id": self.project_id,
             "Content-Type": "application/json",
             **sdk_identity_headers(),
         }
+        if self.project_id:
+            headers["X-Project-Id"] = self.project_id
+        return headers
 
     def validate(
         self,
@@ -282,113 +264,48 @@ class Client:
         ),
         policies: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Run a validator, one or more realtime policies, or both.
+        """Run a single validator (or composite/themes) and return its response.
 
-        Three call shapes, chosen by what you pass:
-
-        1. **Validator only** (unchanged classic behavior)::
-
-               client.validate(ToxicityValidator(data=..., config=...))
-
-           Runs that one validator; returns its validation response.
-
-        2. **Validator + policies** — the validator runs as usual AND the
-           same input is evaluated against each policy id, server-side,
-           with each policy's own rulesets, thresholds, and decision
-           strategy::
-
-               result = client.validate(
-                   ToxicityValidator(data=InputValidationRequest(prompt=p)),
-                   policies=["994ad00e-…", "1268faa4-…"],
-               )
-
-        3. **Policies only** — pass a bare request object (any
-           ``disseqt_sdk.models`` request, no validator, no config); the
-           policies decide everything::
-
-               result = client.validate(
-                   InputValidationRequest(prompt=p, response=r),
-                   policies=["994ad00e-…"],
-               )
-
-        When ``policies`` is passed the return value is a stable envelope::
-
-            {
-              "validation": {...} | None,   # per-validator result, None in shape 3
-              "policies":  [{...}, ...],    # one policy envelope per id, in order
-            }
-
-        Use :func:`disseqt_sdk.any_blocking` to gate on it. Each policy is
-        one server-side evaluation (billed per executed validator, one
-        Decisions-ledger entry each); policies are evaluated sequentially
-        in the order given. Inputs a policy's validator doesn't receive
-        skip neutrally with ``missing_input:<fields>`` — supply the union
-        of fields the policies need (see the policy detail endpoint's
-        ``required_input_fields``).
-
-        **Client-level default.** A client constructed with
-        ``Client(policies=[...])`` applies that list to every ``validate()``
-        call that doesn't pass its own ``policies=`` — the per-call value
-        always overrides the client default. Composite-score and
-        themes-classifier requests are incompatible with policies; they run
-        classically and the client default steps aside (logged). Passing
-        ``policies=[]`` explicitly is always an error — an accidentally
-        empty list must fail loudly rather than silently ungate the call.
-
-        Without ``policies`` anywhere, behavior is exactly as before.
-
-        Args:
-            request: Validator instance, or a bare request object when
-                policies apply (per-call or client default).
-            policies: Optional list of published policy ids to evaluate
-                the input against; overrides the client-level default.
-                Composite-score and themes-classifier requests cannot be
-                combined with ``policies``.
-
-        Returns:
-            The validation response — or the ``{"validation", "policies"}``
-            envelope when policies apply.
+        ``policies=[...]`` (and a ``Client(policies=...)`` default) is a deprecated
+        shim kept for 0.11 callers; it emits :class:`DeprecationWarning`.
 
         Raises:
-            HTTPError: If any API request fails (unknown/unpublished
-                policy answers 404 DSQ-4040).
-            ValueError: On invalid combinations (bare request without
-                policies anywhere, empty ``policies`` list, missing
-                ``application_name``, explicit ``policies`` with
-                composite/themes) or an undecodable response body.
+            HTTPError: If the API request fails.
+            ValueError: If ``request`` is not a validator instance.
         """
         if policies is not None:
+            warnings.warn(_POLICY_DEPRECATION, DeprecationWarning, stacklevel=2)
             return self._validate_with_policies(request, policies)
-        if self.policies is not None:
-            # Composite/themes can't be policy-evaluated. An explicit
-            # per-call combination raises (caller error), but a client-wide
-            # default must not make those endpoints unusable — it steps
-            # aside for them, visibly in the logs.
-            if isinstance(
-                request,
-                (
-                    ThemesClassifierValidator,
-                    CompositeScoreEvaluator,
-                    ThemesClassifierRequest,
-                    CompositeScoreRequest,
-                ),
-            ):
-                logger.info(
-                    "validation.policies.default_skipped",
-                    reason="composite/themes requests are never policy-evaluated",
-                    request_type=type(request).__name__,
-                )
-            else:
-                return self._validate_with_policies(request, self.policies)
+        if self.policies is not None and not isinstance(
+            request,
+            (
+                ThemesClassifierValidator,
+                CompositeScoreEvaluator,
+                ThemesClassifierRequest,
+                CompositeScoreRequest,
+            ),
+        ):
+            warnings.warn(_POLICY_DEPRECATION, DeprecationWarning, stacklevel=2)
+            return self._validate_with_policies(request, self.policies)
         if not isinstance(
             request, (BaseValidator, ThemesClassifierValidator, CompositeScoreEvaluator)
         ):
             raise ValueError(
                 "A bare request object needs policies=[...] — pass a validator "
-                "instance to run a single validator, or add policies=[...] to "
-                "evaluate this input against realtime policies"
+                "instance to run a single validator "
+                f"(got {type(request).__name__})"
             )
         return self._run_validator(request)
+
+    def validate_sync(
+        self,
+        request: (
+            BaseValidator | ThemesClassifierValidator | CompositeScoreEvaluator | SupportsInputData
+        ),
+        policies: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Alias for :meth:`validate` (Node ``validateSync`` parity)."""
+        return self.validate(request, policies=policies)
 
     def _validate_with_policies(
         self,

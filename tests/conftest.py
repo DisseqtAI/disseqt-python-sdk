@@ -3,11 +3,19 @@
 import pytest
 
 from disseqt_sdk import Client, SDKConfigInput
+from disseqt_sdk.auth import token_store
 from disseqt_sdk.models.agentic_behaviour import AgenticBehaviourRequest
 from disseqt_sdk.models.input_validation import InputValidationRequest
 from disseqt_sdk.models.mcp_security import McpSecurityRequest
 from disseqt_sdk.models.output_validation import OutputValidationRequest
 from disseqt_sdk.models.rag_grounding import RagGroundingRequest
+
+
+@pytest.fixture(autouse=True)
+def _isolated_disseqt_config(monkeypatch, tmp_path):
+    """Never let a test read or write the developer's real ~/.disseqt/config.json."""
+    monkeypatch.setattr(token_store, "CONFIG_DIR", tmp_path / ".disseqt")
+    monkeypatch.setattr(token_store, "CONFIG_PATH", tmp_path / ".disseqt" / "config.json")
 
 
 @pytest.fixture
