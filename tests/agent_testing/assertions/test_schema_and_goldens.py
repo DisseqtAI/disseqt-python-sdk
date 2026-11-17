@@ -94,26 +94,67 @@ def median_ms(fn: Any, n: int = 25) -> float:
     return statistics.median(samples)
 
 
-def test_i09_nfr04_performance_stays_within_guard_rails() -> None:
-    """Measured on a laptop: 50 calls x 20 expectations ~2.3-2.6 ms, a typical 10-call run
-    ~0.56 ms, render ~0.3 ms (targets: 5 ms, 0.5 ms, 2 ms). The guards are 4x looser so a busy CI
-    runner does not flake; a real regression (an accidental O(n^3)) still trips them."""
+# How long ``_calibration_work`` takes on the machine the limits below were written on. A runner
+# that needs 9x as long for the same work gets 9x the headroom, so the guard flags code that got
+# slower relative to the machine (an accidental O(n^3)), not a busy shared CI runner.
+_REFERENCE_WORK_MS = 1.45
+_MAX_SPEED_FACTOR = 40.0
+
+
+def _calibration_work() -> list[int]:
+    return sorted((i * 7919) % 10007 for i in range(20_000))
+
+
+def _speed_factor() -> float:
+    """How many times slower than the reference machine this one is right now (never below 1)."""
+    measured = median_ms(_calibration_work, n=9)
+    return min(_MAX_SPEED_FACTOR, max(1.0, measured / _REFERENCE_WORK_MS))
+
+
+def _check_performance_guards() -> None:
     steps = [step(i + 1, f"t{i % 10}", {"a": i, "b": "x"}) for i in range(50)]
     big = run_of(*steps)
     tools = tuple(ToolExpect(f"t{i % 10}", {"a": i}, id=f"e{i}") for i in range(20))
     heavy = Expect(
         decision=Decision.CALL, tools=tools, order="in_order", extra_calls="allow", max_steps=100
     )
-    assert median_ms(lambda: evaluate(big, heavy)) < 20.0
     small = run_of(*[step(i + 1, f"t{i % 3}", {"a": i}) for i in range(10)])
     typical = Expect(
         decision=Decision.CALL,
         tools=tuple(ToolExpect(f"t{i % 3}", {"a": i}) for i in range(4)),
         extra_calls="allow",
     )
-    assert median_ms(lambda: evaluate(small, typical)) < 4.0
     rep = evaluate(big, heavy)
-    assert median_ms(lambda: rep.render(max_lines=0)) < 8.0
+    before = _speed_factor()
+    heavy_ms = median_ms(lambda: evaluate(big, heavy))
+    typical_ms = median_ms(lambda: evaluate(small, typical))
+    render_ms = median_ms(lambda: rep.render(max_lines=0))
+    # the slower of the two readings, so a runner that got busy mid-test is not missed
+    factor = max(before, _speed_factor())
+    detail = f"(machine is {factor:.1f}x the reference speed)"
+    assert (
+        heavy_ms < 20.0 * factor
+    ), f"evaluate, 50 calls x 20 expectations: {heavy_ms:.1f} ms {detail}"
+    assert typical_ms < 4.0 * factor, f"evaluate, typical 10-call run: {typical_ms:.1f} ms {detail}"
+    assert render_ms < 8.0 * factor, f"render: {render_ms:.1f} ms {detail}"
+
+
+def test_i09_nfr04_performance_stays_within_guard_rails() -> None:
+    """Measured on a laptop: 50 calls x 20 expectations ~2.3-2.6 ms, a typical 10-call run
+    ~0.56 ms, render ~0.3 ms (targets: 5 ms, 0.5 ms, 2 ms). The guards are 4x looser so a busy CI
+    runner does not flake; a real regression (an accidental O(n^3)) still trips them."""
+    _check_performance_guards()
+
+
+def test_performance_guards_do_not_flake_on_a_slow_runner(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CI measured 21 ms for the 2.3 ms case (a runner ~9x slower than a laptop) and failed a fixed
+    20 ms limit that had passed on the same code before. Simulate a 12x slower machine by scaling
+    this module's clock: the guard must adapt to the machine instead of using wall-clock constants.
+    """
+    real = time.perf_counter
+    slow = type("SlowTime", (), {"perf_counter": staticmethod(lambda: real() * 12)})
+    monkeypatch.setattr(__import__(__name__, fromlist=["x"]), "time", slow)
+    _check_performance_guards()
 
 
 def test_evaluation_cost_grows_roughly_with_the_product_not_worse() -> None:
