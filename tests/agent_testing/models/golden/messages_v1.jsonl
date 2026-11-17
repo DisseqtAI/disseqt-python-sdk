@@ -1,0 +1,3 @@
+{"role": "assistant", "content": "", "tool_calls": [{"id": "call_1", "name": "get_weather", "arguments": {"city": "SF"}}]}
+{"role": "tool", "content": "18C, fog", "tool_call_id": "call_1", "name": "get_weather"}
+{"role": "assistant", "content": "", "tool_calls": [{"id": "call_2", "name": "x", "raw_arguments": "{\"a\": ", "parse_error": "Expecting value"}]}

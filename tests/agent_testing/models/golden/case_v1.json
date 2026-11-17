@@ -1,0 +1,339 @@
+{
+  "schema_version": 1,
+  "id": "refund_rich",
+  "input": [
+    {
+      "role": "system",
+      "content": "You are a refund agent.",
+      "name": "policy"
+    },
+    {
+      "role": "user",
+      "content": "Hi"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "c1",
+          "name": "get_order",
+          "arguments": {
+            "order_id": "A12",
+            "n": [
+              1,
+              2.5
+            ]
+          }
+        },
+        {
+          "id": "c2",
+          "name": "bad",
+          "raw_arguments": "{",
+          "parse_error": "Expecting value"
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "{\"total\": 59.99}",
+      "tool_call_id": "c1",
+      "name": "get_order"
+    },
+    {
+      "role": "tool",
+      "content": "",
+      "tool_call_id": "c2"
+    },
+    {
+      "role": "user",
+      "content": "Refund order A12, it arrived broken"
+    }
+  ],
+  "follow_ups": [
+    "It's A12",
+    "thanks"
+  ],
+  "fakes": [
+    {
+      "name": "get_order",
+      "kind": "tool",
+      "description": "Look up an order",
+      "effect": "read",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "order_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "order_id"
+        ]
+      },
+      "responses": [
+        {
+          "when": {
+            "order_id": "A12"
+          },
+          "returns": {
+            "order_id": "A12",
+            "total": 59.99
+          },
+          "error": null,
+          "times": null,
+          "latency_s": 0.0,
+          "extra": {}
+        },
+        {
+          "when": {
+            "order_id": {
+              "$m": "regex",
+              "pattern": "^B",
+              "flags": 0
+            }
+          },
+          "returns": null,
+          "error": "order service down",
+          "times": 1,
+          "latency_s": 0.0,
+          "extra": {}
+        },
+        {
+          "when": {},
+          "returns": null,
+          "error": null,
+          "times": null,
+          "latency_s": 0.25,
+          "extra": {
+            "acme.note": "slow"
+          }
+        }
+      ],
+      "default": null,
+      "extra": {
+        "acme.owner": "refunds"
+      }
+    },
+    {
+      "name": "check_policy",
+      "kind": "tool",
+      "description": "",
+      "effect": "read",
+      "schema": null,
+      "responses": [],
+      "default": {
+        "when": {},
+        "returns": {
+          "eligible": true
+        },
+        "error": null,
+        "times": null,
+        "latency_s": 0.0,
+        "extra": {}
+      },
+      "extra": {}
+    },
+    {
+      "name": "issue_refund",
+      "kind": "tool",
+      "description": "",
+      "effect": "write",
+      "schema": null,
+      "responses": [],
+      "default": {
+        "when": {},
+        "returns": {
+          "amount": 59.99,
+          "status": "ok"
+        },
+        "error": null,
+        "times": null,
+        "latency_s": 0.0,
+        "extra": {}
+      },
+      "extra": {}
+    },
+    {
+      "name": "faq_agent",
+      "kind": "subagent",
+      "description": "",
+      "effect": "read",
+      "schema": null,
+      "responses": [],
+      "default": {
+        "when": {},
+        "returns": "see FAQ",
+        "error": null,
+        "times": null,
+        "latency_s": 0.0,
+        "extra": {}
+      },
+      "extra": {}
+    }
+  ],
+  "expect": {
+    "decision": [
+      "call"
+    ],
+    "decision_by_turn": {
+      "1": [
+        "ask",
+        "refuse"
+      ],
+      "2": [
+        "call"
+      ]
+    },
+    "tools": [
+      {
+        "name": "get_order",
+        "args": {
+          "order_id": "A12"
+        },
+        "args_mode": "subset",
+        "count": [
+          1,
+          null
+        ],
+        "id": "lookup",
+        "after": [],
+        "turn": 0,
+        "defaults": {},
+        "extra": {}
+      },
+      {
+        "name": "issue_refund",
+        "args": {
+          "order_id": {
+            "$m": "ref",
+            "source": "call:lookup.result.order_id"
+          },
+          "amount": {
+            "$m": "approx",
+            "value": 59.99,
+            "abs_tol": 0.01,
+            "rel_tol": 1e-09
+          },
+          "reason": {
+            "$m": "one_of",
+            "values": [
+              "damaged",
+              "broken"
+            ]
+          },
+          "note": {
+            "$m": "optional",
+            "inner": {
+              "$m": "regex",
+              "pattern": "^x",
+              "flags": 2
+            }
+          },
+          "dry_run": {
+            "$m": "absent"
+          },
+          "trace": {
+            "$m": "any"
+          },
+          "n": {
+            "$m": "eq",
+            "value": 1,
+            "coerce_numeric": false
+          },
+          "meta": {
+            "$m": "eq",
+            "value": {
+              "$m": "looks like a matcher"
+            },
+            "coerce_numeric": true
+          }
+        },
+        "args_mode": "exact",
+        "count": [
+          1,
+          1
+        ],
+        "id": "refund",
+        "after": [
+          "lookup"
+        ],
+        "turn": 2,
+        "defaults": {
+          "currency": "USD"
+        },
+        "extra": {
+          "acme.weight": 2
+        }
+      }
+    ],
+    "order": "partial",
+    "extra_calls": "forbid",
+    "allowed_tools": [
+      "get_*",
+      "issue_refund"
+    ],
+    "forbidden": [
+      {
+        "name": "check_*",
+        "args": null,
+        "unless_after": null,
+        "reason": "policy lookups are internal",
+        "extra": {}
+      },
+      {
+        "name": "issue_refund",
+        "args": {
+          "amount": 0
+        },
+        "unless_after": "lookup",
+        "reason": "",
+        "extra": {}
+      }
+    ],
+    "max_steps": 10,
+    "max_tool_calls": {
+      "get_*": 2,
+      "issue_refund": 1
+    },
+    "max_tokens": 2000,
+    "max_latency_s": 5.5,
+    "answer_contains": [
+      "refunded",
+      {
+        "$m": "regex",
+        "pattern": "59\\.99",
+        "flags": 0
+      }
+    ],
+    "answer_excludes": [
+      "sorry"
+    ],
+    "min_scores": {
+      "tool_args": 0.5
+    },
+    "extra": {
+      "acme.suite": "smoke"
+    }
+  },
+  "tags": [
+    "smoke",
+    "refund"
+  ],
+  "repeats": 5,
+  "pass_k": 3,
+  "pass_k_threshold": 0.8,
+  "use_judge": [
+    "semantic_arg"
+  ],
+  "extra": {
+    "acme.ticket": "T-1",
+    "nested": {
+      "a": [
+        1,
+        null,
+        true
+      ]
+    }
+  }
+}

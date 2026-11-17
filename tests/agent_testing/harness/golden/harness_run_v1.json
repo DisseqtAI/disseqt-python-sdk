@@ -1,0 +1,144 @@
+{
+  "schema_version": 1,
+  "status": "finished",
+  "run": {
+    "schema_version": 1,
+    "case_id": "",
+    "input": "refund order A12",
+    "follow_ups": [],
+    "steps": [
+      {
+        "seq": 1,
+        "kind": "tool",
+        "name": "get_order",
+        "call_id": "call-1",
+        "provider_call_id": null,
+        "args": {
+          "order_id": "A12"
+        },
+        "result": {
+          "order_id": "A12",
+          "total": 59.99
+        },
+        "error": null,
+        "effect": "read",
+        "ts": 1.0,
+        "duration_ms": 1.0,
+        "turn": 0,
+        "parallel_group": null,
+        "usage": null,
+        "lossy": false,
+        "extra": {}
+      },
+      {
+        "seq": 2,
+        "kind": "tool",
+        "name": "check_policy",
+        "call_id": "call-2",
+        "provider_call_id": null,
+        "args": {
+          "order_id": "A12",
+          "reason": "damaged"
+        },
+        "result": {
+          "eligible": true
+        },
+        "error": null,
+        "effect": "read",
+        "ts": 3.0,
+        "duration_ms": 1.0,
+        "turn": 0,
+        "parallel_group": null,
+        "usage": null,
+        "lossy": false,
+        "extra": {}
+      },
+      {
+        "seq": 3,
+        "kind": "tool",
+        "name": "issue_refund",
+        "call_id": "call-3",
+        "provider_call_id": null,
+        "args": {
+          "order_id": "A12",
+          "amount": 59.99
+        },
+        "result": {
+          "amount": 59.99,
+          "status": "ok"
+        },
+        "error": null,
+        "effect": "write",
+        "ts": 5.0,
+        "duration_ms": 1.0,
+        "turn": 0,
+        "parallel_group": null,
+        "usage": null,
+        "lossy": false,
+        "extra": {}
+      }
+    ],
+    "final_answer": "Refunded 59.99 for A12.",
+    "final_text": "Refunded 59.99 for A12.",
+    "turn_outputs": [
+      "Refunded 59.99 for A12."
+    ],
+    "messages": [],
+    "available_tools": [
+      {
+        "name": "check_policy",
+        "kind": "tool",
+        "effect": "read",
+        "description": "",
+        "schema": null,
+        "extra": {}
+      },
+      {
+        "name": "get_order",
+        "kind": "tool",
+        "effect": "read",
+        "description": "",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "order_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "order_id"
+          ]
+        },
+        "extra": {}
+      },
+      {
+        "name": "issue_refund",
+        "kind": "tool",
+        "effect": "write",
+        "description": "",
+        "schema": null,
+        "extra": {}
+      }
+    ],
+    "model_steps_captured": false,
+    "started_at": "2026-01-01T00:00:00.000Z",
+    "state": {},
+    "usage": {
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "latency_s": 0.007,
+      "cost_usd": 0.0
+    },
+    "error": null,
+    "extra": {}
+  },
+  "error": null,
+  "violations": [],
+  "warnings": [
+    "model calls not captured: no FakeLLM or LLM instrumentation; max_llm_calls and token metrics will be skipped"
+  ],
+  "trace_id": "golden-trace-id",
+  "duration_ms": 0.0,
+  "setup_ms": 0.0,
+  "extra": {}
+}

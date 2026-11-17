@@ -1,0 +1,289 @@
+{
+  "schema_version": 1,
+  "id": "refund_1b",
+  "input": [
+    {
+      "role": "user",
+      "content": "I want a refund for my broken headphones"
+    }
+  ],
+  "follow_ups": [
+    "It's A12"
+  ],
+  "fakes": [
+    {
+      "name": "get_order",
+      "kind": "tool",
+      "description": "",
+      "effect": "read",
+      "schema": null,
+      "responses": [],
+      "default": null,
+      "extra": {}
+    },
+    {
+      "name": "check_policy",
+      "kind": "tool",
+      "description": "",
+      "effect": "read",
+      "schema": null,
+      "responses": [],
+      "default": null,
+      "extra": {}
+    },
+    {
+      "name": "issue_refund",
+      "kind": "tool",
+      "description": "",
+      "effect": "write",
+      "schema": null,
+      "responses": [],
+      "default": null,
+      "extra": {}
+    },
+    {
+      "name": "billing_agent",
+      "kind": "subagent",
+      "description": "",
+      "effect": "read",
+      "schema": null,
+      "responses": [],
+      "default": null,
+      "extra": {}
+    }
+  ],
+  "expect": {
+    "decision": [
+      "ask"
+    ],
+    "decision_by_turn": {
+      "1": [
+        "call"
+      ]
+    },
+    "tools": [
+      {
+        "name": "get_order",
+        "args": {
+          "order_id": {
+            "$m": "normalized",
+            "values": [
+              "A-12",
+              "a12"
+            ],
+            "strip_chars": "-",
+            "casefold": true
+          },
+          "items": {
+            "$m": "unordered",
+            "items": [
+              "a",
+              {
+                "$m": "regex",
+                "pattern": "^b",
+                "flags": 0
+              },
+              3
+            ]
+          },
+          "tags": {
+            "$m": "contains",
+            "items": [
+              "fragile",
+              "x"
+            ]
+          },
+          "address": {
+            "$m": "dict_match",
+            "fields": {
+              "city": {
+                "$m": "semantic",
+                "reference": "New York",
+                "rubric": "same city"
+              },
+              "zip": {
+                "$m": "type_is",
+                "types": [
+                  "string"
+                ]
+              }
+            },
+            "mode": "exact",
+            "ignore": [
+              "geo_*"
+            ],
+            "defaults": {
+              "country": "US"
+            }
+          },
+          "date": {
+            "$m": "date_eq",
+            "value": "2026-11-11T10:00:00Z",
+            "tz": "Europe/Berlin"
+          },
+          "code": {
+            "$m": "predicate",
+            "name": "is_valid_code"
+          },
+          "n": {
+            "$m": "type_is",
+            "types": [
+              "integer",
+              "number"
+            ]
+          }
+        },
+        "args_mode": "subset",
+        "count": null,
+        "id": "lookup",
+        "after": [],
+        "turn": null,
+        "defaults": {},
+        "ignore": [
+          "trace_*",
+          "request_id"
+        ],
+        "same_step_as": null,
+        "weight": 2.5,
+        "extra": {}
+      },
+      {
+        "name": "check_policy",
+        "args": {},
+        "args_mode": "subset",
+        "count": null,
+        "id": "policy",
+        "after": [],
+        "turn": null,
+        "defaults": {},
+        "ignore": [],
+        "same_step_as": "lookup",
+        "weight": 1.0,
+        "extra": {}
+      },
+      {
+        "name": "issue_refund",
+        "args": {},
+        "args_mode": "subset",
+        "count": null,
+        "id": "refund",
+        "after": [
+          "lookup"
+        ],
+        "turn": 1,
+        "defaults": {},
+        "ignore": [],
+        "same_step_as": null,
+        "weight": 1.0,
+        "extra": {}
+      }
+    ],
+    "order": "partial",
+    "extra_calls": "allow_reads",
+    "allowed_tools": null,
+    "forbidden": [
+      {
+        "name": "issue_refund",
+        "args": null,
+        "unless_after": "lookup",
+        "reason": "",
+        "extra": {}
+      }
+    ],
+    "max_steps": null,
+    "max_tool_calls": null,
+    "max_llm_calls": 4,
+    "max_tokens": null,
+    "max_latency_s": null,
+    "answer_contains": [],
+    "answer_excludes": [],
+    "min_scores": {},
+    "routes": {
+      "path": [
+        "billing_agent"
+      ],
+      "mode": "first",
+      "extra": {}
+    },
+    "loops": {
+      "max_identical_calls": null,
+      "max_consecutive_identical": 2,
+      "detect_cycles": true,
+      "max_period": 4,
+      "min_repeats": 2,
+      "key": "name",
+      "max_retries_after_error": 0,
+      "extra": {}
+    },
+    "intent": [
+      "billing",
+      "refunds"
+    ],
+    "intent_labels": [
+      "billing",
+      "refunds",
+      "shipping"
+    ],
+    "intent_source": "call:get_order.args.topic",
+    "clarify": {
+      "must_mention_any": [
+        "order id"
+      ],
+      "must_mention_all": [
+        "order"
+      ],
+      "max_questions": 1,
+      "allow_read_calls_before": false,
+      "judge_relevance": true,
+      "extra": {}
+    },
+    "refuse": {
+      "must_mention_any": [
+        "not eligible"
+      ],
+      "offer_alternative": true,
+      "extra": {}
+    },
+    "scope": {
+      "in_scope": true,
+      "topics": [
+        "refunds"
+      ],
+      "extra": {}
+    },
+    "plan": {
+      "optimal_tool_calls": 2,
+      "constraints": [
+        "refund_after_lookup"
+      ],
+      "judge_quality": true,
+      "extra": {}
+    },
+    "answer_quality": {
+      "reference": "Refund issued",
+      "accept": "partially_correct",
+      "criteria": [
+        "amount"
+      ],
+      "extra": {}
+    },
+    "grounded": {
+      "sources": [
+        "get_*"
+      ],
+      "include_user_statements": false,
+      "allow_unsupported": true,
+      "extra": {}
+    },
+    "extra": {}
+  },
+  "tags": [],
+  "repeats": 1,
+  "pass_k": null,
+  "pass_k_threshold": 1.0,
+  "use_judge": [
+    "semantic_arg",
+    "answer_quality"
+  ],
+  "extra": {}
+}
