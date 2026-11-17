@@ -209,7 +209,13 @@ def test_fr03_every_live_call_runs_on_one_daemon_thread() -> None:
 
 
 def test_x04_the_interpreter_exits_promptly_with_a_slow_pending_call() -> None:
+    # ``-I`` (isolated mode) ignores PYTHONPATH, so the source directory is put on sys.path inside
+    # the child. Relying on an editable install passed locally and failed in CI, where the package
+    # is only importable through PYTHONPATH=src.
+    src = Path(__file__).resolve().parents[3] / "src"
     code = (
+        "import sys\n"
+        f"sys.path.insert(0, {str(src)!r})\n"
         "import threading\n"
         "from disseqt_agent_testing.judges import FakeJudgeModel, FakeSlow, make_judge\n"
         "from disseqt_agent_testing.assertions import JudgeTask\n"
@@ -229,7 +235,6 @@ def test_x04_the_interpreter_exits_promptly_with_a_slow_pending_call() -> None:
         [sys.executable, "-I", "-c", code],
         check=True,
         timeout=20,
-        env={"PYTHONPATH": str(Path(__file__).resolve().parents[3] / "src")},
     )
     assert time.monotonic() - start < 8  # startup included; a hang would be 60 s
 
