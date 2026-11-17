@@ -4,12 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-`disseqt-ai-sdk` is a Python SDK (v0.2.7) for Disseqt AI containing two independent sub-packages:
+`disseqt-ai-sdk` is a Python SDK (v0.2.7) for Disseqt AI containing independent sub-packages:
 
 - **`disseqt_sdk`** — Validation SDK: validates LLM inputs, outputs, RAG grounding, agentic behavior, MCP security, and composite scoring via a remote API
 - **`disseqt_agentic_sdk`** — Agentic SDK: OpenTelemetry-compatible tracing for agentic AI workflows (spans, traces, batching)
+- **`disseqt_agent_testing`** — Agentic unit testing (in development; design notes are kept outside the repo): immutable test-case/run/verdict data models (`models/`), the offline test harness (`harness/`: `build_test_orchestrator`, fakes, `FakeLLM`), the assertion engine (`assertions/`: `assert_agent`, `evaluate`, 16 registered metrics, matchers, classifier), the runner (`runner/`: `run_suite`, bounds-rule verdicts, `SuiteResult`), a pytest plugin (`pytest_plugin/`, `pytest11` entry point) and the `disseqt test` CLI (`cli/`); LLM judges (`judges/`: offline engine, `service:` provider over a fake transport until the real service exists, answer_quality/groundedness/plan_quality/root_cause kinds, calibration + `disseqt judges` CLI). Depends only on `typing-extensions` beyond the standard library (optional extras: `yaml`, `xdist`, `scipy`); never imported by the other two packages
 
-Both packages ship in a single PyPI distribution (`pip install disseqt-ai-sdk`), built with Hatch, and live under `src/`.
+All packages ship in a single PyPI distribution (`pip install disseqt-ai-sdk`), built with Hatch, and live under `src/`.
 
 ## Commands
 
