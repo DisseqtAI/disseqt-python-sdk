@@ -20,18 +20,32 @@ not ship one as of Sep 2026):
     concrete agent (``LlmAgent``, ``SequentialAgent``, ``ParallelAgent``,
     ``LoopAgent``, ``LangGraphAgent``, ``RemoteA2aAgent``) inherits
     this method, so one patch covers all agent kinds.
-  * ``google.adk.tools.base_tool.BaseTool.run_async`` — TOOL_EXEC span.
-    ``FunctionTool``, ``AgentTool``, MCP tools, LangChain / CrewAI
-    tool wrappers all override this single choke point.
-  * ``google.adk.models.base_llm.BaseLlm.generate_content_async`` —
-    MODEL_EXEC span, wraps the async generator that yields ``LlmResponse``
-    chunks (both non-streaming and streaming go through this single
-    method; ``stream=True`` yields partials + one final aggregated
-    ``partial=False`` chunk).
-  * ``google.adk.memory.base_memory_service.BaseMemoryService.search_memory``
-    — RAG_EXEC span. All memory services (``InMemoryMemoryService``,
-    ``VertexAiRagMemoryService``, ``VertexAiMemoryBankService``) override
-    this abstract method, so one patch covers the tree.
+  * Tools — TOOL_EXEC span. Primary targets are the two call sites the
+    LLM flow uses for *every* tool, whatever its class:
+    ``google.adk.flows.llm_flows._tool_caller._call_tool_async`` and
+    ``._call_tool_in_thread_pool``. ``run_async`` on ``BaseTool`` and the
+    common concrete classes is patched as well, as a backstop for tools
+    run directly and for ADK releases that predate ``_tool_caller``. A
+    per-class list alone cannot be complete: ``McpTool``, ``RestApiTool``
+    and the LangChain / CrewAI adapters override ``run_async`` without
+    calling ``super()``. The layers de-duplicate per tool instance, so a
+    call produces one span however many wrappers it passes through.
+  * Models — MODEL_EXEC span. Primary target is
+    ``BaseLlmFlow._run_and_handle_error``, the generator the LLM flow
+    wraps around ``llm.generate_content_async(...)`` on every model turn
+    (non-streaming and SSE streaming alike; ``stream=True`` yields
+    partials + one final aggregated ``partial=False`` chunk). Only when
+    that method does not exist is ``generate_content_async`` patched on
+    ``BaseLlm`` and the common concrete classes instead — never both,
+    since each would open a span for the same turn. While the model call
+    is in flight the provider-SDK instrumentors underneath (google-genai,
+    litellm, anthropic, openai) are suppressed, so ``instrument_all``
+    reports one MODEL_EXEC per turn, not two.
+  * Memory — RAG_EXEC span. Primary target is
+    ``google.adk.agents.context.Context.search_memory``, the single place
+    ADK calls ``memory_service.search_memory(...)``. ``search_memory`` on
+    ``BaseMemoryService`` and the shipped services is patched as a
+    backstop, de-duplicated per service instance like tools.
   * ``google.adk.agents.remote_a2a_agent.RemoteA2aAgent._run_async_impl``
     — CLIENT span nested under the ``BaseAgent.run_async`` AGENT_EXEC
     span. Captures the A2A network hop between processes so multi-agent
@@ -59,9 +73,12 @@ from __future__ import annotations
 from disseqt_agentic_sdk.instrumentation.adk.patch import (
     a2a_run_async_impl,
     agent_run_async,
+    llm_call_site,
     llm_generate_content_async,
+    memory_call_site,
     memory_search_memory,
     runner_run_async,
+    tool_call_site,
     tool_run_async,
 )
 from disseqt_agentic_sdk.instrumentation.base import DisseqtInstrumentor
@@ -84,16 +101,12 @@ class AdkInstrumentor(DisseqtInstrumentor):
             "BaseAgent.run_async",
             agent_run_async(self),
         )
-        # Base-class patches alone miss every concrete subclass that
-        # OVERRIDES the method — FunctionTool.run_async, AgentTool.run_async,
-        # Gemini.generate_content_async, LiteLlm.generate_content_async,
-        # InMemoryMemoryService.search_memory all override and so the
-        # base BaseTool.run_async / BaseLlm.generate_content_async /
-        # BaseMemoryService.search_memory wrappers never fire against a
-        # real InMemoryRunner. Patch each concrete class the shipping
-        # ADK exposes alongside the base so the common path is covered;
-        # the base patch stays as a backstop for custom subclasses that
-        # DO call ``super()``. TP-2128 round-3 PR #33 review.
+        # Tools: the flow's call sites first (cover every tool class),
+        # then run_async on the classes as a backstop. Wrappers
+        # de-duplicate per tool instance — see patch._active_tool.
+        tool_site = tool_call_site(self)
+        for attr in ("_call_tool_async", "_call_tool_in_thread_pool"):
+            self._wrap("google.adk.flows.llm_flows._tool_caller", attr, tool_site)
         tool_wrapper = tool_run_async(self)
         for module, attr in (
             ("google.adk.tools.base_tool", "BaseTool.run_async"),
@@ -103,15 +116,27 @@ class AdkInstrumentor(DisseqtInstrumentor):
         ):
             self._wrap(module, attr, tool_wrapper)
 
-        llm_wrapper = llm_generate_content_async(self)
-        for module, attr in (
-            ("google.adk.models.base_llm", "BaseLlm.generate_content_async"),
-            ("google.adk.models.google_llm", "Gemini.generate_content_async"),
-            ("google.adk.models.lite_llm", "LiteLlm.generate_content_async"),
-            ("google.adk.models.anthropic_llm", "Claude.generate_content_async"),
+        # Models: the flow's call site, or — only if this ADK has no such
+        # method — generate_content_async on the classes. Not both: the
+        # class method is called before the call site sees its generator,
+        # so the two cannot de-duplicate and would double-report a turn.
+        if not self._wrap(
+            "google.adk.flows.llm_flows.base_llm_flow",
+            "BaseLlmFlow._run_and_handle_error",
+            llm_call_site(self),
         ):
-            self._wrap(module, attr, llm_wrapper)
+            llm_wrapper = llm_generate_content_async(self)
+            for module, attr in (
+                ("google.adk.models.base_llm", "BaseLlm.generate_content_async"),
+                ("google.adk.models.google_llm", "Gemini.generate_content_async"),
+                ("google.adk.models.lite_llm", "LiteLlm.generate_content_async"),
+                ("google.adk.models.anthropic_llm", "Claude.generate_content_async"),
+            ):
+                self._wrap(module, attr, llm_wrapper)
 
+        # Memory: the Context call site, then the service classes as a
+        # backstop (de-duplicated per service instance).
+        self._wrap("google.adk.agents.context", "Context.search_memory", memory_call_site(self))
         memory_wrapper = memory_search_memory(self)
         for module, attr in (
             ("google.adk.memory.base_memory_service", "BaseMemoryService.search_memory"),

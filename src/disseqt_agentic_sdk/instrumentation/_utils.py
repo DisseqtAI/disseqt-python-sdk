@@ -263,6 +263,11 @@ class _SpanScope:
         # perf_counter is monotonic — safe against wall-clock jumps.
         self._start = time.perf_counter()
 
+    @property
+    def trace(self) -> DisseqtTrace:
+        """The trace this scope's span belongs to."""
+        return self._trace
+
     def __enter__(self) -> DisseqtSpan:
         return self.span
 
@@ -327,6 +332,57 @@ def _get_or_bootstrap_trace(
     )
 
 
+# ---------------------------------------------------------------------
+# Nested provider-span suppression
+# ---------------------------------------------------------------------
+# An agent framework's model wrapper (ADK's ``BaseLlm``) and the provider
+# SDK underneath it (google-genai, litellm, anthropic, openai) are both
+# instrumented when ``instrument_all`` is used, so one model turn would
+# emit two MODEL_EXEC spans and count its tokens twice. The framework
+# wrapper sets this flag around the model call; while it is set,
+# ``open_llm_span`` hands provider patches a no-op scope and
+# ``_notify_planned_tool_calls`` ignores them, leaving the framework's
+# span as the single record of the turn.
+_suppress_provider_spans: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "disseqt_suppress_provider_spans", default=False
+)
+
+
+def provider_spans_suppressed() -> bool:
+    """True while an enclosing framework span already records this model call."""
+    return _suppress_provider_spans.get()
+
+
+class _NullSpan:
+    """Absorbs every span call a provider patch makes; records nothing."""
+
+    name = "suppressed"
+
+    def __getattr__(self, _name: str) -> Any:
+        def _noop(*_args: Any, **_kwargs: Any) -> _NullSpan:
+            return self
+
+        return _noop
+
+
+class _NullScope:
+    """Drop-in for ``_SpanScope`` that neither opens nor emits a span."""
+
+    def __init__(self) -> None:
+        self.span: Any = _NullSpan()
+
+    def __enter__(self) -> Any:
+        return self.span
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        return None
+
+
 def open_llm_span(
     client: DisseqtAgenticClient,
     name: str,
@@ -336,7 +392,12 @@ def open_llm_span(
     Start (or reuse) a trace and open a span for an LLM call. Callers use
     the returned scope as a context manager and set attributes on
     `scope.span`.
+
+    Returns a no-op scope when an enclosing framework span is already
+    recording this model call (see ``_suppress_provider_spans``).
     """
+    if _suppress_provider_spans.get():
+        return _NullScope()  # type: ignore[return-value]
     trace, owns_trace = _get_or_bootstrap_trace(client, name)
     span = trace.start_span(name, kind)
     return _SpanScope(span=span, trace=trace, owns_trace=owns_trace)

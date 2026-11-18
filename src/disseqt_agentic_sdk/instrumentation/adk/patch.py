@@ -1,40 +1,70 @@
 """
 Google ADK patch functions.
 
-Each wrapper is deadlock-safe by construction:
+How every wrapper here handles context
+--------------------------------------
+ADK is asyncio-first, and several runs routinely share one event loop
+(``asyncio.gather`` over ``runner.run_async(...)`` calls). Thread-local
+"current trace / span" cannot tell those runs apart, so these wrappers
+never read or write it while ADK code is running:
 
-  * Async-generator wrappers (Runner.run_async, BaseAgent.run_async,
-    BaseLlm.generate_content_async) call the wrapped function
-    synchronously (async-gen functions return an async_generator object
-    without executing the body), then hand the generator to
-    ``AsyncStreamWrapper`` which handles per-chunk callbacks, cancellation,
-    exhaustion, and forwards ``aclose()`` — all guarded by the shared
-    ``_closed`` idempotency flag. No await is held across a lock.
-  * Async coroutine wrappers (BaseTool.run_async) close the scope in a
-    ``try/except BaseException`` so cancellation and ``GeneratorExit``
-    still finalize the span; the coroutine is awaited exactly once.
+  * ``_capture_parent()`` snapshots the trace and span that are current
+    when the wrapper is entered. ``_open_adk_span()`` parents the new
+    span off that snapshot explicitly.
+  * Around every resumption of the wrapped coroutine / async generator
+    the wrapper enters an *isolated context* (a ``ContextVar`` overlay,
+    see ``disseqt_agentic_sdk.context``) seeded with its own trace and
+    span. Nested ADK wrappers — and any other instrumentation running
+    underneath, including in child tasks and ``copy_context()`` worker
+    threads — therefore see the right parent, per task.
+  * The overlay, the tool-call aggregator and the provider-span
+    suppression flag are all set and reset inside a single resumption,
+    never across a ``yield``. Nothing leaks into the caller between two
+    events, and no ``Token`` is ever reset from a different ``Context``
+    (the adk-python#949 failure mode).
+
+Async-generator wrappers are ``_AdkGenScope`` objects rather than native
+async generators so that an abandoned run is finalized when its last
+reference is dropped — see that class for the ``async for ... break``
+story.
+
+Other invariants:
+
+  * Async-gen wrappers call the wrapped function synchronously (async-gen
+    functions return a generator object without running the body); no
+    await is held across a lock.
   * All request/response extraction goes through ``safe_call`` / ``read``
     which never propagate exceptions into the caller.
-  * No ``asyncio.run`` / ``loop.run_until_complete`` — those would deadlock
-    when the wrapper runs inside an already-running event loop (a known
-    ADK footgun, see google/adk-python#755).
+  * No ``asyncio.run`` / ``loop.run_until_complete`` — those would
+    deadlock inside an already-running event loop (a known ADK footgun,
+    see google/adk-python#755).
 """
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
+import inspect
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any
 
+from disseqt_agentic_sdk.context import (
+    enter_isolated_context,
+    exit_isolated_context,
+    get_current_span,
+    get_current_trace,
+)
 from disseqt_agentic_sdk.enums import SpanKind
-from disseqt_agentic_sdk.instrumentation._stream import AsyncStreamWrapper
 from disseqt_agentic_sdk.instrumentation._tool_result import (
     _current_agg,
     _notify_planned_tool_calls,
     _ToolCallAggregator,
 )
 from disseqt_agentic_sdk.instrumentation._utils import (
-    open_llm_span,
+    _get_or_bootstrap_trace,
+    _SpanScope,
+    _suppress_provider_spans,
     read,
     safe_call,
     safe_set,
@@ -51,12 +81,230 @@ from disseqt_agentic_sdk.semantics import (
 )
 
 if TYPE_CHECKING:
-    from disseqt_agentic_sdk.instrumentation._utils import _SpanScope
+    from disseqt_agentic_sdk.client import DisseqtAgenticClient
     from disseqt_agentic_sdk.instrumentation.adk.instrumentor import AdkInstrumentor
     from disseqt_agentic_sdk.span import DisseqtSpan
+    from disseqt_agentic_sdk.trace import DisseqtTrace
 
 
 PROVIDER = AgenticProvider.GOOGLE
+
+# The tool / memory service whose call is currently being traced in this
+# context. ADK reaches a tool through a call site (``_call_tool_async``)
+# that we wrap, and the tool's own ``run_async`` is wrapped too as a
+# backstop for direct calls and older ADK layouts; ``super().run_async()``
+# chains add further layers. Whichever wrapper is outermost opens the
+# span and records the instance here, and every wrapper underneath that
+# sees the *same instance* passes straight through — one call, one span.
+_active_tool: contextvars.ContextVar[Any] = contextvars.ContextVar(
+    "disseqt_adk_active_tool", default=None
+)
+_active_memory: contextvars.ContextVar[Any] = contextvars.ContextVar(
+    "disseqt_adk_active_memory", default=None
+)
+
+
+# ---------------------------------------------------------------------
+# Parent capture + span lifecycle
+# ---------------------------------------------------------------------
+def _capture_parent() -> tuple[DisseqtTrace | None, DisseqtSpan | None]:
+    """
+    Snapshot the trace and span that are current *right now*.
+
+    Called at wrapper entry. Inside an ADK run this reads the isolated
+    context of the enclosing wrapper (per task); at the top of a run it
+    reads whatever trace the user opened around the call, if any. An
+    ended trace is ignored — starting a span on it would raise — and so
+    is a span that belongs to some other trace.
+    """
+    trace = get_current_trace()
+    if trace is None or trace.is_ended:
+        return None, None
+    span = get_current_span()
+    if span is not None and str(span.trace_id) != str(trace.trace_id):
+        span = None
+    return trace, span
+
+
+def _open_adk_span(client: DisseqtAgenticClient, name: str, kind: SpanKind | str) -> _SpanScope:
+    """
+    Open a span parented off the snapshot taken by ``_capture_parent``.
+
+    With no parent trace a fresh one is bootstrapped (and owned by the
+    returned scope). The whole operation runs inside a throwaway isolated
+    context so that neither the new trace nor the new span is published
+    to thread-local storage, where a concurrent run would pick it up.
+    """
+    parent_trace, parent_span = _capture_parent()
+    token = enter_isolated_context(parent_trace, parent_span)
+    try:
+        trace, owns_trace = _get_or_bootstrap_trace(client, name)
+        span = trace.start_span(
+            name,
+            kind,
+            parent_span_id=parent_span.span_id if parent_span is not None else None,
+        )
+        return _SpanScope(span=span, trace=trace, owns_trace=owns_trace)
+    finally:
+        exit_isolated_context(token)
+
+
+def _close_adk_span(scope: _SpanScope, exc: BaseException | None) -> None:
+    """
+    End the span (and its trace, if the scope owns it).
+
+    ``GeneratorExit`` is not an error: it is what Python injects when a
+    consumer stops iterating early (``break`` then ``aclose()``), which
+    is how ADK's own quickstart ends a run. Runs inside a throwaway
+    isolated context for the same reason as ``_open_adk_span``.
+    """
+    if isinstance(exc, GeneratorExit):
+        exc = None
+    token = enter_isolated_context(scope.trace, scope.span)
+    try:
+        if exc is None:
+            scope.__exit__(None, None, None)
+        else:
+            scope.__exit__(type(exc), exc, exc.__traceback__)
+    finally:
+        exit_isolated_context(token)
+
+
+class _AdkGenScope:
+    """
+    Async-iterator wrapper that ties a span to an ADK async generator
+    (``Runner.run_async``, ``BaseAgent.run_async``, the model response
+    stream, the A2A hop).
+
+    Finalization — span closed, owned aggregator flushed, owned trace
+    ended — happens exactly once, on whichever comes first:
+
+      * the inner generator is exhausted or raises;
+      * ``aclose()`` is called (ADK wraps its own generators in
+        ``Aclosing``; ``GeneratorExit`` is recorded as a clean exit);
+      * the wrapper is garbage collected (``__del__``).
+
+    The last case is what makes ``async for event in runner.run_async():
+    ... break`` work. Nothing tells an iterator that its consumer left
+    the loop; a native async generator only finds out when the event loop
+    later schedules its ``aclose()``, or at loop shutdown. A plain object
+    is told synchronously, the moment the loop statement drops the only
+    reference. A caller that keeps its own reference
+    (``agen = runner.run_async(...)``) and breaks without closing keeps
+    the span open until that reference goes away or ``aclose()`` is
+    called — the same lifetime the underlying ADK generator has.
+
+    Per-resumption state (isolated context, aggregator, suppression) is
+    installed by ``_step()`` and is never held across a ``yield``, so a
+    ``break`` leaves nothing behind in the caller's context either.
+    """
+
+    def __init__(
+        self,
+        agen: Any,
+        scope: _SpanScope,
+        *,
+        install_agg: bool = False,
+        suppress_provider_spans: bool = False,
+        on_item: Callable[[Any], None] | None = None,
+        on_finish: Callable[[], None] | None = None,
+    ) -> None:
+        self._finalized = False
+        self._agen = agen
+        self._scope = scope
+        self._install_agg = install_agg
+        self._suppress_provider_spans = suppress_provider_spans
+        self._on_item = on_item
+        self._on_finish = on_finish
+        # Created on the first resumption, and only if no enclosing scope
+        # already aggregates: a BaseAgent frame nested in a Runner frame
+        # must feed the Runner's aggregator, not fragment tool calls.
+        self._agg: _ToolCallAggregator | None = None
+        self._agg_decided = not install_agg
+
+    @contextlib.contextmanager
+    def _step(self) -> Iterator[None]:
+        if not self._agg_decided:
+            self._agg_decided = True
+            if _current_agg.get() is None:
+                self._agg = _ToolCallAggregator()
+        ctx_token = enter_isolated_context(self._scope.trace, self._scope.span)
+        # A generator boundary starts a fresh call chain: a tool invoked
+        # beneath it is a new call even if it is the same tool instance
+        # (an AgentTool whose agent ends up calling it again).
+        resets: list[tuple[contextvars.ContextVar[Any], contextvars.Token[Any]]] = [
+            (_active_tool, _active_tool.set(None)),
+            (_active_memory, _active_memory.set(None)),
+        ]
+        if self._agg is not None:
+            resets.append((_current_agg, _current_agg.set(self._agg)))
+        if self._suppress_provider_spans:
+            resets.append((_suppress_provider_spans, _suppress_provider_spans.set(True)))
+        try:
+            yield
+        finally:
+            for var, token in reversed(resets):
+                with contextlib.suppress(ValueError, RuntimeError):
+                    var.reset(token)
+            exit_isolated_context(ctx_token)
+
+    def __aiter__(self) -> _AdkGenScope:
+        return self
+
+    async def __anext__(self) -> Any:
+        if self._finalized:
+            raise StopAsyncIteration
+        try:
+            with self._step():
+                item = await self._agen.__anext__()
+        except StopAsyncIteration:
+            self._finalize(None)
+            raise
+        except BaseException as exc:
+            # BaseException so CancelledError (client disconnect) and
+            # KeyboardInterrupt still close the span.
+            self._finalize(exc)
+            raise
+        if self._on_item is not None:
+            with contextlib.suppress(Exception):
+                self._on_item(item)
+        return item
+
+    async def aclose(self) -> None:
+        """Close the inner generator, then finalize. Idempotent."""
+        if self._finalized:
+            return
+        inner_aclose = getattr(self._agen, "aclose", None)
+        try:
+            if callable(inner_aclose):
+                # Inside a step so ADK's own teardown still sees this
+                # run's context. Cleanup errors must not mask the reason
+                # the consumer is closing; cancellation still propagates.
+                with self._step(), contextlib.suppress(Exception):
+                    await inner_aclose()
+        finally:
+            self._finalize(None)
+
+    def _finalize(self, exc: BaseException | None) -> None:
+        if self._finalized:
+            return
+        self._finalized = True
+        if self._on_finish is not None:
+            with contextlib.suppress(Exception):
+                self._on_finish()
+        if self._agg is not None:
+            # Before the span closes, so the fused tool_calls ship with it.
+            with contextlib.suppress(Exception):
+                self._agg.flush_onto(self._scope.span)
+        with contextlib.suppress(Exception):
+            _close_adk_span(self._scope, exc)
+
+    def __del__(self) -> None:
+        # getattr: __init__ may not have run to completion.
+        if getattr(self, "_finalized", True):
+            return
+        with contextlib.suppress(BaseException):
+            self._finalize(None)
 
 
 # ---------------------------------------------------------------------
@@ -418,28 +666,15 @@ def runner_run_async(instrumentor: AdkInstrumentor) -> Callable[..., Any]:
         # def`` would force callers to ``await runner.run_async(...)``
         # which breaks ADK's public contract (they iterate directly).
         meta = safe_extract(_extract_runner_metadata, instance, kwargs)
-        scope = open_llm_span(instrumentor.client, "adk.runner.run_async", SpanKind.AGENT_EXEC)
-        span = scope.span
-        safe_call(_set_runner_attrs, span, meta or {})
+        scope = _open_adk_span(instrumentor.client, "adk.runner.run_async", SpanKind.AGENT_EXEC)
+        safe_call(_set_runner_attrs, scope.span, meta or {})
 
         try:
             agen = wrapped(*args, **kwargs)
         except BaseException as exc:
-            # No agg installed yet at this point; pass install_agg=False.
-            _finalize_agent_scope(scope, span, agg_token=None, exc=exc)
+            _close_adk_span(scope, exc)
             raise
-        # Aggregator install is deferred to the first __anext__ so the
-        # contextvars ``set`` and ``reset`` happen in the SAME asyncio
-        # Context. Doing it here (in the sync wrapper) would create the
-        # Token in the caller's context and later reset it from inside
-        # the Task's copied context — the exact "Token created in a
-        # different Context" leak flagged in adk-python#949.
-        return _AgentGenScope(
-            agen=agen,
-            scope=scope,
-            span=span,
-            install_agg=True,
-        )
+        return _AdkGenScope(agen, scope, install_agg=True)
 
     return wrapper
 
@@ -468,34 +703,26 @@ def _set_agent_attrs(span: DisseqtSpan, instance: Any, parent_context: Any) -> N
 def agent_run_async(instrumentor: AdkInstrumentor) -> Callable[..., Any]:
     def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         agent_name = read(instance, "name") or "agent"
-        scope = open_llm_span(instrumentor.client, f"adk.agent.{agent_name}", SpanKind.AGENT_EXEC)
-        span = scope.span
+        scope = _open_adk_span(instrumentor.client, f"adk.agent.{agent_name}", SpanKind.AGENT_EXEC)
         parent_context = args[0] if args else kwargs.get("parent_context")
-        safe_call(_set_agent_attrs, span, instance, parent_context)
+        safe_call(_set_agent_attrs, scope.span, instance, parent_context)
 
         try:
             agen = wrapped(*args, **kwargs)
         except BaseException as exc:
-            _finalize_agent_scope(scope, span, agg_token=None, exc=exc)
+            _close_adk_span(scope, exc)
             raise
-        # Deferred install (see runner_run_async note). BaseAgent frames
-        # nest inside a Runner frame that already installed the aggregator;
-        # _install_aggregator_if_absent() at __anext__ time will observe
-        # that and skip, so nested agent turns don't fragment tool_calls
-        # per turn. Direct-invocation (no Runner) still installs at
-        # __anext__ time.
-        return _AgentGenScope(
-            agen=agen,
-            scope=scope,
-            span=span,
-            install_agg=True,
-        )
+        # install_agg=True, but the aggregator is only created if none is
+        # active on the first resumption: nested under a Runner frame the
+        # Runner's aggregator is reused; a directly-invoked agent (no
+        # Runner) gets its own.
+        return _AdkGenScope(agen, scope, install_agg=True)
 
     return wrapper
 
 
 # ---------------------------------------------------------------------
-# BaseTool.run_async wrapper
+# Tool wrappers (TOOL_EXEC)
 # ---------------------------------------------------------------------
 def _set_tool_request_attrs(
     span: DisseqtSpan, instance: Any, tool_args: Any, tool_context: Any
@@ -582,63 +809,208 @@ def _classify_tool_error(exc: BaseException) -> str:
     return "error"
 
 
-def tool_run_async(instrumentor: AdkInstrumentor) -> Callable[..., Any]:
+async def _trace_tool_call(
+    instrumentor: AdkInstrumentor,
+    tool: Any,
+    tool_args: Any,
+    tool_context: Any,
+    call: Callable[[], Any],
+) -> Any:
+    """Run ``await call()`` inside a TOOL_EXEC span for ``tool``."""
+    tool_name = read(tool, "name") or "tool"
+    scope = _open_adk_span(instrumentor.client, f"adk.tool.{tool_name}", SpanKind.TOOL_EXEC)
+    span = scope.span
+    safe_call(_set_tool_request_attrs, span, tool, tool_args, tool_context)
+
+    ctx_token = enter_isolated_context(scope.trace, span)
+    active_token = _active_tool.set(tool)
+    result: Any = None
+    exc_seen: BaseException | None = None
+    try:
+        result = await call()
+    except BaseException as exc:
+        # BaseException so cancellation still closes the span.
+        exc_seen = exc
+        raise
+    finally:
+        with contextlib.suppress(ValueError, RuntimeError):
+            _active_tool.reset(active_token)
+        exit_isolated_context(ctx_token)
+        # A streaming tool hands back an async generator; there is no
+        # result to serialize at this point.
+        if exc_seen is None and not inspect.isasyncgen(result):
+            safe_call(_set_tool_result_attrs, span, result)
+        # Aggregator update BEFORE the span closes — the enclosing
+        # AGENT_EXEC scope flushes the aggregator when it finalizes, so
+        # this outcome has to land first.
+        safe_call(
+            _record_tool_outcome,
+            tool,
+            tool_context,
+            tool_args,
+            None if exc_seen is not None else result,
+            exc_seen,
+        )
+        _close_adk_span(scope, exc_seen)
+    return result
+
+
+def tool_call_site(instrumentor: AdkInstrumentor) -> Callable[..., Any]:
+    """
+    Wrap ADK's tool call sites, ``_call_tool_async(tool, args,
+    tool_context)`` and ``_call_tool_in_thread_pool(...)`` in
+    ``google.adk.flows.llm_flows._tool_caller``.
+
+    Every tool the LLM flow invokes goes through one of these, whatever
+    its class — ``McpTool``, ``RestApiTool``, the LangChain / CrewAI
+    adapters and any user ``BaseTool`` subclass all override
+    ``run_async`` without calling ``super()``, so a per-class patch list
+    can never be complete.
+    """
+
     async def wrapper(
         wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
     ) -> Any:
-        tool_args = kwargs.get("args")
-        tool_context = kwargs.get("tool_context")
-        tool_name = read(instance, "name") or "tool"
-        scope = open_llm_span(instrumentor.client, f"adk.tool.{tool_name}", SpanKind.TOOL_EXEC)
-        span = scope.span
-        safe_call(_set_tool_request_attrs, span, instance, tool_args, tool_context)
-        try:
-            result = await wrapped(*args, **kwargs)
-        except BaseException as exc:
-            # Aggregator update BEFORE scope exit — the finally in
-            # _AgentGenScope flushes aggregator onto the AGENT_EXEC span,
-            # so this outcome needs to land before that flush happens.
-            safe_call(_record_tool_outcome, instance, tool_context, tool_args, None, exc)
-            scope.__exit__(type(exc), exc, exc.__traceback__)
-            raise
-        safe_call(_set_tool_result_attrs, span, result)
-        safe_call(_record_tool_outcome, instance, tool_context, tool_args, result, None)
-        scope.__exit__(None, None, None)
-        return result
+        tool = args[0] if args else kwargs.get("tool")
+        tool_args = args[1] if len(args) > 1 else kwargs.get("args")
+        tool_context = args[2] if len(args) > 2 else kwargs.get("tool_context")
+        return await _trace_tool_call(
+            instrumentor, tool, tool_args, tool_context, lambda: wrapped(*args, **kwargs)
+        )
 
     return wrapper
 
 
-# ---------------------------------------------------------------------
-# BaseLlm.generate_content_async wrapper
-# ---------------------------------------------------------------------
-def llm_generate_content_async(instrumentor: AdkInstrumentor) -> Callable[..., Any]:
-    def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
-        llm_request = args[0] if args else kwargs.get("llm_request")
-        stream = args[1] if len(args) > 1 else kwargs.get("stream", False)
-        model = read(llm_request, "model") or read(instance, "model") or "adk.llm"
-        scope = open_llm_span(instrumentor.client, f"adk.llm.{model}", SpanKind.MODEL_EXEC)
-        span = scope.span
-        safe_call(_set_llm_request_attrs, span, llm_request, bool(stream), instance)
+def tool_run_async(instrumentor: AdkInstrumentor) -> Callable[..., Any]:
+    """
+    Wrap ``<Tool>.run_async(*, args, tool_context)`` on a tool class.
 
-        try:
-            agen = wrapped(*args, **kwargs)
-        except BaseException as exc:
-            scope.__exit__(type(exc), exc, exc.__traceback__)
-            raise
-        state = _LlmStreamState()
-        return AsyncStreamWrapper(
-            stream=agen,
-            scope=scope,
-            on_chunk=state.absorb,
-            on_finish=lambda: state.finalize(span),
+    Backstop for a tool run directly (outside the LLM flow) and for ADK
+    releases without the ``_tool_caller`` call sites. Passes through when
+    an outer wrapper is already tracing this same tool instance.
+    """
+
+    async def wrapper(
+        wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
+    ) -> Any:
+        if instance is not None and _active_tool.get() is instance:
+            return await wrapped(*args, **kwargs)
+        return await _trace_tool_call(
+            instrumentor,
+            instance,
+            kwargs.get("args"),
+            kwargs.get("tool_context"),
+            lambda: wrapped(*args, **kwargs),
         )
 
     return wrapper
 
 
 # ---------------------------------------------------------------------
-# BaseMemoryService.search_memory wrapper
+# Model wrappers (MODEL_EXEC)
+# ---------------------------------------------------------------------
+def _trace_llm_stream(
+    instrumentor: AdkInstrumentor,
+    llm: Any,
+    llm_request: Any,
+    stream: bool,
+    call: Callable[[], Any],
+) -> Any:
+    """
+    Wrap the ``LlmResponse`` async generator returned by ``call()`` in a
+    MODEL_EXEC span.
+
+    While the model call is in flight, provider-SDK instrumentation
+    underneath (google-genai for ``Gemini``, litellm for ``LiteLlm``, …)
+    is suppressed: ``instrument_all`` enables both layers, and without
+    this one turn would be reported — and its tokens counted — twice.
+    """
+    model = read(llm_request, "model") or read(llm, "model") or "adk.llm"
+    scope = _open_adk_span(instrumentor.client, f"adk.llm.{model}", SpanKind.MODEL_EXEC)
+    span = scope.span
+    safe_call(_set_llm_request_attrs, span, llm_request, bool(stream), llm)
+
+    try:
+        agen = call()
+    except BaseException as exc:
+        _close_adk_span(scope, exc)
+        raise
+    state = _LlmStreamState()
+    return _AdkGenScope(
+        agen,
+        scope,
+        suppress_provider_spans=True,
+        on_item=state.absorb,
+        on_finish=lambda: state.finalize(span),
+    )
+
+
+def _resolve_flow_llm(invocation_context: Any) -> Any:
+    """The ``BaseLlm`` the current agent is configured with, or None."""
+    agent = read(invocation_context, "agent")
+    if agent is None:
+        return None
+    try:
+        # A property on LlmAgent; resolving it can raise for a
+        # misconfigured agent, which the real call will report itself.
+        return getattr(agent, "canonical_model", None)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _flow_is_streaming(invocation_context: Any) -> bool:
+    mode = read(read(invocation_context, "run_config"), "streaming_mode")
+    return getattr(mode, "name", None) == "SSE"
+
+
+def llm_call_site(instrumentor: AdkInstrumentor) -> Callable[..., Any]:
+    """
+    Wrap ``BaseLlmFlow._run_and_handle_error(response_generator,
+    invocation_context, llm_request, model_response_event, ...)``.
+
+    This is the generator the LLM flow builds around
+    ``llm.generate_content_async(...)`` for every model turn, so it sees
+    the turn for any ``BaseLlm`` — including the ones that override
+    ``generate_content_async`` without being on a patch list (``Gemma``,
+    ``ApigeeLlm``, the OpenAI / OCI integrations, user subclasses). It is
+    only reached when the model is really called: a ``before_model``
+    callback that answers the turn short-circuits before it.
+    """
+
+    def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+        invocation_context = args[1] if len(args) > 1 else kwargs.get("invocation_context")
+        llm_request = args[2] if len(args) > 2 else kwargs.get("llm_request")
+        return _trace_llm_stream(
+            instrumentor,
+            _resolve_flow_llm(invocation_context),
+            llm_request,
+            _flow_is_streaming(invocation_context),
+            lambda: wrapped(*args, **kwargs),
+        )
+
+    return wrapper
+
+
+def llm_generate_content_async(instrumentor: AdkInstrumentor) -> Callable[..., Any]:
+    """
+    Wrap ``<Llm>.generate_content_async(llm_request, stream=False)`` on a
+    model class. Only installed when the ``llm_call_site`` target does
+    not exist in the installed ADK — the two would otherwise both open a
+    span for the same turn.
+    """
+
+    def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+        llm_request = args[0] if args else kwargs.get("llm_request")
+        stream = args[1] if len(args) > 1 else kwargs.get("stream", False)
+        return _trace_llm_stream(
+            instrumentor, instance, llm_request, bool(stream), lambda: wrapped(*args, **kwargs)
+        )
+
+    return wrapper
+
+
+# ---------------------------------------------------------------------
+# Memory wrappers (RAG_EXEC)
 # ---------------------------------------------------------------------
 def _set_memory_search_attrs(span: DisseqtSpan, instance: Any, kwargs: dict[str, Any]) -> None:
     span.set_operation("search_memory")
@@ -668,32 +1040,89 @@ def _set_memory_search_result_attrs(span: DisseqtSpan, result: Any) -> None:
     safe_set(span, "agentic.rag.result_count", count)
 
 
-def memory_search_memory(instrumentor: AdkInstrumentor) -> Callable[..., Any]:
-    """
-    Wrap ``BaseMemoryService.search_memory`` as a RAG_EXEC span.
+async def _trace_memory_search(
+    instrumentor: AdkInstrumentor,
+    service: Any,
+    search_kwargs: dict[str, Any],
+    call: Callable[[], Any],
+) -> Any:
+    """Run ``await call()`` inside a RAG_EXEC span for ``service``."""
+    scope = _open_adk_span(instrumentor.client, "adk.memory.search", SpanKind.RAG_EXEC)
+    span = scope.span
+    safe_call(_set_memory_search_attrs, span, service, search_kwargs)
 
-    All ADK memory services (``InMemoryMemoryService``,
-    ``VertexAiRagMemoryService``, ``VertexAiMemoryBankService``) override
-    the abstract ``search_memory(*, app_name, user_id, query)`` coroutine
-    on ``BaseMemoryService``, so one patch covers the tree. Return value
-    is a ``SearchMemoryResponse`` with ``.memories: list[MemoryEntry]``
-    — we record the count as ``agentic.rag.result_count``.
+    ctx_token = enter_isolated_context(scope.trace, span)
+    active_token = _active_memory.set(service)
+    result: Any = None
+    exc_seen: BaseException | None = None
+    try:
+        result = await call()
+    except BaseException as exc:
+        exc_seen = exc
+        raise
+    finally:
+        with contextlib.suppress(ValueError, RuntimeError):
+            _active_memory.reset(active_token)
+        exit_isolated_context(ctx_token)
+        if exc_seen is None:
+            safe_call(_set_memory_search_result_attrs, span, result)
+        _close_adk_span(scope, exc_seen)
+    return result
+
+
+def memory_call_site(instrumentor: AdkInstrumentor) -> Callable[..., Any]:
+    """
+    Wrap ``Context.search_memory(query)`` (``google.adk.agents.context``;
+    ``ToolContext`` is an alias of it).
+
+    This is the one place ADK calls ``memory_service.search_memory(...)``
+    — ``load_memory`` / ``preload_memory`` and user tools all come
+    through it — so it covers every memory backend, including the ones
+    that override ``search_memory`` without calling ``super()``
+    (``FirestoreMemoryService``, user services).
     """
 
     async def wrapper(
         wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
     ) -> Any:
-        scope = open_llm_span(instrumentor.client, "adk.memory.search", SpanKind.RAG_EXEC)
-        span = scope.span
-        safe_call(_set_memory_search_attrs, span, instance, kwargs)
-        try:
-            result = await wrapped(*args, **kwargs)
-        except BaseException as exc:
-            scope.__exit__(type(exc), exc, exc.__traceback__)
-            raise
-        safe_call(_set_memory_search_result_attrs, span, result)
-        scope.__exit__(None, None, None)
-        return result
+        invocation_context = getattr(instance, "_invocation_context", None)
+        service = read(invocation_context, "memory_service")
+        if service is None:
+            # ADK raises "Memory service is not available"; nothing was
+            # searched, so there is no RAG span to record.
+            return await wrapped(*args, **kwargs)
+        search_kwargs = {
+            "query": args[0] if args else kwargs.get("query"),
+            "app_name": read(invocation_context, "app_name"),
+            "user_id": read(invocation_context, "user_id"),
+        }
+        return await _trace_memory_search(
+            instrumentor, service, search_kwargs, lambda: wrapped(*args, **kwargs)
+        )
+
+    return wrapper
+
+
+def memory_search_memory(instrumentor: AdkInstrumentor) -> Callable[..., Any]:
+    """
+    Wrap ``<MemoryService>.search_memory(*, app_name, user_id, query)``
+    on a memory-service class.
+
+    Backstop for a service searched directly and for ADK releases without
+    the ``Context.search_memory`` call site. Passes through when an outer
+    wrapper is already tracing this same service instance. The response
+    is a ``SearchMemoryResponse``; its ``.memories`` length is recorded
+    as ``agentic.rag.result_count``.
+    """
+
+    async def wrapper(
+        wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
+    ) -> Any:
+        if instance is not None and _active_memory.get() is instance:
+            return await wrapped(*args, **kwargs)
+        return await _trace_memory_search(
+            instrumentor, instance, kwargs, lambda: wrapped(*args, **kwargs)
+        )
 
     return wrapper
 
@@ -733,138 +1162,27 @@ def a2a_run_async_impl(instrumentor: AdkInstrumentor) -> Callable[..., Any]:
     convention: AGENT_EXEC = "run this agent turn", CLIENT = "send
     request to remote peer, wait for reply".
 
-    Reuses ``_AgentGenScope`` with ``install_agg=False`` since:
-      * we don't want a tool-call aggregator on this scope (aggregation
-        belongs on the enclosing AGENT_EXEC scope);
-      * we DO want the same idempotent-close + aclose-forwarding
-        guarantees that keep async-gen wrappers deadlock-safe.
+    ``install_agg=False``: tool-call aggregation belongs on the enclosing
+    AGENT_EXEC scope, not on the transport span.
     """
 
     def wrapper(wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
-        scope = open_llm_span(instrumentor.client, "adk.a2a.send", SpanKind.CLIENT)
-        span = scope.span
-        safe_call(_set_a2a_attrs, span, instance)
+        scope = _open_adk_span(instrumentor.client, "adk.a2a.send", SpanKind.CLIENT)
+        safe_call(_set_a2a_attrs, scope.span, instance)
 
         try:
             agen = wrapped(*args, **kwargs)
         except BaseException as exc:
-            scope.__exit__(type(exc), exc, exc.__traceback__)
+            _close_adk_span(scope, exc)
             raise
-        return _AgentGenScope(
-            agen=agen,
-            scope=scope,
-            span=span,
-            install_agg=False,
-        )
+        return _AdkGenScope(agen, scope, install_agg=False)
 
     return wrapper
 
 
 # ---------------------------------------------------------------------
-# AGENT_EXEC async-generator scope
-# ---------------------------------------------------------------------
-async def _AgentGenScope(  # noqa: N802 — kept PascalCase for API compat
-    agen: Any,
-    scope: _SpanScope,
-    span: DisseqtSpan,
-    install_agg: bool,
-) -> Any:
-    """
-    Native async-generator wrapper around the ADK runner / agent /
-    A2A async generators.
-
-    PREVIOUSLY a plain class with ``__anext__`` / ``__aexit__``, which
-    looked right but didn't play well with ``async for ... break``: the
-    event loop's asyncgen finalizer only runs for NATIVE async
-    generators, so a plain-class wrapper that got abandoned on break
-    had its finalize path skipped — the AGENT_EXEC root span never
-    emitted, the tool-call aggregator stayed set in the ContextVar,
-    and the next run nested into the stale trace (ADK's quickstart
-    does exactly ``async for ev in agen: if is_final_response(): break``).
-
-    Rewriting as a real ``async def ... yield`` function means CPython's
-    asyncgen hooks guarantee ``finally`` runs on:
-      * normal exhaustion (StopAsyncIteration)
-      * caller ``break`` / ``return`` inside ``async for``
-      * caller ``aclose()`` or explicit cancellation
-      * GC / event-loop shutdown via ``set_asyncgen_hooks``
-
-    Deferred aggregator install:
-      ``_install_aggregator_if_absent()`` is called INSIDE this
-      generator's own body, which runs inside the task's own copied
-      Context — avoids the adk-python#949 "Token created in a different
-      Context" leak that would happen if the install ran in the
-      caller's context and the reset ran in the task's.
-    """
-    agg_token: Any = _install_aggregator_if_absent() if install_agg else None
-    exc_seen: BaseException | None = None
-    try:
-        async for item in agen:
-            yield item
-    except BaseException as exc:
-        # CancelledError / GeneratorExit / KeyboardInterrupt land here.
-        exc_seen = exc
-        raise
-    finally:
-        # Forward aclose to the inner generator so ADK's own cleanup
-        # (contextvar reset, invocation-scope teardown) still runs on
-        # every exit path.
-        inner_aclose = getattr(agen, "aclose", None)
-        if callable(inner_aclose):
-            try:
-                await inner_aclose()
-            except BaseException:  # noqa: BLE001 — never propagate cleanup failure
-                pass
-        _finalize_agent_scope(scope, span, agg_token=agg_token, exc=exc_seen)
-
-
-def _finalize_agent_scope(
-    scope: _SpanScope,
-    span: DisseqtSpan,
-    *,
-    agg_token: Any,
-    exc: BaseException | None,
-) -> None:
-    """
-    Flush the tool-call aggregator (if this scope installed one) onto
-    the AGENT_EXEC span, reset the contextvar, and close the span
-    scope. Order matters — aggregator flush must run BEFORE ``scope.
-    __exit__`` so the merged tool_calls ship with the span.
-    """
-    if agg_token is not None:
-        agg = _current_agg.get()
-        if agg is not None:
-            try:
-                agg.flush_onto(span)
-            except Exception:  # noqa: BLE001 — never break the caller
-                pass
-        try:
-            _current_agg.reset(agg_token)
-        except (LookupError, ValueError):
-            # Token was created in a different context — a known ADK
-            # gotcha (google/adk-python#949). Nothing sensible to do
-            # here; leaving the var alone is safer than raising.
-            pass
-    if exc is not None:
-        scope.__exit__(type(exc), exc, exc.__traceback__)
-    else:
-        scope.__exit__(None, None, None)
-
-
-# ---------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------
-def _install_aggregator_if_absent() -> Any:
-    """
-    Install a fresh ``_ToolCallAggregator`` into the current context IFF
-    none is already active. Returns the contextvars Token to reset with
-    later (None if we didn't install).
-    """
-    if _current_agg.get() is not None:
-        return None
-    return _current_agg.set(_ToolCallAggregator())
-
-
 def safe_extract(fn: Callable[..., dict[str, Any]], *args: Any, **kwargs: Any) -> dict[str, Any]:
     """
     Invoke ``fn`` and return its result, or an empty dict on any failure.

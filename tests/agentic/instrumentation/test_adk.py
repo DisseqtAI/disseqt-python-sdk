@@ -6,32 +6,38 @@ mock objects — google-adk itself does not need to be importable for
 them to run. That's deliberate: the wrappers' failure modes (missed
 scope closure on cancellation, context-var Token leaks across
 frames, aggregator flushed twice) are pure Python control-flow bugs
-that don't need a real ADK to reproduce. An additional
-``pytest.importorskip("google.adk")`` block at the bottom covers
-the end-to-end wrapt install path when the package is present in CI.
+that don't need a real ADK to reproduce. ``test_adk_e2e.py`` covers
+the same behavior through a real ``InMemoryRunner``.
 """
 
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
-from disseqt_agentic_sdk.instrumentation._tool_result import _current_agg
+from disseqt_agentic_sdk.context import get_current_span, get_current_trace
+from disseqt_agentic_sdk.enums import SpanKind, SpanStatus
+from disseqt_agentic_sdk.instrumentation._tool_result import _current_agg, _ToolCallAggregator
+from disseqt_agentic_sdk.instrumentation._utils import open_llm_span
 from disseqt_agentic_sdk.instrumentation.adk.patch import (
-    _AgentGenScope,
+    _AdkGenScope,
     _extract_tool_calls,
-    _install_aggregator_if_absent,
     _LlmStreamState,
     _normalize_contents,
+    _open_adk_span,
     a2a_run_async_impl,
     agent_run_async,
+    llm_call_site,
     llm_generate_content_async,
+    memory_call_site,
     memory_search_memory,
     runner_run_async,
+    tool_call_site,
     tool_run_async,
 )
 from disseqt_agentic_sdk.semantics import AgenticAttributes, GenAIAttributes
@@ -132,8 +138,26 @@ class _AsyncGen:
         self.aclose_called = True
 
 
+class _Probe(_AsyncGen):
+    """An ``_AsyncGen`` that records what is ambient each time it is resumed."""
+
+    def __init__(self, items):
+        super().__init__(items)
+        self.seen_agg: list = []
+        self.seen_span: list = []
+
+    async def __anext__(self):
+        self.seen_agg.append(_current_agg.get())
+        self.seen_span.append(get_current_span())
+        return await super().__anext__()
+
+
 def _run(coro):
-    return asyncio.new_event_loop().run_until_complete(coro)
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 # ---------------------------------------------------------------------
@@ -339,9 +363,9 @@ class TestToolWrapper:
         wrapper = tool_run_async(instrumentor)
 
         # Install an aggregator ourselves and hold the token.
-        token = _install_aggregator_if_absent()
+        agg = _ToolCallAggregator()
+        token = _current_agg.set(agg)
         try:
-            agg = _current_agg.get()
 
             async def wrapped(*, args, tool_context):
                 return "ok"
@@ -453,10 +477,10 @@ class TestRunnerWrapper:
         instrumentor = MagicMock(client=recording_client)
         wrapper = runner_run_async(instrumentor)
 
-        events = [SimpleNamespace(id=1), SimpleNamespace(id=2)]
+        inner = _Probe([SimpleNamespace(id=1), SimpleNamespace(id=2)])
 
         def wrapped(**kwargs):
-            return _AsyncGen(events)
+            return inner
 
         runner = SimpleNamespace(app_name="my-app", agent=SimpleNamespace(name="root-agent"))
         result = wrapper(
@@ -466,18 +490,26 @@ class TestRunnerWrapper:
             {"user_id": "u1", "session_id": "s1", "new_message": None},
         )
 
-        # Inside the generator lifetime, aggregator is set.
+        between_yields: list = []
+
         async def _drive():
-            it = result.__aiter__()
-            await it.__anext__()
-            assert _current_agg.get() is not None
             async for _ in result:
-                pass
+                # The consumer's own context, between two events.
+                between_yields.append((_current_agg.get(), get_current_span()))
 
         _run(_drive())
 
-        # After generator exhaustion, aggregator was reset.
+        # While ADK code runs, the aggregator and the runner span are ambient...
+        assert all(agg is not None for agg in inner.seen_agg)
+        assert len(set(map(id, inner.seen_agg))) == 1
+        assert all(sp is not None and sp.name == "adk.runner.run_async" for sp in inner.seen_span)
+        # ...but nothing is left in the consumer's context between events
+        # or afterwards, so a `break` there cannot leak it.
+        assert between_yields == [(None, None), (None, None)]
         assert _current_agg.get() is None
+        assert get_current_span() is None
+        assert get_current_trace() is None
+
         span = find_span(recording_client, "adk.runner.run_async")
         attrs = json.loads(span.attributes_json)
         assert attrs[AgenticAttributes.AGENT_NAME] == "root-agent"
@@ -490,40 +522,34 @@ class TestRunnerWrapper:
         runner_wrapper = runner_run_async(instrumentor)
         agent_wrapper = agent_run_async(instrumentor)
 
-        # Simulate: Runner opens root agg → BaseAgent runs inside → tool
+        # Simulate: Runner opens root agg -> BaseAgent runs inside -> tool
         # calls should land on the runner-level aggregator.
-        outer_events = [SimpleNamespace(id="outer")]
-
-        def outer(**kwargs):
-            return _AsyncGen(outer_events)
-
-        runner = SimpleNamespace(app_name="app", agent=SimpleNamespace(name="root"))
-        outer_gen = runner_wrapper(outer, runner, (), {})
-
-        captured_agg: list = []
-
-        def inner(parent_context):
-            # Capture the aggregator active WHEN the BaseAgent wrapper opens.
-            captured_agg.append(_current_agg.get())
-            return _AsyncGen([SimpleNamespace(id="inner")])
-
+        agent_inner = _Probe([SimpleNamespace(id="inner")])
         agent = SimpleNamespace(name="sub", description=None)
         parent_ctx = SimpleNamespace(invocation_id="inv-1", branch=None)
+        seen_by_runner_body: list = []
+
+        async def runner_body(**kwargs):
+            seen_by_runner_body.append(_current_agg.get())
+            async for ev in agent_wrapper(lambda ctx: agent_inner, agent, (parent_ctx,), {}):
+                yield ev
+
+        runner = SimpleNamespace(app_name="app", agent=SimpleNamespace(name="root"))
 
         async def _drive():
-            it = outer_gen.__aiter__()
-            await it.__anext__()  # inside runner scope
-            inner_gen = agent_wrapper(inner, agent, (parent_ctx,), {})
-            async for _ in inner_gen:
-                pass
-            async for _ in outer_gen:
+            async for _ in runner_wrapper(runner_body, runner, (), {}):
                 pass
 
         _run(_drive())
 
-        # Runner's aggregator was still active while sub-agent ran.
-        assert captured_agg[0] is not None
-        # After both scopes exit, aggregator reset.
+        # The sub-agent ran under the Runner's aggregator, not its own.
+        assert seen_by_runner_body[0] is not None
+        assert all(agg is seen_by_runner_body[0] for agg in agent_inner.seen_agg)
+        # And its span is parented to the runner span, in the same trace.
+        root = find_span(recording_client, "adk.runner.run_async")
+        sub = find_span(recording_client, "adk.agent.sub")
+        assert sub.parent_span_id == root.span_id
+        assert sub.trace_id == root.trace_id
         assert _current_agg.get() is None
 
     def test_runner_cancelled_mid_iteration_still_finalizes(self, recording_client):
@@ -562,39 +588,33 @@ class TestRunnerWrapper:
 
 
 # ---------------------------------------------------------------------
-# _AgentGenScope directly
+# _AdkGenScope directly
 # ---------------------------------------------------------------------
-class TestAgentGenScope:
-    def test_double_close_is_idempotent(self, recording_client):
-        from disseqt_agentic_sdk.enums import SpanKind
-        from disseqt_agentic_sdk.instrumentation._utils import open_llm_span
+def _status(span) -> str:
+    return span.status_code
 
-        scope = open_llm_span(recording_client, "adk.agent.x", SpanKind.AGENT_EXEC)
+
+class TestAdkGenScope:
+    def test_double_close_is_idempotent(self, recording_client):
+        scope = _open_adk_span(recording_client, "adk.agent.x", SpanKind.AGENT_EXEC)
         agen = _AsyncGen([1, 2])
-        wrapped = _AgentGenScope(agen=agen, scope=scope, span=scope.span, install_agg=False)
+        wrapped = _AdkGenScope(agen, scope)
 
         async def _drive():
-            # Enter the generator body (first yield) so aclose() exercises
-            # the finally branch; the _AgentGenScope rewrite as a native
-            # async generator (TP-2128 round-3 PR #33 review for the
-            # async-for-break leak) means aclose() on a never-started gen
-            # is a no-op, matching CPython asyncgen semantics.
-            agen_iter = aiter(wrapped)
-            await anext(agen_iter)
+            await wrapped.__anext__()
             await wrapped.aclose()
             await wrapped.aclose()  # second must be a no-op
+            with pytest.raises(StopAsyncIteration):
+                await wrapped.__anext__()
 
         _run(_drive())
-        # aclose was forwarded exactly once (idempotency guard held).
         assert agen.aclose_called is True
+        spans = [s for s in recording_client.buffer.spans if s.name == "adk.agent.x"]
+        assert len(spans) == 1  # closed exactly once
 
     def test_exhaustion_closes_scope(self, recording_client):
-        from disseqt_agentic_sdk.enums import SpanKind
-        from disseqt_agentic_sdk.instrumentation._utils import open_llm_span
-
-        scope = open_llm_span(recording_client, "adk.agent.y", SpanKind.AGENT_EXEC)
-        agen = _AsyncGen([SimpleNamespace(id="e")])
-        wrapped = _AgentGenScope(agen=agen, scope=scope, span=scope.span, install_agg=False)
+        scope = _open_adk_span(recording_client, "adk.agent.y", SpanKind.AGENT_EXEC)
+        wrapped = _AdkGenScope(_AsyncGen([SimpleNamespace(id="e")]), scope)
 
         async def _drain():
             async for _ in wrapped:
@@ -603,43 +623,430 @@ class TestAgentGenScope:
         _run(_drain())
         find_span(recording_client, "adk.agent.y")
 
-    def test_async_for_break_finalizes_span(self, recording_client):
+    def test_async_for_break_finalizes_on_a_live_loop(self, recording_client):
         """
-        TP-2128 round-3 PR #33 review: ``async for ... break`` must still
-        finalize the scope. The old plain-class implementation never ran
-        _afinalize on break (the asyncgen finalizer only runs for native
-        async generators), so the AGENT_EXEC span never emitted and the
-        aggregator stayed set in the ContextVar. The native-asyncgen
-        rewrite relies on CPython's loop shutdown closing suspended
-        asyncgens — in a real app ``asyncio.run()`` does this; the
-        test driver below calls ``shutdown_asyncgens()`` explicitly.
+        PR #33 review: ``async for ... break`` (ADK's quickstart pattern)
+        must finalize the run while the loop is still alive — no
+        ``shutdown_asyncgens()``, no loop turn — as a clean, non-error
+        span, and must leave nothing behind for the next run on that
+        loop to nest into.
         """
-        from disseqt_agentic_sdk.enums import SpanKind
-        from disseqt_agentic_sdk.instrumentation._utils import open_llm_span
+        instrumentor = MagicMock(client=recording_client)
+        wrapper = runner_run_async(instrumentor)
+        runner = SimpleNamespace(app_name="app", agent=SimpleNamespace(name="root"))
 
-        scope = open_llm_span(recording_client, "adk.agent.brk", SpanKind.AGENT_EXEC)
-        agen = _AsyncGen([SimpleNamespace(id="a"), SimpleNamespace(id="b")])
-        wrapped = _AgentGenScope(agen=agen, scope=scope, span=scope.span, install_agg=True)
+        def start():
+            events = [SimpleNamespace(id="a"), SimpleNamespace(id="b")]
+            return wrapper(lambda **kw: _Probe(events), runner, (), {})
 
         async def _drive():
-            async for _ in wrapped:
-                break  # mimics ADK quickstart's `if is_final_response(): break`
+            async for _ in start():
+                break  # mimics `if event.is_final_response(): break`
 
-        loop = asyncio.new_event_loop()
+            # Still inside the running loop, immediately after the break.
+            first = find_span(recording_client, "adk.runner.run_async")
+            assert _status(first) == SpanStatus.OK.value
+            assert AgenticAttributes.ERROR_MESSAGE not in json.loads(first.attributes_json)
+            assert _current_agg.get() is None
+            assert get_current_span() is None
+            assert get_current_trace() is None
+
+            # A second run on the same loop is its own root, in its own trace.
+            async for _ in start():
+                pass
+            return first
+
+        first = _run(_drive())
+        roots = [s for s in recording_client.buffer.spans if s.name == "adk.runner.run_async"]
+        assert len(roots) == 2
+        second = roots[1]
+        assert second.trace_id != first.trace_id
+        assert second.parent_span_id is None
+        assert second.root is True
+
+    def test_break_with_a_held_reference_finalizes_on_aclose(self, recording_client):
+        """
+        A consumer that keeps its own reference to the generator and
+        breaks is indistinguishable from one that will resume later, so
+        the span stays open until ``aclose()`` (or the reference is
+        dropped). Either way nothing leaks into the consumer's context,
+        and closing is not an error.
+        """
+        scope = _open_adk_span(recording_client, "adk.agent.held", SpanKind.AGENT_EXEC)
+        inner = _AsyncGen([SimpleNamespace(id="a"), SimpleNamespace(id="b")])
+        held = _AdkGenScope(inner, scope, install_agg=True)
+
+        async def _drive():
+            async for _ in held:
+                break
+            assert _current_agg.get() is None
+            assert get_current_span() is None
+            assert not [s for s in recording_client.buffer.spans if s.name == "adk.agent.held"]
+            await held.aclose()
+
+        _run(_drive())
+        assert inner.aclose_called is True
+        assert _status(find_span(recording_client, "adk.agent.held")) == SpanStatus.OK.value
+
+    def test_dropped_reference_finalizes(self, recording_client):
+        scope = _open_adk_span(recording_client, "adk.agent.dropped", SpanKind.AGENT_EXEC)
+        holder = [_AdkGenScope(_AsyncGen([1, 2]), scope)]
+
+        async def _drive():
+            await holder[0].__anext__()
+
+        _run(_drive())
+        assert not [s for s in recording_client.buffer.spans if s.name == "adk.agent.dropped"]
+        holder.clear()
+        gc.collect()
+        assert _status(find_span(recording_client, "adk.agent.dropped")) == SpanStatus.OK.value
+
+    def test_generator_exit_from_inner_is_not_an_error(self, recording_client):
+        """``aclose()`` injects GeneratorExit; it must not mark the span failed."""
+
+        class _RaisesGeneratorExit:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise GeneratorExit
+
+        scope = _open_adk_span(recording_client, "adk.agent.gexit", SpanKind.AGENT_EXEC)
+        wrapped = _AdkGenScope(_RaisesGeneratorExit(), scope)
+
+        async def _drive():
+            with pytest.raises(GeneratorExit):
+                await wrapped.__anext__()
+
+        _run(_drive())
+        span = find_span(recording_client, "adk.agent.gexit")
+        assert _status(span) == SpanStatus.OK.value
+        assert AgenticAttributes.ERROR_TYPE not in json.loads(span.attributes_json)
+
+    def test_real_error_is_still_an_error(self, recording_client):
+        class _Boom:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise RuntimeError("model exploded")
+
+        scope = _open_adk_span(recording_client, "adk.agent.boom", SpanKind.AGENT_EXEC)
+        wrapped = _AdkGenScope(_Boom(), scope)
+
+        async def _drive():
+            with pytest.raises(RuntimeError):
+                await wrapped.__anext__()
+
+        _run(_drive())
+        span = find_span(recording_client, "adk.agent.boom")
+        assert _status(span) == SpanStatus.ERROR.value
+        assert json.loads(span.attributes_json)[AgenticAttributes.ERROR_TYPE] == "RuntimeError"
+
+
+# ---------------------------------------------------------------------
+# Concurrency: parent capture + task-isolated context
+# ---------------------------------------------------------------------
+class TestConcurrentRuns:
+    def test_gathered_runs_get_separate_traces(self, recording_client):
+        """
+        PR #33 review: two ``run_async`` calls in one ``asyncio.gather``
+        share a thread, so thread-local "current span" used to fold them
+        into one trace. Each run must be its own trace, with its own
+        children parented inside it.
+        """
+        instrumentor = MagicMock(client=recording_client)
+        runner_wrapper = runner_run_async(instrumentor)
+        tool_wrapper = tool_run_async(instrumentor)
+
+        async def slow_tool(*, args, tool_context):
+            await asyncio.sleep(0.01)  # forces the two runs to interleave
+            return "ok"
+
+        def make_run(name):
+            async def body(**kwargs):
+                tool = SimpleNamespace(name=f"tool-{name}", description=None)
+                ctx = SimpleNamespace(function_call_id=f"call-{name}")
+                await asyncio.sleep(0)
+                await tool_wrapper(slow_tool, tool, (), {"args": {}, "tool_context": ctx})
+                yield SimpleNamespace(id=name)
+
+            runner = SimpleNamespace(app_name=name, agent=SimpleNamespace(name=name))
+
+            async def consume():
+                async for _ in runner_wrapper(body, runner, (), {}):
+                    pass
+
+            return consume()
+
+        async def _drive():
+            await asyncio.gather(make_run("a"), make_run("b"))
+
+        _run(_drive())
+
+        roots = {
+            json.loads(s.attributes_json)["agentic.app.name"]: s
+            for s in recording_client.buffer.spans
+            if s.name == "adk.runner.run_async"
+        }
+        assert set(roots) == {"a", "b"}
+        assert roots["a"].trace_id != roots["b"].trace_id
+        for name, root in roots.items():
+            assert root.parent_span_id is None
+            tool = find_span(recording_client, f"adk.tool.tool-{name}")
+            assert tool.trace_id == root.trace_id
+            assert tool.parent_span_id == root.span_id
+        # Nothing was published to the shared thread-local context.
+        assert get_current_trace() is None
+        assert get_current_span() is None
+
+    def test_run_nests_under_a_trace_the_user_opened(self, recording_client):
+        from disseqt_agentic_sdk.trace import DisseqtTrace
+
+        instrumentor = MagicMock(client=recording_client)
+        wrapper = runner_run_async(instrumentor)
+        runner = SimpleNamespace(app_name="app", agent=SimpleNamespace(name="root"))
+
+        async def _drive():
+            async for _ in wrapper(lambda **kw: _AsyncGen([1]), runner, (), {}):
+                pass
+
+        trace = DisseqtTrace(name="user-trace", client=recording_client)
         try:
-            loop.run_until_complete(_drive())
-            # asyncio.run() would call this before closing the loop; do
-            # it explicitly so the suspended asyncgen's finally runs
-            # before our assertion.
-            loop.run_until_complete(loop.shutdown_asyncgens())
+            with trace.start_span("user-span", SpanKind.AGENT_EXEC) as user_span:
+                _run(_drive())
+                # The user's own context is exactly as they left it.
+                assert get_current_span() is user_span
+                assert get_current_trace() is trace
         finally:
-            loop.close()
-        # Span must have been emitted — _finalize_agent_scope ran via
-        # the async-gen's `finally` on the break.
-        find_span(recording_client, "adk.agent.brk")
-        # Aggregator must have been reset, so a later run doesn't see
-        # a stale one.
-        assert _current_agg.get() is None
+            trace.end()
+
+        root = find_span(recording_client, "adk.runner.run_async")
+        assert root.trace_id == trace.trace_id
+        assert root.parent_span_id == user_span.span_id
+        assert trace.is_ended  # ended by the user, not by the ADK wrapper
+
+    def test_ended_ambient_trace_is_not_reused(self, recording_client):
+        from disseqt_agentic_sdk.context import set_current_trace
+        from disseqt_agentic_sdk.trace import DisseqtTrace
+
+        stale = DisseqtTrace(name="stale", client=recording_client)
+        stale.end()
+        set_current_trace(stale)  # what a leaked, finished trace looks like
+        try:
+            scope = _open_adk_span(recording_client, "adk.agent.fresh", SpanKind.AGENT_EXEC)
+            scope.__exit__(None, None, None)
+        finally:
+            set_current_trace(None)
+        assert find_span(recording_client, "adk.agent.fresh").trace_id != stale.trace_id
+
+
+# ---------------------------------------------------------------------
+# Call-site wrappers + de-duplication
+# ---------------------------------------------------------------------
+class TestCallSites:
+    def test_tool_call_site_and_class_wrapper_emit_one_span(self, recording_client):
+        instrumentor = MagicMock(client=recording_client)
+        site = tool_call_site(instrumentor)
+        klass = tool_run_async(instrumentor)
+
+        tool = SimpleNamespace(name="mcp_lookup", description="an MCP tool")
+        tool_context = SimpleNamespace(function_call_id="call-9")
+
+        async def run_async(*, args, tool_context):
+            return {"rows": 3}
+
+        async def call_tool_async(tool, args, tool_context):
+            # ADK: `await tool.run_async(args=args, tool_context=tool_context)`,
+            # where run_async is itself class-patched.
+            return await klass(run_async, tool, (), {"args": args, "tool_context": tool_context})
+
+        result = _run(
+            site(call_tool_async, None, (tool,), {"args": {"q": 1}, "tool_context": tool_context})
+        )
+        assert result == {"rows": 3}
+
+        spans = [s for s in recording_client.buffer.spans if s.name == "adk.tool.mcp_lookup"]
+        assert len(spans) == 1
+        attrs = json.loads(spans[0].attributes_json)
+        assert attrs[AgenticAttributes.TOOL_CALL_ID] == "call-9"
+        assert json.loads(attrs[AgenticAttributes.TOOL_ARGS]) == {"q": 1}
+        assert json.loads(attrs[AgenticAttributes.TOOL_RESULT]) == {"rows": 3}
+
+    def test_super_chain_emits_one_span(self, recording_client):
+        """A subclass run_async that calls a patched super().run_async."""
+        instrumentor = MagicMock(client=recording_client)
+        klass = tool_run_async(instrumentor)
+        tool = SimpleNamespace(name="google_tool", description=None)
+
+        async def base_run_async(*, args, tool_context):
+            return "ok"
+
+        async def sub_run_async(*, args, tool_context):
+            return await klass(
+                base_run_async, tool, (), {"args": args, "tool_context": tool_context}
+            )
+
+        _run(klass(sub_run_async, tool, (), {"args": {}, "tool_context": None}))
+        assert (
+            len([s for s in recording_client.buffer.spans if s.name == "adk.tool.google_tool"]) == 1
+        )
+
+    def test_different_tool_instances_each_get_a_span(self, recording_client):
+        instrumentor = MagicMock(client=recording_client)
+        klass = tool_run_async(instrumentor)
+        outer = SimpleNamespace(name="outer", description=None)
+        inner = SimpleNamespace(name="inner", description=None)
+
+        async def inner_run(*, args, tool_context):
+            return "inner"
+
+        async def outer_run(*, args, tool_context):
+            return await klass(inner_run, inner, (), {"args": {}, "tool_context": None})
+
+        _run(klass(outer_run, outer, (), {"args": {}, "tool_context": None}))
+        outer_span = find_span(recording_client, "adk.tool.outer")
+        inner_span = find_span(recording_client, "adk.tool.inner")
+        assert inner_span.parent_span_id == outer_span.span_id
+
+    def test_llm_call_site_records_model_turn(self, recording_client):
+        instrumentor = MagicMock(client=recording_client)
+        wrapper = llm_call_site(instrumentor)
+
+        class LiteLlm:  # class name drives provider detection
+            model = "openai/gpt-4o"
+
+        invocation_context = SimpleNamespace(
+            agent=SimpleNamespace(canonical_model=LiteLlm()),
+            run_config=SimpleNamespace(streaming_mode=SimpleNamespace(name="SSE")),
+        )
+        req = _fake_llm_request(model="openai/gpt-4o")
+        final = _fake_llm_response(text="hi", prompt_tokens=4, output_tokens=2)
+
+        def run_and_handle_error(response_generator, invocation_context, llm_request, event):
+            return response_generator
+
+        gen = wrapper(
+            run_and_handle_error,
+            SimpleNamespace(),
+            (_AsyncGen([final]), invocation_context, req, SimpleNamespace()),
+            {},
+        )
+
+        async def _drain():
+            return [it async for it in gen]
+
+        assert _run(_drain()) == [final]
+        span = find_span(recording_client, "adk.llm.openai/gpt-4o")
+        attrs = json.loads(span.attributes_json)
+        assert attrs[GenAIAttributes.SYSTEM] == "openai"
+        assert attrs[GenAIAttributes.REQUEST_IS_STREAM] is True
+        assert attrs[AgenticAttributes.USAGE_INPUT_TOKENS] == 4
+
+    def test_provider_spans_are_suppressed_during_the_model_call(self, recording_client):
+        """
+        PR #33 review: with ``instrument_all`` the provider SDK under an
+        ADK model (google-genai under ``Gemini``) is instrumented too.
+        Its span — and its tool-call notifications — must be suppressed
+        while the ADK MODEL_EXEC span is recording the same turn.
+        """
+        from disseqt_agentic_sdk.instrumentation._tool_result import _notify_planned_tool_calls
+        from disseqt_agentic_sdk.instrumentation._utils import provider_spans_suppressed
+
+        instrumentor = MagicMock(client=recording_client)
+        wrapper = llm_generate_content_async(instrumentor)
+        agg = _ToolCallAggregator()
+        flags: list[bool] = []
+
+        async def provider_call(llm_request, stream=False):
+            # What GeminiInstrumentor does around api_client.aio.models.generate_content.
+            flags.append(provider_spans_suppressed())
+            scope = open_llm_span(recording_client, "gemini.generate_content", SpanKind.MODEL_EXEC)
+            scope.span.set_model_info("gemini-2.0-flash", "google")
+            _notify_planned_tool_calls([{"id": "provider-id", "name": "t", "arguments": "{}"}])
+            scope.__exit__(None, None, None)
+            yield _fake_llm_response(text="hi", prompt_tokens=5, output_tokens=2)
+
+        async def _drive():
+            token = _current_agg.set(agg)
+            try:
+                async for _ in wrapper(provider_call, None, (_fake_llm_request(),), {}):
+                    flags.append(provider_spans_suppressed())
+            finally:
+                _current_agg.reset(token)
+
+        _run(_drive())
+
+        assert flags == [True, False]  # on during the call, off for the consumer
+        model_spans = [s for s in recording_client.buffer.spans if s.kind == "MODEL_EXEC"]
+        assert [s.name for s in model_spans] == ["adk.llm.gemini-2.0-flash"]
+        assert "provider-id" not in agg._calls
+
+    def test_provider_spans_are_not_suppressed_inside_tools(self, recording_client):
+        """A tool that calls an LLM SDK itself is a real, separate model call."""
+        instrumentor = MagicMock(client=recording_client)
+        klass = tool_run_async(instrumentor)
+        tool = SimpleNamespace(name="summarize", description=None)
+
+        async def run_async(*, args, tool_context):
+            scope = open_llm_span(recording_client, "openai.chat", SpanKind.MODEL_EXEC)
+            scope.__exit__(None, None, None)
+            return "ok"
+
+        _run(klass(run_async, tool, (), {"args": {}, "tool_context": None}))
+        tool_span = find_span(recording_client, "adk.tool.summarize")
+        nested = find_span(recording_client, "openai.chat")
+        assert nested.parent_span_id == tool_span.span_id
+        assert nested.trace_id == tool_span.trace_id
+
+    def test_memory_call_site_and_class_wrapper_emit_one_span(self, recording_client):
+        instrumentor = MagicMock(client=recording_client)
+        site = memory_call_site(instrumentor)
+        klass = memory_search_memory(instrumentor)
+
+        class FirestoreMemoryService:
+            pass
+
+        service = FirestoreMemoryService()
+        response = SimpleNamespace(memories=[1, 2, 3])
+        context = SimpleNamespace(
+            _invocation_context=SimpleNamespace(
+                memory_service=service, app_name="app", user_id="u-7"
+            )
+        )
+
+        async def service_search(*, app_name, user_id, query):
+            return response
+
+        async def context_search_memory(query):
+            ic = context._invocation_context
+            return await klass(
+                service_search,
+                service,
+                (),
+                {"app_name": ic.app_name, "user_id": ic.user_id, "query": query},
+            )
+
+        assert _run(site(context_search_memory, context, ("hiking",), {})) is response
+        spans = [s for s in recording_client.buffer.spans if s.name == "adk.memory.search"]
+        assert len(spans) == 1
+        attrs = json.loads(spans[0].attributes_json)
+        assert attrs["agentic.rag.backend"] == "FirestoreMemoryService"
+        assert attrs["agentic.rag.query"] == "hiking"
+        assert attrs["agentic.session.user_id"] == "u-7"
+        assert attrs["agentic.rag.result_count"] == 3
+
+    def test_memory_call_site_without_service_emits_nothing(self, recording_client):
+        instrumentor = MagicMock(client=recording_client)
+        site = memory_call_site(instrumentor)
+        context = SimpleNamespace(_invocation_context=SimpleNamespace(memory_service=None))
+
+        async def context_search_memory(query):
+            raise ValueError("Memory service is not available.")
+
+        with pytest.raises(ValueError):
+            _run(site(context_search_memory, context, ("q",), {}))
+        assert recording_client.buffer.spans == []
 
 
 class TestContentOptOut:
@@ -913,38 +1320,19 @@ class TestA2aWrapper:
         instrumentor = MagicMock(client=recording_client)
         wrapper = a2a_run_async_impl(instrumentor)
 
+        inner = _Probe([SimpleNamespace(id="e")])
+
         def wrapped(ctx):
-            return _AsyncGen([SimpleNamespace(id="e")])
+            return inner
 
         remote = SimpleNamespace(name="peer", agent_card="u", url=None, _timeout=1.0)
         gen = wrapper(wrapped, remote, (SimpleNamespace(),), {})
 
-        captured: list = []
-
         async def _drive():
             async for _ in gen:
-                captured.append(_current_agg.get())
+                pass
 
         _run(_drive())
-        # No aggregator installed while iterating A2A stream (unlike
+        # No aggregator is ambient while the A2A stream runs (unlike
         # runner/agent wrappers).
-        assert captured == [None]
-
-
-# ---------------------------------------------------------------------
-# End-to-end wrapt install (only if google-adk is available)
-# ---------------------------------------------------------------------
-class TestAdkEndToEnd:
-    def test_instrument_and_uninstrument_roundtrip(self, recording_client):
-        pytest.importorskip("google.adk.runners")
-        from disseqt_agentic_sdk.instrumentation import instrument, uninstrument
-        from disseqt_agentic_sdk.instrumentation.auto import get_instrumented_client
-
-        assert instrument("adk", recording_client) is True
-        try:
-            # Both alias and canonical resolve to the same active entry.
-            assert get_instrumented_client("adk") is recording_client
-            assert get_instrumented_client("google-adk") is recording_client
-        finally:
-            assert uninstrument("adk") is True
-        assert get_instrumented_client("google-adk") is None
+        assert inner.seen_agg and all(agg is None for agg in inner.seen_agg)
