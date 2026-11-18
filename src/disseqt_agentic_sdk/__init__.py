@@ -18,7 +18,7 @@ Quick Start:
     client = DisseqtAgenticClient(
         api_key="your-key",
         service_name="my-service",
-        endpoint="http://localhost:8080/v1/traces",
+        endpoint="http://localhost:8080/api/v1/traces",
         application_id="your-application-uuid",
     )
 

@@ -80,7 +80,7 @@ class HTTPTransport:
         Initialize HTTP transport.
 
         Args:
-            endpoint: Backend API endpoint URL (e.g., "http://localhost:8080/v1/traces")
+            endpoint: Backend API endpoint URL (e.g., "http://localhost:8080/api/v1/traces")
             api_key: Optional API key for authentication
             timeout: Request timeout in seconds
             max_retries: Maximum number of retries

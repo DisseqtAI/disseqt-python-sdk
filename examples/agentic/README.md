@@ -9,7 +9,7 @@ from disseqt_agentic_sdk import DisseqtAgenticClient
 client = DisseqtAgenticClient(
     api_key="your-api-key",
     service_name="my-service",
-    endpoint="http://localhost:8080/v1/traces",
+    endpoint="http://localhost:8080/api/v1/traces",
     application_id="your-application-uuid",  # required
 )
 ```

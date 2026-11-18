@@ -38,7 +38,7 @@ try:
         service_name=APP_NAME,
         service_version="1.0.0",
         environment=os.getenv("DISSEQT_ENV", "production"),
-        endpoint=os.getenv("DISSEQT_ENDPOINT", "http://localhost:8080/v1/traces"),
+        endpoint=os.getenv("DISSEQT_ENDPOINT", "http://localhost:8080/api/v1/traces"),
         application_id=os.environ["DISSEQT_APPLICATION_ID"],
     )
     DISSEQT_CLIENT = client
@@ -631,7 +631,7 @@ if __name__ == "__main__":
     print("To use this agent:")
     print("1. Set environment variables:")
     print("   export DISSEQT_API_KEY='your-key'")
-    print("   export DISSEQT_ENDPOINT='http://localhost:8080/v1/traces'")
+    print("   export DISSEQT_ENDPOINT='http://localhost:8080/api/v1/traces'")
     print("   export PERPLEXITY_API_KEY='your-perplexity-key'")
     print("2. Run: adk web .")
     print("3. Open the web interface")
