@@ -73,6 +73,9 @@ jobs:
   adk-compat:
     name: adk-compat (${{ matrix.adk }})
     runs-on: ubuntu-latest
+    # Read-only: the job checks the code out and runs tests, nothing else.
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
