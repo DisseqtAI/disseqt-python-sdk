@@ -982,6 +982,73 @@ class TestCallSites:
         assert [s.name for s in model_spans] == ["adk.llm.gemini-2.0-flash"]
         assert "provider-id" not in agg._calls
 
+    def test_a_task_started_during_the_model_call_is_not_suppressed(self, recording_client):
+        """
+        PR #33 review: the suppression used to be a plain flag in a
+        ContextVar. A task started while it was set copied it and kept it
+        for life, so that task's own model calls were never traced.
+        """
+        from disseqt_agentic_sdk.instrumentation._utils import provider_spans_suppressed
+
+        instrumentor = MagicMock(client=recording_client)
+        wrapper = llm_generate_content_async(instrumentor)
+        seen: dict[str, bool] = {}
+        background: list[asyncio.Task[None]] = []
+
+        async def background_job(model_call_over: asyncio.Event) -> None:
+            # While the ADK model call is still running...
+            seen["task_during"] = provider_spans_suppressed()
+            scope = open_llm_span(recording_client, "openai.during", SpanKind.MODEL_EXEC)
+            scope.__exit__(None, None, None)
+            # ...and long after it finished.
+            await model_call_over.wait()
+            seen["task_after"] = provider_spans_suppressed()
+            scope = open_llm_span(recording_client, "openai.after", SpanKind.MODEL_EXEC)
+            scope.__exit__(None, None, None)
+
+        async def _drive():
+            model_call_over = asyncio.Event()
+
+            async def provider_call(llm_request, stream=False):
+                background.append(asyncio.create_task(background_job(model_call_over)))
+                await asyncio.sleep(0)  # let the task run inside the window
+                seen["model_call"] = provider_spans_suppressed()
+                # A blocking request handed to a worker thread is still this model call.
+                seen["worker_thread"] = await asyncio.to_thread(provider_spans_suppressed)
+                yield _fake_llm_response(text="hi", prompt_tokens=5, output_tokens=2)
+
+            async for _ in wrapper(provider_call, None, (_fake_llm_request(),), {}):
+                pass
+            model_call_over.set()
+            await asyncio.gather(*background)
+
+        _run(_drive())
+
+        assert seen == {
+            "task_during": False,
+            "model_call": True,
+            "worker_thread": True,
+            "task_after": False,
+        }
+        names = [s.name for s in recording_client.buffer.spans if s.kind == "MODEL_EXEC"]
+        assert sorted(names) == ["adk.llm.gemini-2.0-flash", "openai.after", "openai.during"]
+
+    def test_a_copied_context_is_not_suppressed_once_the_model_call_is_over(self):
+        """A ``copy_context()`` taken during the call outlives it; the suppression must not."""
+        import contextvars
+
+        from disseqt_agentic_sdk.instrumentation._utils import (
+            provider_spans_suppressed,
+            suppress_provider_spans,
+        )
+
+        with suppress_provider_spans():
+            assert provider_spans_suppressed() is True
+            copied = contextvars.copy_context()
+            assert copied.run(provider_spans_suppressed) is True  # same call, sync code
+        assert provider_spans_suppressed() is False
+        assert copied.run(provider_spans_suppressed) is False
+
     def test_provider_spans_are_not_suppressed_inside_tools(self, recording_client):
         """A tool that calls an LLM SDK itself is a real, separate model call."""
         instrumentor = MagicMock(client=recording_client)
@@ -1336,3 +1403,79 @@ class TestA2aWrapper:
         # No aggregator is ambient while the A2A stream runs (unlike
         # runner/agent wrappers).
         assert inner.seen_agg and all(agg is None for agg in inner.seen_agg)
+
+
+class TestPlannedCallsWithoutAnId:
+    """
+    google-adk 1.x gives a function call its id on a *copy* of the model
+    response, so the planned call this SDK sees has none, while the tool
+    runs under ADK's ``adk-<uuid>``. The two must still be one entry on
+    the AGENT_EXEC span, whichever is recorded first.
+    """
+
+    @staticmethod
+    def _response(*names: str):
+        parts = [
+            SimpleNamespace(function_call=SimpleNamespace(name=n, id=None, args={}), text=None)
+            for n in names
+        ]
+        return SimpleNamespace(
+            content=SimpleNamespace(parts=parts),
+            interaction_id=None,
+            model_version=None,
+            finish_reason=None,
+            error_code=None,
+            error_message=None,
+            usage_metadata=None,
+        )
+
+    def _record(self, agg, name, call_id):
+        from disseqt_agentic_sdk.instrumentation.adk.patch import _record_tool_outcome
+
+        tool = SimpleNamespace(name=name)
+        context = SimpleNamespace(function_call_id=call_id)
+        token = _current_agg.set(agg)
+        try:
+            _record_tool_outcome(tool, context, {"a": 1}, {"ok": True}, None)
+        finally:
+            _current_agg.reset(token)
+
+    def _plan(self, agg, *names):
+        from disseqt_agentic_sdk.instrumentation.adk.patch import _set_llm_response_attrs
+
+        token = _current_agg.set(agg)
+        try:
+            _set_llm_response_attrs(MagicMock(), self._response(*names))
+        finally:
+            _current_agg.reset(token)
+
+    def test_tools_ran_before_the_plan_is_reported(self):
+        agg = _ToolCallAggregator()
+        self._record(agg, "add", "adk-111")
+        self._record(agg, "add", "adk-222")
+        self._record(agg, "lookup", "adk-333")
+        self._plan(agg, "add", "lookup", "add")
+
+        assert sorted(agg._calls) == ["adk-111", "adk-222", "adk-333"]
+        assert all(c["status"] == "success" for c in agg._calls.values())
+
+    def test_plan_is_reported_before_the_tools_run(self):
+        agg = _ToolCallAggregator()
+        self._plan(agg, "add", "lookup")
+        assert len(agg._calls) == 2
+        self._record(agg, "lookup", "adk-333")
+        self._record(agg, "add", "adk-111")
+
+        assert sorted(agg._calls) == ["adk-111", "adk-333"]
+        assert {c["name"]: c["status"] for c in agg._calls.values()} == {
+            "add": "success",
+            "lookup": "success",
+        }
+
+    def test_a_planned_call_that_never_runs_stays_listed(self):
+        agg = _ToolCallAggregator()
+        self._plan(agg, "add", "lookup")
+        self._record(agg, "add", "adk-111")
+
+        assert len(agg._calls) == 2
+        assert "status" not in next(c for c in agg._calls.values() if c["name"] == "lookup")

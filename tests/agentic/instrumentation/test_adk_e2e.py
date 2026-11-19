@@ -12,10 +12,13 @@ locked OpenTelemetry version made ``google.adk`` unimportable.)
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
+import sys
 from collections.abc import AsyncGenerator
 from unittest.mock import patch
 
+import wrapt
 from google import genai
 from google.adk.agents import LlmAgent
 from google.adk.memory.base_memory_service import BaseMemoryService, SearchMemoryResponse
@@ -33,6 +36,7 @@ from disseqt_agentic_sdk.context import get_current_span, get_current_trace
 from disseqt_agentic_sdk.enums import SpanStatus
 from disseqt_agentic_sdk.instrumentation import instrument, uninstrument
 from disseqt_agentic_sdk.instrumentation._tool_result import _current_agg
+from disseqt_agentic_sdk.instrumentation.adk import instrumentor as adk_instrumentor
 from disseqt_agentic_sdk.instrumentation.auto import get_instrumented_client
 from disseqt_agentic_sdk.semantics import AgenticAttributes
 
@@ -281,13 +285,17 @@ class TestInMemoryRunner:
 
 
 class TestGeminiDoubleCount:
-    def test_gemini_turn_emits_one_model_span_with_both_instrumentors(self, recording_client):
+    def test_gemini_turn_emits_one_model_span_with_both_instrumentors(
+        self, recording_client, monkeypatch
+    ):
         """
         ``instrument_all`` turns on both the ADK and the google-genai
         instrumentors. ``Gemini.generate_content_async`` calls
         ``api_client.aio.models.generate_content``, which google-genai's
         instrumentor wraps — one turn must still be one MODEL_EXEC span.
         """
+        # google-adk 1.x ignores ``client=`` and builds one from the environment.
+        monkeypatch.setenv("GOOGLE_API_KEY", "fake")
         instrument("google-genai", recording_client)
         instrument("adk", recording_client)
 
@@ -332,37 +340,135 @@ class TestGeminiDoubleCount:
         assert _one(recording_client, kind="MODEL_EXEC").name == "gemini.generate_content"
 
 
+def _tool_call_site_bindings() -> dict[tuple[str, str], object]:
+    """Every binding of a tool call site in the installed ADK's LLM flow."""
+    found: dict[tuple[str, str], object] = {}
+    for module_name in sorted(sys.modules):
+        if not module_name.startswith(adk_instrumentor._TOOL_FLOW_PACKAGE):
+            continue
+        namespace = getattr(sys.modules[module_name], "__dict__", {})
+        for attr in adk_instrumentor._TOOL_CALL_SITE_NAMES:
+            if attr in namespace:
+                found[(module_name, attr)] = namespace[attr]
+    return found
+
+
+class TestToolsOnAnyAdkLayout:
+    """
+    PR #33 review: the tool call sites are private and live in a different
+    module in google-adk 1.32, 2.9 and 2.14. CI runs this file against
+    each of them; these tests also hold on the locked version alone.
+    """
+
+    def test_the_installed_adk_has_call_sites_and_they_are_wrapped(self, recording_client):
+        assert instrument("adk", recording_client) is True
+        bindings = _tool_call_site_bindings()
+        assert bindings, "no tool call site found in this google-adk: tools would go untraced"
+        names = {attr for _, attr in bindings}
+        assert names & {"_call_tool_async", "__call_tool_async"}
+        assert "_call_tool_in_thread_pool" in names
+        assert all(isinstance(fn, wrapt.FunctionWrapper) for fn in bindings.values())
+
+    def test_custom_tool_is_traced_when_no_call_site_is_found(self, recording_client, monkeypatch):
+        """
+        The next ADK release may move the call sites again. Tools must
+        still be traced, through ``run_async`` on the tool classes, and
+        the gap must be logged instead of passing silently.
+        """
+        monkeypatch.setattr(adk_instrumentor, "_TOOL_CALL_SITE_NAMES", ("_moved_again",))
+        with patch.object(adk_instrumentor.logger, "warning") as warned:
+            assert instrument("adk", recording_client) is True
+        assert any("tool call sites" in str(call.args[0]) for call in warned.call_args_list)
+        assert all(
+            not isinstance(fn, wrapt.FunctionWrapper) for fn in _tool_call_site_bindings().values()
+        )
+
+        _run(_drain(_default_runner("moved")))
+
+        tools = _spans(recording_client, kind="TOOL_EXEC")
+        assert sorted(s.name for s in tools) == ["adk.tool.add", "adk.tool.no_super"]
+        agent = _one(recording_client, name="adk.agent.moved")
+        assert all(s.parent_span_id == agent.span_id for s in tools)
+        calls = json.loads(_one(recording_client, name="adk.runner.run_async").attributes_json)[
+            AgenticAttributes.TOOL_CALLS
+        ]
+        assert sorted(c["name"] for c in calls) == ["add", "no_super"]
+
+    def test_tool_class_defined_after_instrument_is_traced(self, recording_client, monkeypatch):
+        """A user's tool module is usually imported after ``instrument_all``."""
+        monkeypatch.setattr(adk_instrumentor, "_TOOL_CALL_SITE_NAMES", ("_moved_again",))
+        assert instrument("adk", recording_client) is True
+
+        class DefinedLater(BaseTool):
+            def __init__(self) -> None:
+                super().__init__(name="later", description="defined after instrument")
+
+            def _get_declaration(self) -> types.FunctionDeclaration:
+                return types.FunctionDeclaration(
+                    name=self.name,
+                    description=self.description,
+                    parameters=types.Schema(type="OBJECT", properties={}),
+                )
+
+            async def run_async(self, *, args: dict, tool_context: ToolContext) -> dict:
+                return {"ok": True}
+
+        class Derived(DefinedLater):
+            async def run_async(self, *, args: dict, tool_context: ToolContext) -> dict:
+                return await super().run_async(args=args, tool_context=tool_context)
+
+        _run(_drain(_runner("late", tools=[Derived()], tool_names=["later"])))
+        # One span, though both Derived.run_async and DefinedLater.run_async are wrapped.
+        assert _one(recording_client, kind="TOOL_EXEC").name == "adk.tool.later"
+
+        assert uninstrument("adk") is True
+        assert not isinstance(DefinedLater.__dict__["run_async"], wrapt.FunctionWrapper)
+        assert not isinstance(Derived.__dict__["run_async"], wrapt.FunctionWrapper)
+        assert "__init_subclass__" not in BaseTool.__dict__
+
+        class AfterUninstrument(BaseTool):
+            async def run_async(self, *, args: dict, tool_context: ToolContext) -> dict:
+                return {}
+
+        assert not isinstance(AfterUninstrument.__dict__["run_async"], wrapt.FunctionWrapper)
+
+
 class TestInstall:
     def test_instrument_and_uninstrument_roundtrip(self, recording_client):
         from google.adk.agents import context as adk_context
-        from google.adk.flows.llm_flows import _tool_caller, base_llm_flow
+        from google.adk.flows.llm_flows import base_llm_flow
 
-        originals = (
-            _tool_caller._call_tool_async,
-            _tool_caller._call_tool_in_thread_pool,
-            base_llm_flow.BaseLlmFlow._run_and_handle_error,
-            adk_context.Context.search_memory,
-        )
+        importlib.import_module("google.adk.flows.llm_flows.functions")
+
+        def targets() -> dict[object, object]:
+            return {
+                **_tool_call_site_bindings(),
+                "llm": base_llm_flow.BaseLlmFlow.__dict__["_run_and_handle_error"],
+                "memory": adk_context.Context.__dict__["search_memory"],
+                "BaseTool": BaseTool.__dict__["run_async"],
+                "FunctionTool": FunctionTool.__dict__["run_async"],
+                "NoSuperTool": NoSuperTool.__dict__["run_async"],
+            }
+
+        originals = targets()
+        assert not any(isinstance(fn, wrapt.FunctionWrapper) for fn in originals.values())
 
         assert instrument("adk", recording_client) is True
         try:
             # Both alias and canonical resolve to the same active entry.
             assert get_instrumented_client("adk") is recording_client
             assert get_instrumented_client("google-adk") is recording_client
-            # The call sites ADK actually goes through are wrapped.
-            assert _tool_caller._call_tool_async is not originals[0]
-            assert _tool_caller._call_tool_in_thread_pool is not originals[1]
-            assert base_llm_flow.BaseLlmFlow._run_and_handle_error is not originals[2]
-            assert adk_context.Context.search_memory is not originals[3]
+            # The call sites ADK actually goes through are wrapped, and so
+            # is run_async on every tool class that defines it.
+            wrapped = targets()
+            assert set(wrapped) == set(originals)
+            for key, fn in wrapped.items():
+                assert isinstance(fn, wrapt.FunctionWrapper), key
+                assert fn is not originals[key], key
         finally:
             assert uninstrument("adk") is True
         assert get_instrumented_client("google-adk") is None
-        assert (
-            _tool_caller._call_tool_async,
-            _tool_caller._call_tool_in_thread_pool,
-            base_llm_flow.BaseLlmFlow._run_and_handle_error,
-            adk_context.Context.search_memory,
-        ) == originals
+        assert targets() == originals
 
         # After uninstrument, a run emits nothing.
         _run(_drain(_default_runner("quiet")))

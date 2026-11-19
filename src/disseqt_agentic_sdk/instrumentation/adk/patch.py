@@ -46,6 +46,7 @@ import contextlib
 import contextvars
 import inspect
 import json
+import weakref
 from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any
 
@@ -64,12 +65,12 @@ from disseqt_agentic_sdk.instrumentation._tool_result import (
 from disseqt_agentic_sdk.instrumentation._utils import (
     _get_or_bootstrap_trace,
     _SpanScope,
-    _suppress_provider_spans,
     read,
     safe_call,
     safe_set,
     set_first_tool_call_attrs,
     set_messages_if_capturing,
+    suppress_provider_spans,
 )
 from disseqt_agentic_sdk.semantics import (
     AgenticAttributes,
@@ -92,7 +93,7 @@ PROVIDER = AgenticProvider.GOOGLE
 # The tool / memory service whose call is currently being traced in this
 # context. ADK reaches a tool through a call site (``_call_tool_async``)
 # that we wrap, and the tool's own ``run_async`` is wrapped too as a
-# backstop for direct calls and older ADK layouts; ``super().run_async()``
+# backstop for direct calls and other ADK layouts; ``super().run_async()``
 # chains add further layers. Whichever wrapper is outermost opens the
 # span and records the instance here, and every wrapper underneath that
 # sees the *same instance* passes straight through — one call, one span.
@@ -238,10 +239,15 @@ class _AdkGenScope:
         ]
         if self._agg is not None:
             resets.append((_current_agg, _current_agg.set(self._agg)))
-        if self._suppress_provider_spans:
-            resets.append((_suppress_provider_spans, _suppress_provider_spans.set(True)))
         try:
-            yield
+            if self._suppress_provider_spans:
+                # Scoped to this resumption of this model call, in this
+                # task only: a task started meanwhile copies the context
+                # but is not suppressed (see suppress_provider_spans).
+                with suppress_provider_spans():
+                    yield
+            else:
+                yield
         finally:
             for var, token in reversed(resets):
                 with contextlib.suppress(ValueError, RuntimeError):
@@ -440,6 +446,87 @@ def _extract_tool_calls(content: Any, response_id: str | None) -> list[dict[str,
     return calls
 
 
+# Planned calls whose id this module made up, and executed calls already
+# paired with one, per aggregator. See ``_pair_planned_with_executed``.
+_made_up_ids: weakref.WeakKeyDictionary[_ToolCallAggregator, set[str]] = weakref.WeakKeyDictionary()
+_paired_ids: weakref.WeakKeyDictionary[_ToolCallAggregator, set[str]] = weakref.WeakKeyDictionary()
+
+
+def _pair_planned_with_executed(content: Any, tool_calls: list[dict[str, Any]]) -> None:
+    """
+    Give a planned call that came without an id the id its execution used.
+
+    A model that sends no function-call id gets one from ADK
+    (``adk-<uuid>``) when the response is turned into an event, and the
+    tool then runs under that id. ADK 2.x writes the id onto the response
+    object this module is holding, so plan and execution agree. ADK 1.x
+    writes it onto a copy, so the plan is left with the placeholder from
+    ``_extract_tool_calls`` and the same call would be listed twice on
+    the AGENT_EXEC span: once planned, once executed.
+
+    Whichever side arrives second adopts the other: here when the tool
+    already ran, in ``_record_tool_outcome`` when it runs later. Calls
+    are paired by tool name, in order.
+    """
+    agg = _current_agg.get()
+    if agg is None or agg.closed:
+        return
+    parts = [
+        p
+        for p in (read(content, "parts") or [])
+        if isinstance(read(read(p, "function_call"), "name"), str)
+        and read(read(p, "function_call"), "name")
+    ]
+    if len(parts) != len(tool_calls):
+        return
+    made_up = _made_up_ids.setdefault(agg, set())
+    paired = _paired_ids.setdefault(agg, set())
+    real_ids = {tc["id"] for part, tc in zip(parts, tool_calls, strict=True) if _has_id(part)}
+    for part, tc in zip(parts, tool_calls, strict=True):
+        if _has_id(part):
+            continue
+        for call_id, entry in agg._calls.items():
+            if (
+                "status" in entry
+                and entry.get("name") == tc["name"]
+                and call_id not in paired
+                and call_id not in real_ids
+                and call_id not in made_up
+            ):
+                tc["id"] = call_id
+                paired.add(call_id)
+                break
+        else:
+            made_up.add(tc["id"])
+
+
+def _has_id(part: Any) -> bool:
+    return bool(read(read(part, "function_call"), "id"))
+
+
+def _adopt_planned_entry(agg: _ToolCallAggregator, call_id: str, name: Any) -> None:
+    """
+    The other direction of ``_pair_planned_with_executed``: a tool is
+    about to be recorded under ``call_id``, which no plan mentions. Move
+    a planned entry with a made-up id and the same tool name under it.
+    """
+    if call_id in agg._calls:
+        return
+    made_up = _made_up_ids.get(agg)
+    if not made_up:
+        return
+    for placeholder in list(made_up):
+        entry = agg._calls.get(placeholder)
+        if entry is None or "status" in entry or entry.get("name") != name:
+            continue
+        del agg._calls[placeholder]
+        made_up.discard(placeholder)
+        entry["id"] = call_id
+        agg._calls[call_id] = entry
+        _paired_ids.setdefault(agg, set()).add(call_id)
+        return
+
+
 # ---------------------------------------------------------------------
 # LLM request/response attribute writers
 # ---------------------------------------------------------------------
@@ -570,6 +657,7 @@ def _set_llm_response_attrs(span: DisseqtSpan, response: Any) -> None:
 
     tool_calls = _extract_tool_calls(content, resp_id)
     if tool_calls:
+        safe_call(_pair_planned_with_executed, content, tool_calls)
         safe_set(span, AgenticAttributes.TOOL_CALLS, tool_calls)
         _notify_planned_tool_calls(tool_calls)
         safe_set(span, GenAIAttributes.TOOL_CALLS, tool_calls)
@@ -791,6 +879,7 @@ def _record_tool_outcome(
         return
     name = read(instance, "name")
     status = "success" if exc is None else _classify_tool_error(exc)
+    _adopt_planned_entry(agg, str(call_id), name)
     agg.add_result(
         str(call_id),
         name=name,
@@ -857,21 +946,26 @@ async def _trace_tool_call(
 
 def tool_call_site(instrumentor: AdkInstrumentor) -> Callable[..., Any]:
     """
-    Wrap ADK's tool call sites, ``_call_tool_async(tool, args,
-    tool_context)`` and ``_call_tool_in_thread_pool(...)`` in
-    ``google.adk.flows.llm_flows._tool_caller``.
+    Wrap one of ADK's tool call sites, ``_call_tool_async(tool, args,
+    tool_context)`` or ``_call_tool_in_thread_pool(...)``.
 
     Every tool the LLM flow invokes goes through one of these, whatever
-    its class — ``McpTool``, ``RestApiTool``, the LangChain / CrewAI
-    adapters and any user ``BaseTool`` subclass all override
-    ``run_async`` without calling ``super()``, so a per-class patch list
-    can never be complete.
+    its class. Where they live depends on the ADK release
+    (``flows/llm_flows/functions.py`` in 1.x, ``_tool_caller.py`` in
+    2.9, ``tools/_caller.py`` and ``tools/_thread_pool.py`` in 2.14), so
+    the instrumentor looks them up by name rather than by module path —
+    see ``AdkInstrumentor._wrap_tool_call_sites``.
+
+    Passes through when an outer wrapper is already tracing this same
+    tool instance (a re-exported binding wrapped twice, say).
     """
 
     async def wrapper(
         wrapped: Any, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
     ) -> Any:
         tool = args[0] if args else kwargs.get("tool")
+        if tool is not None and _active_tool.get() is tool:
+            return await wrapped(*args, **kwargs)
         tool_args = args[1] if len(args) > 1 else kwargs.get("args")
         tool_context = args[2] if len(args) > 2 else kwargs.get("tool_context")
         return await _trace_tool_call(
@@ -885,9 +979,12 @@ def tool_run_async(instrumentor: AdkInstrumentor) -> Callable[..., Any]:
     """
     Wrap ``<Tool>.run_async(*, args, tool_context)`` on a tool class.
 
-    Backstop for a tool run directly (outside the LLM flow) and for ADK
-    releases without the ``_tool_caller`` call sites. Passes through when
-    an outer wrapper is already tracing this same tool instance.
+    Installed on ``BaseTool`` and on every subclass that overrides
+    ``run_async`` (see ``AdkInstrumentor._wrap_tool_classes``). It covers
+    a tool run directly, outside the LLM flow, and it is what keeps tools
+    traced on an ADK release whose call sites have moved somewhere this
+    SDK does not know yet. Passes through when an outer wrapper is
+    already tracing this same tool instance.
     """
 
     async def wrapper(
