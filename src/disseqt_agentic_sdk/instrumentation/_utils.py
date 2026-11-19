@@ -17,11 +17,13 @@ slow LLM calls, short enough to flag genuinely hung requests.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import contextvars
 import os
 import threading
 import time
+from collections.abc import Iterator
 from types import TracebackType
 from typing import TYPE_CHECKING, Any
 
@@ -105,7 +107,17 @@ _CONTENT_ATTR_KEYS: frozenset[str] = frozenset(
         GenAIAttributes.COMPLETION,
         GenAIAttributes.TOOL_CALLS,
         GenAIAttributes.TOOL_ARGS,
+        # TOOL_RESULT was missing from the GenAI side of the opt-out
+        # (the AgenticAttributes mirror was there) — the ADK
+        # instrumentor emits gen_ai.tool.result on TOOL_EXEC spans, so
+        # a deployment with set_capture_content(False) still shipped
+        # tool output text. TP-2128 round-3 PR #33 review.
+        GenAIAttributes.TOOL_RESULT,
         GenAIAttributes.REQUEST_TOOLS,
+        # ADK's memory_search_memory wrapper records the raw user
+        # query here, which is typically free text (PII likely). Must
+        # honor the content-capture opt-out. TP-2128 round-3 PR #33.
+        "agentic.rag.query",
     }
 )
 
@@ -253,6 +265,11 @@ class _SpanScope:
         # perf_counter is monotonic — safe against wall-clock jumps.
         self._start = time.perf_counter()
 
+    @property
+    def trace(self) -> DisseqtTrace:
+        """The trace this scope's span belongs to."""
+        return self._trace
+
     def __enter__(self) -> DisseqtSpan:
         return self.span
 
@@ -302,7 +319,12 @@ def _get_or_bootstrap_trace(
     from disseqt_agentic_sdk.trace import DisseqtTrace
 
     trace = get_current_trace()
-    if trace is not None:
+    # An ended trace cannot take a span (``start_span`` raises). It is
+    # still "current" in a task or thread that copied the context while
+    # the trace was open and outlived it — a background job started
+    # during an agent run, say. Its calls get a trace of their own
+    # instead of failing inside the caller's model call.
+    if trace is not None and not trace.is_ended:
         return trace, False
     return (
         DisseqtTrace(
@@ -317,6 +339,115 @@ def _get_or_bootstrap_trace(
     )
 
 
+# ---------------------------------------------------------------------
+# Nested provider-span suppression
+# ---------------------------------------------------------------------
+# An agent framework's model wrapper (ADK's ``BaseLlm``) and the provider
+# SDK underneath it (google-genai, litellm, anthropic, openai) are both
+# instrumented when ``instrument_all`` is used, so one model turn would
+# emit two MODEL_EXEC spans and count its tokens twice. The framework
+# wrapper enters ``suppress_provider_spans()`` around the model call;
+# while it is in force, ``open_llm_span`` hands provider patches a no-op
+# scope and ``_notify_planned_tool_calls`` ignores them, leaving the
+# framework's span as the single record of the turn.
+#
+# The suppression belongs to ONE model call, not to everything that
+# inherits its context. A ``ContextVar`` is copied into every task and
+# ``copy_context()`` thread started while it is set, and a copy outlives
+# the ``reset()`` in the parent — a plain boolean flag would therefore
+# switch provider tracing off, for good, in any background task that
+# happened to be started during a model call. So the variable holds a
+# small record instead, and a reader is suppressed only when:
+#
+#   * the record is still active (the model call that set it has not
+#     finished — it is switched off on exit, which every copy sees), and
+#   * the reader is the model call itself: the same asyncio task, or
+#     synchronous code with no task of its own (the call's own frames,
+#     or a worker thread it handed a blocking request to).
+#
+# A different asyncio task is never suppressed, even while the model
+# call is still running: its model calls are its own.
+class _ProviderSuppression:
+    __slots__ = ("active", "task")
+
+    def __init__(self, task: Any) -> None:
+        self.active = True
+        self.task = task
+
+
+_suppress_provider_spans: contextvars.ContextVar[_ProviderSuppression | None] = (
+    contextvars.ContextVar("disseqt_suppress_provider_spans", default=None)
+)
+
+
+def _current_task_or_none() -> Any:
+    try:
+        return asyncio.current_task()
+    except RuntimeError:  # no running event loop in this thread
+        return None
+
+
+@contextlib.contextmanager
+def suppress_provider_spans() -> Iterator[None]:
+    """
+    Suppress provider-SDK spans for the model call made inside the block.
+
+    Must be entered and left in the same context (not held across a
+    ``yield`` of a generator the caller resumes from elsewhere).
+    """
+    record = _ProviderSuppression(_current_task_or_none())
+    token = _suppress_provider_spans.set(record)
+    try:
+        yield
+    finally:
+        # Off first: this is what a task or thread that copied the
+        # context sees. The reset only restores this context.
+        record.active = False
+        with contextlib.suppress(ValueError, RuntimeError):
+            _suppress_provider_spans.reset(token)
+
+
+def provider_spans_suppressed() -> bool:
+    """True while an enclosing framework span already records this model call."""
+    record = _suppress_provider_spans.get()
+    if record is None or not record.active:
+        return False
+    task = _current_task_or_none()
+    if task is None:
+        return True
+    return task is record.task
+
+
+class _NullSpan:
+    """Absorbs every span call a provider patch makes; records nothing."""
+
+    name = "suppressed"
+
+    def __getattr__(self, _name: str) -> Any:
+        def _noop(*_args: Any, **_kwargs: Any) -> _NullSpan:
+            return self
+
+        return _noop
+
+
+class _NullScope:
+    """Drop-in for ``_SpanScope`` that neither opens nor emits a span."""
+
+    def __init__(self) -> None:
+        self.span: Any = _NullSpan()
+
+    def __enter__(self) -> Any:
+        return self.span
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        return None
+
+
 def open_llm_span(
     client: DisseqtAgenticClient,
     name: str,
@@ -326,7 +457,12 @@ def open_llm_span(
     Start (or reuse) a trace and open a span for an LLM call. Callers use
     the returned scope as a context manager and set attributes on
     `scope.span`.
+
+    Returns a no-op scope when an enclosing framework span is already
+    recording this model call (see ``_suppress_provider_spans``).
     """
+    if provider_spans_suppressed():
+        return _NullScope()  # type: ignore[return-value]
     trace, owns_trace = _get_or_bootstrap_trace(client, name)
     span = trace.start_span(name, kind)
     return _SpanScope(span=span, trace=trace, owns_trace=owns_trace)

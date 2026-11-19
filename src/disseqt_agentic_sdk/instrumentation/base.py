@@ -158,16 +158,19 @@ class DisseqtInstrumentor(ABC):
     # ------------------------------------------------------------------
     # Helpers for subclasses
     # ------------------------------------------------------------------
-    def _wrap(self, module_name: str, attr: str, wrapper: Any) -> None:
+    def _wrap(self, module_name: str, attr: str, wrapper: Any) -> bool:
         """
         Monkey-patch `module_name.attr` with `wrapper` (a wrapt-compatible
         function `wrapper(wrapped, instance, args, kwargs) -> Any`).
+
+        Returns True if the patch was installed, False if the target does
+        not exist in the installed SDK (the patch is skipped, not an error).
         """
         try:
             wrapt.wrap_function_wrapper(module_name, attr, wrapper)
         except (ImportError, AttributeError) as e:
             logger.debug(f"{self.package_name}: skip patch {module_name}.{attr}: {e}")
-            return
+            return False
         # Capture the wrapt FunctionWrapper we just installed so we can
         # identify our layer later even if another library stacks more
         # wrappers on top.
@@ -176,6 +179,7 @@ class DisseqtInstrumentor(ABC):
             module = importlib.import_module(module_name)
             installed = _get_attr(module, attr)
         self._patched.append((module_name, attr, installed))
+        return True
 
     def _unwind_patches(self) -> None:
         """Restore each tracked patch and clear the list."""

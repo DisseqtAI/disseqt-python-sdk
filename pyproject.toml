@@ -53,6 +53,7 @@ dependencies = [
 #   [litellm]        litellm                   yes
 #   [mistral]        mistralai                 yes (alias → mistralai)
 #   [gemini]         google-genai              yes (alias → google-genai)
+#   [adk]            google-adk                yes (alias → google-adk)
 #
 # instrument_all() walks the canonical keys only, so each instrumentor
 # is applied exactly once regardless of which alias a caller uses.
@@ -64,6 +65,7 @@ mistral = ["mistralai>=1.5.0"]
 cohere = ["cohere>=5.11.0"]
 gemini = ["google-genai>=1.0.0"]
 litellm = ["litellm>=1.40.0"]
+adk = ["google-adk>=1.32.0"]
 # Convenience: pull every provider our instrumentation supports today.
 instrumentation = [
     "openai>=1.50.0",
@@ -73,6 +75,7 @@ instrumentation = [
     "cohere>=5.11.0",
     "google-genai>=1.0.0",
     "litellm>=1.40.0",
+    "google-adk>=1.32.0",
 ]
 
 [project.urls]
@@ -215,4 +218,5 @@ dev = [
     # The regression test allows the dev floor to be >= the extras
     # floor for the same package.
     "google-genai>=2.16.0",
+    "google-adk>=1.32.0",
 ]

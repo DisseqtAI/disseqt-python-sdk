@@ -64,6 +64,49 @@ jobs:
           name: coverage-xml
           path: coverage.xml
 
+  # The ADK instrumentor hooks private functions that google-adk has moved
+  # between releases (the tool call sites live in a different module in
+  # 1.32, 2.9 and 2.14). The lock pins one version; this runs the ADK
+  # tests against the oldest release the SDK supports and the newest one
+  # published, so a layout change fails here instead of silently
+  # dropping spans for customers.
+  adk-compat:
+    name: adk-compat (${{ matrix.adk }})
+    runs-on: ubuntu-latest
+    # Read-only: the job checks the code out and runs tests, nothing else.
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - adk: "oldest supported"
+            requirement: "google-adk==1.32.0"
+            python-version: "3.10"
+          - adk: "latest"
+            requirement: "google-adk"
+            python-version: "3.12"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: ADK instrumentation tests against ${{ matrix.requirement }}
+        run: |
+          uv run --isolated --python "${{ matrix.python-version }}" \
+            --with "${{ matrix.requirement }}" --upgrade-package google-adk \
+            python -c "from importlib.metadata import version; print('google-adk', version('google-adk'))"
+          uv run --isolated --python "${{ matrix.python-version }}" \
+            --with "${{ matrix.requirement }}" --upgrade-package google-adk \
+            pytest tests/agentic/instrumentation/test_adk.py \
+              tests/agentic/instrumentation/test_adk_e2e.py -v
+
   trivy:
     name: trivy
     runs-on: ubuntu-latest

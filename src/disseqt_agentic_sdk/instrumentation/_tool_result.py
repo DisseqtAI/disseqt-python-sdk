@@ -35,7 +35,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
 from disseqt_agentic_sdk.enums import SpanKind
-from disseqt_agentic_sdk.instrumentation._utils import safe_set
+from disseqt_agentic_sdk.instrumentation._utils import provider_spans_suppressed, safe_set
 from disseqt_agentic_sdk.semantics import AgenticAttributes, GenAIAttributes
 from disseqt_agentic_sdk.utils.logging import get_logger
 
@@ -159,6 +159,10 @@ def _notify_planned_tool_calls(tool_calls: list[Any]) -> None:
     — see its docstring for why the aggregator's defensive
     isinstance(dict) guard needs the looser type.
     """
+    if provider_spans_suppressed():
+        # An enclosing framework span (ADK) records this model call and
+        # will report the same tool calls itself, under its own ids.
+        return
     agg = _current_agg.get()
     if agg is not None:
         agg.add_planned(tool_calls)
