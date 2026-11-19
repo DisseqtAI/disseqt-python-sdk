@@ -17,12 +17,41 @@ class AgenticOperation:
     TEXT_COMPLETION = "text_completion"
     EMBEDDINGS = "embeddings"
     GENERATE_CONTENT = "generate_content"
+    IMAGE_GENERATION = "image_generation"
+    IMAGE = "image"
+    AUDIO_TRANSCRIPTION = "audio_transcription"
+    AUDIO_GENERATION = "audio_generation"
+    AUDIO = "audio"
     # Async batch-inference lifecycle. Each SDK call gets its own span
     # tagged with `agentic.batch.id` so consumers can group create/retrieve/
     # cancel spans for the same job across time.
     BATCH_CREATE = "batch.create"
     BATCH_RETRIEVE = "batch.retrieve"
     BATCH_CANCEL = "batch.cancel"
+
+
+# Deliberate duplication, not a shared contract: this is the exact set of
+# `agentic.operation.name` values the llm-monitoring-and-protection backend's
+# pricing classifier recognizes — see the `switch genAIOperation` block in
+# `internal/enrichment/enricher.go` (DisseqtAI/llm-monitoring-and-protection).
+# Any value outside this set is accepted by that switch's `default` branch
+# and silently priced as chat. There are only nine strings here and no
+# mechanism keeps the two lists in sync — if the backend switch ever grows
+# a new mode, this set needs a matching update, or `disseqt_trace(operation=...)`
+# will warn on a value the backend has since started accepting.
+PRICING_CLASSIFIED_OPERATIONS = frozenset(
+    {
+        AgenticOperation.CHAT,
+        AgenticOperation.TEXT_COMPLETION,
+        AgenticOperation.GENERATE_CONTENT,
+        AgenticOperation.EMBEDDINGS,
+        AgenticOperation.IMAGE_GENERATION,
+        AgenticOperation.IMAGE,
+        AgenticOperation.AUDIO_TRANSCRIPTION,
+        AgenticOperation.AUDIO_GENERATION,
+        AgenticOperation.AUDIO,
+    }
+)
 
 
 class BatchStatus:

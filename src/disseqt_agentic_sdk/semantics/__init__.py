@@ -5,6 +5,7 @@ Semantic conventions for agentic AI (agent, model, tool attributes).
 """
 
 from .agentic import (
+    PRICING_CLASSIFIED_OPERATIONS,
     AgenticAttributes,
     AgenticCacheOperation,
     AgenticFinishReason,
@@ -23,6 +24,7 @@ __all__ = [
     "AgenticProvider",
     "AgenticCacheOperation",
     "BatchStatus",
+    "PRICING_CLASSIFIED_OPERATIONS",
     "GenAIAttributes",
     "GenAISystem",
     "GenAIOperation",
