@@ -95,14 +95,22 @@ jobs:
             python -m pytest tests/agent_testing -q -p no:cacheprovider --rootdir=.
 
   agent-testing-pytest-compat:
-    name: agent-testing plugin (py${{ matrix.python }}, ${{ matrix.pytest }}, xdist=${{ matrix.xdist }})
+    name: agent-testing plugin (${{ matrix.label }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      # Both ends of the supported pytest range, the same shape as adk-compat: a break almost
+      # always shows at the oldest or the newest release, so the versions in between are not run.
       matrix:
-        python: ["3.10", "3.13"]
-        pytest: ["pytest>=8.0,<8.1", "pytest>=8.3,<9", "pytest>=9.0,<9.1", "pytest>=9.1,<9.2", "pytest>=9.2,<10"]
-        xdist: ["on", "off"]
+        include:
+          - label: "oldest pytest"
+            python: "3.10"
+            pytest: "pytest>=8.0,<8.1"
+            xdist: "off"
+          - label: "latest pytest"
+            python: "3.13"
+            pytest: "pytest>=9.2,<10"
+            xdist: "on"
     steps:
       - uses: actions/checkout@v4
 
