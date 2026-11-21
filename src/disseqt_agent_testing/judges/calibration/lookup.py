@@ -1,5 +1,6 @@
 """Gating state: a judge may fail a case only when its exact identity has a calibration report
-that cleared the thresholds. No report, a failing report or a disallowed source is ``advisory``."""
+that cleared the thresholds. No report, a failing report or a disallowed source is ``advisory``.
+The first report found for the identity decides: a later directory never overrides it."""
 
 import json
 from dataclasses import dataclass
@@ -24,11 +25,28 @@ class CalibrationStatus:
 
 
 def _read(path: Path) -> dict[str, Any] | None:
+    """The report at ``path``; ``None`` when there is no such file. A file that cannot be read
+    as a report is an empty one, so it fails closed instead of deferring to a later directory."""
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
         return None
-    return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        return {}
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _licenses(report: dict[str, Any], kind: str, identity_hash: str) -> bool:
+    return (
+        report.get("gating_allowed") is True
+        and report.get("kind") == kind
+        and report.get("identity_hash") == identity_hash
+        and report.get("failures") == []
+    )
 
 
 def lookup_calibration(
@@ -42,12 +60,11 @@ def lookup_calibration(
     sources: list[tuple[str, Path]] = [("project", Path(d)) for d in config.calibration_dirs]
     if mode == "builtin_or_project" and spec.builtin_calibratable:
         sources.append(("builtin", BUILTIN_DIR))
-    seen_failing = False
     for source, root in sources:
         report = _read(root / spec.name / f"{identity_hash}.json")
         if report is None:
             continue
-        if report.get("gating_allowed") is True:
+        if _licenses(report, spec.name, identity_hash):
             return CalibrationStatus("gate", "calibrated", source, identity_hash)
-        seen_failing = True
-    return CalibrationStatus("advisory", "failing" if seen_failing else "none")
+        return CalibrationStatus("advisory", "failing", source, identity_hash)
+    return CalibrationStatus("advisory", "none")

@@ -214,14 +214,11 @@ class HttpTransport:
         parsed = urllib.parse.urlsplit(url)
         if parsed.scheme not in ("http", "https") or not parsed.hostname:
             raise JudgeConfigError("service_url", "the service URL must be http(s)://host[:port]")
-        if (
-            parsed.scheme == "http"
-            and (self._key or self._project)
-            and parsed.hostname not in _LOOPBACK
-        ):
+        if parsed.scheme == "http" and parsed.hostname not in _LOOPBACK:
             raise JudgeConfigError(
                 "service_url",
-                "credentials are only sent over https (http is allowed for localhost only)",
+                "prompts and credentials are only sent over https "
+                "(http is allowed for localhost only)",
             )
         self.base_url: str | None = url
         self._opener = urllib.request.build_opener(_NoRedirect)

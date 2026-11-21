@@ -111,3 +111,24 @@ def test_xd07_a_killed_worker_becomes_worker_crashed_and_others_survive(tmp_path
     by = {c.case_id: c for c in load(out).cases}
     assert by["killer"].status == "error" and by["killer"].reason_code == "worker_crashed"
     assert by["survivor"].status == "passed"
+
+
+def test_xd08_collection_errors_reach_the_controller(project: Path) -> None:
+    (project / "tests_dir" / "broken.agent.yaml").write_text("version: 1\ncases: [\n")
+    out = project / "broken.json"
+    r = run(project, "-n", "2", "--disseqt-output", str(out))
+    assert r.returncode != 0, r.stdout + r.stderr
+    result = load(out)
+    assert result.exit_code == 3
+    assert [e.path for e in result.collection_errors] == ["tests_dir/broken.agent.yaml"]
+
+
+def test_xd09_duplicate_ids_across_files_reach_the_controller(project: Path) -> None:
+    (project / "tests_dir" / "again.agent.yaml").write_text(casefile(case("alpha")))
+    out = project / "dup.json"
+    single = project / "dup_single.json"
+    run(project, "--disseqt-output", str(single))
+    run(project, "-n", "2", "--disseqt-output", str(out))
+    assert [e.code for e in load(single).collection_errors] == ["DSQ-C03"]
+    assert load(out).collection_errors == load(single).collection_errors
+    assert load(out).exit_code == load(single).exit_code == 3

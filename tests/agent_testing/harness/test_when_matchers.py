@@ -4,7 +4,10 @@ from typing import Any
 
 import pytest
 
-from disseqt_agent_testing.harness._when import when_matches
+from disseqt_agent_testing.assertions.matching import MatchContext, match_value
+from disseqt_agent_testing.assertions.matching.impls import MAX_REGEX_TEXT
+from disseqt_agent_testing.harness import HarnessConfigError
+from disseqt_agent_testing.harness._when import matches, when_matches
 from disseqt_agent_testing.models import (
     Absent,
     AnyValue,
@@ -14,6 +17,7 @@ from disseqt_agent_testing.models import (
     DictMatch,
     Eq,
     FrozenDict,
+    Matcher,
     Normalized,
     OneOf,
     Optional_,
@@ -74,3 +78,53 @@ def test_when_matches(when: dict[str, Any], args: dict[str, Any], expected: bool
 def test_a_matcher_that_cannot_decide_never_matches() -> None:
     assert isinstance(freeze_json({"a": 1}), FrozenDict)
     assert check({"a": Regex("x")}, {"a": {"nested": 1}}) is False
+
+
+AGREEMENT_CASES: list[tuple[Matcher, Any]] = [
+    (DictMatch({"k": Eq(1)}, defaults={"k": Eq(1)}), {"k": 1}),  # a default that is also a field
+    (DictMatch({"k": Eq(1), "tmp_x": Eq(2)}, ignore=("tmp_*",)), {"k": 1}),  # ignored field
+    (DictMatch({"k": Eq(1)}, mode="exact", ignore=("tmp_*",)), {"k": 1, "tmp_y": 3}),
+    (DictMatch({"k": Eq(1)}, mode="exact", defaults={"d": Eq(0)}), {"k": 1, "d": 0}),
+    (DictMatch({"k": Eq(1)}, mode="exact", defaults={"d": Eq(0)}), {"k": 1, "d": 5}),
+    (DictMatch({"k": Eq(1)}, mode="exact"), {"k": 1, "z": 2}),
+    (DateEq("2026-01-01T10:00:00", tz="UTC"), "2026-01-01T10:00:00Z"),  # naive side localised
+    (DateEq("2026-01-01T10:00:00Z", tz="Europe/Berlin"), "2026-01-01T11:00:00"),
+    (DateEq("2026-01-01T10:00:00", tz="Europe/Berlin"), "2026-01-01T10:00:00"),
+    (DateEq("2026-01-01T10:00:00"), "2026-01-01T10:00:00Z"),
+    (DateEq("2026-01-01", tz="Europe/Berlin"), "2025-12-31T23:30:00Z"),
+    (Contains(("x", Regex("^a"))), "xyz"),
+    (Contains((Regex("^a"),)), ["b", "ab"]),
+    (Unordered((Eq(1), TypeIs(("string",)))), ["s", 1]),
+    (OneOf((1, "a")), True),
+    (Eq(1, coerce_numeric=False), 1.0),
+    (Approx(1.0, abs_tol=0.1), True),
+    (Normalized(("a b",)), "A-B"),
+    (Optional_(Regex("x")), "y"),
+]
+
+
+@pytest.mark.parametrize(("matcher", "value"), AGREEMENT_CASES, ids=repr)
+def test_dispatch_and_the_assertion_engine_give_the_same_answer(
+    matcher: Matcher, value: Any
+) -> None:
+    frozen = freeze_json(value)
+    scored = match_value(matcher, frozen, MatchContext())
+    assert matches(matcher, frozen) is all(r.ok is True for r in scored)
+    assert check({"a": matcher}, {"a": value}) is matches(matcher, frozen)
+
+
+@pytest.mark.parametrize(("matcher", "value"), AGREEMENT_CASES[:3] + AGREEMENT_CASES[6:8], ids=repr)
+def test_rules_the_assertion_engine_accepts_also_apply_at_dispatch(
+    matcher: Matcher, value: Any
+) -> None:
+    assert check({"a": matcher}, {"a": value}) is True
+
+
+def test_regex_searches_the_same_capped_text_as_the_assertion_engine() -> None:
+    assert check({"a": Regex("needle")}, {"a": "x" * (MAX_REGEX_TEXT - 6) + "needle"}) is True
+    assert check({"a": Regex("needle")}, {"a": "x" * MAX_REGEX_TEXT + "needle"}) is False
+
+
+def test_a_rule_that_cannot_be_evaluated_is_a_config_error() -> None:
+    with pytest.raises(HarnessConfigError, match="No/Such_Zone"):
+        check({"a": DateEq("2026-01-01", tz="No/Such_Zone")}, {"a": "2026-01-01"})

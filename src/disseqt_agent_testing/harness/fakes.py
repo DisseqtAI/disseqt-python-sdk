@@ -39,7 +39,7 @@ from .registry import kind_spec
 
 _UNSET: Any = object()
 _EXTRA_NAME = "__extra_kwargs__"
-CUT_GRACE_S = 2.0  # how long a deadline-cut sleep waits for the run to be closed
+CUT_GRACE_S = 0.05  # how long a deadline-cut sleep waits for the run's owner to close the run
 _TYPES: dict[str, Any] = {
     "string": str,
     "integer": int,
@@ -233,7 +233,7 @@ class FakeState:
         self.signature = signature_for(spec)
         self.remaining: list[int | None] = [rule.times for rule in spec.responses]
         self.used: list[int] = [0] * len(spec.responses)
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         self.effect: str | None = spec.effect if step_kind != "model" else None
 
     # -- rule selection
@@ -272,7 +272,9 @@ class FakeState:
 
     # -- one call
 
-    def _begin(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> tuple[Any, Any, Any]:
+    def _begin(
+        self, args: tuple[Any, ...], kwargs: dict[str, Any]
+    ) -> tuple[Any, Any, Any, FakeResponse | None]:
         rec = self.recorder
         name = self.spec.name
         try:
@@ -281,9 +283,17 @@ class FakeState:
             pending = rec.start(self.step_kind, name, _loose_args(args, kwargs), self.effect)
             rec.finish(pending, error=f"TypeError: {exc}")
             raise
-        pending = rec.start(self.step_kind, name, raw, self.effect)
-        frozen, _ = capture_json(raw)
-        return raw, frozen, pending
+        frozen: Any = capture_json(raw)[0]
+        # One critical section for the step number and the rule, so that among concurrent calls
+        # of this fake the earlier step always gets the earlier rule.
+        with self.lock:
+            pending = rec.start(self.step_kind, name, raw, self.effect)
+            try:
+                rule = self.select(frozen)
+            except BaseException as exc:
+                rec.finish(pending, error=f"{type(exc).__name__}: {exc}")
+                raise
+        return raw, frozen, pending, rule
 
     def _unexpected(self, frozen: Any, pending: Any) -> UnexpectedFakeCall:
         err = UnexpectedFakeCall(self.spec.name, _canonical(frozen), self.rules_text())
@@ -311,11 +321,19 @@ class FakeState:
         wait = latency_s if left is None else min(latency_s, left)
         closed = self.recorder.wait_closed(wait)
         if not closed and left is not None and latency_s > left:
-            closed = self.recorder.wait_closed(CUT_GRACE_S)  # let the deadline close the run
-        if closed or (left is not None and latency_s > left):
+            closed = self._cut()
+        if closed:
             raise RunAbandonedError(
                 self.recorder.trace_id, self.recorder.closed or "timed_out", self.spec.name
             )
+
+    def _cut(self) -> bool:
+        """The deadline passed during scripted latency: the run is timed out, whoever notices
+        first. The owner normally closes it within ``CUT_GRACE_S``; when it cannot (this call is
+        blocking its event loop) the run is closed here, and the first close is final."""
+        if not self.recorder.wait_closed(CUT_GRACE_S):
+            self.recorder.close("timed_out")
+        return True
 
     async def _asleep(self, latency_s: float) -> None:
         """Async twin of ``_sleep``: cut at the deadline, then wait for the guard to cancel us."""
@@ -325,15 +343,15 @@ class FakeState:
             await asyncio.sleep(latency_s)
             return
         await asyncio.sleep(left)
-        await asyncio.sleep(CUT_GRACE_S)
+        await asyncio.sleep(CUT_GRACE_S)  # the guard normally cancels us here
+        self.recorder.close("timed_out")
         raise RunAbandonedError(
             self.recorder.trace_id, self.recorder.closed or "timed_out", self.spec.name
         )
 
     def call(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
-        raw, frozen, pending = self._begin(args, kwargs)
+        raw, frozen, pending, rule = self._begin(args, kwargs)
         try:
-            rule = self.select(frozen)
             if rule is not None:
                 if rule.latency_s:
                     self._sleep(rule.latency_s)
@@ -355,9 +373,8 @@ class FakeState:
         return value
 
     async def acall(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
-        raw, frozen, pending = self._begin(args, kwargs)
+        raw, frozen, pending, rule = self._begin(args, kwargs)
         try:
-            rule = self.select(frozen)
             if rule is not None:
                 if rule.latency_s:
                     await self._asleep(rule.latency_s)

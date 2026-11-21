@@ -169,8 +169,8 @@ def test_a_redirect_is_a_bad_request_for_the_model(monkeypatch: pytest.MonkeyPat
 
 
 # ----------------------------------------------------------------------------- finding 3
-def test_http_to_a_remote_host_with_credentials_is_refused() -> None:
-    for kw in ({"api_key": KEY}, {"project_id": PROJ}):
+def test_http_to_a_remote_host_is_refused_with_or_without_credentials() -> None:
+    for kw in ({"api_key": KEY}, {"project_id": PROJ}, {}):
         with pytest.raises(JudgeConfigError) as err:
             HttpTransport("http://svc.invalid", **kw)
         assert KEY not in str(err.value) and PROJ not in str(err.value)
@@ -183,8 +183,28 @@ def test_loopback_http_and_any_https_are_allowed_with_credentials(url: str) -> N
     HttpTransport(url, KEY, project_id=PROJ)
 
 
-def test_http_without_credentials_is_allowed() -> None:
-    HttpTransport("http://svc.invalid")
+@pytest.mark.parametrize("url", ["http://localhost:8080", "http://127.0.0.1:9", "http://[::1]:9"])
+def test_loopback_http_without_credentials_is_allowed(url: str) -> None:
+    assert HttpTransport(url).base_url == url
+
+
+def test_a_service_model_with_a_remote_http_url_and_no_credentials_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for var in ("DISSEQT_JUDGE_SERVICE_KEY", "DISSEQT_PROJECT_ID", "DISSEQT_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    with pytest.raises(JudgeConfigError) as err:
+        ServiceModel("m-1", base_url="http://svc.invalid")
+    assert err.value.code == "service_url"
+    eng = make_judge(
+        "service:m-1", model_options={"m-1": {"base_url": "http://svc.invalid"}},
+        backoff_base_s=0.0, kinds=ONE, cache_mode="off",
+    )  # fmt: skip
+    try:
+        v = eng.judge(decision_task())  # refused when the model is built: nothing is sent
+    finally:
+        eng.close()
+    assert v.status == "error" and v.error_code == "auth_config"
 
 
 @pytest.mark.parametrize("url", ["ftp://svc.invalid", "file:///etc/passwd", "svc.invalid"])

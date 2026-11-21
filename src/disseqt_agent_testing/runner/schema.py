@@ -80,6 +80,7 @@ def suite_result_schema() -> dict[str, Any]:
         "error",
         "repeats_run",
         "repeats_not_run",
+        "xfailed",
     ]
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",

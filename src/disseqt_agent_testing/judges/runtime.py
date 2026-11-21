@@ -1,7 +1,7 @@
 """One private daemon event-loop thread per engine.
 
-``judge()`` submits with ``run_coroutine_threadsafe`` and blocks; ``ajudge()`` awaits the wrapped
-future. Never ``asyncio.run`` on the caller's thread, never ``nest_asyncio``. Deadlines live
+``judge()`` submits with ``run_coroutine_threadsafe`` and blocks (so it refuses to run on the
+loop thread itself); ``ajudge()`` awaits the wrapped future. Never ``asyncio.run`` on the caller's thread, never ``nest_asyncio``. Deadlines live
 *inside* the loop; cancellation (``close()``, ``KeyboardInterrupt`` while blocked, a cancelled
 ``ajudge``) is done in the loop that owns the task, because cancelling the cross-thread future does
 not reliably stop the task on Python 3.10.
@@ -56,7 +56,11 @@ class JudgeRuntime:
     def _submit(
         self, coro: Coroutine[Any, Any, T]
     ) -> tuple[concurrent.futures.Future[T], list[asyncio.Task[Any]]]:
-        loop = self._ensure()
+        try:
+            loop = self._ensure()
+        except BaseException:
+            coro.close()
+            raise
         holder: list[asyncio.Task[Any]] = []
 
         async def runner() -> T:
@@ -79,6 +83,12 @@ class JudgeRuntime:
     def run(self, coro: Coroutine[Any, Any, T], *, grace_s: float = 5.0) -> T:
         """Run on the loop thread and block. A ``KeyboardInterrupt`` cancels the in-flight task
         in its own loop and waits (bounded) for it to finish before propagating."""
+        if threading.current_thread() is self._thread:
+            coro.close()
+            raise RuntimeError(
+                "judge() was called on the judge engine's own loop thread, where blocking would "
+                "deadlock the engine; await ajudge() there instead"
+            )
         fut, holder = self._submit(coro)
         try:
             return fut.result()
@@ -104,6 +114,8 @@ class JudgeRuntime:
         loop = self._loop
         if loop is None or loop.is_closed():
             return 0
+        if threading.current_thread() is self._thread:
+            return len(self._tasks)
         done: concurrent.futures.Future[int] = concurrent.futures.Future()
         loop.call_soon_threadsafe(lambda: done.set_result(len(self._tasks)))
         return done.result(timeout=2.0)

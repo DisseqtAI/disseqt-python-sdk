@@ -63,8 +63,19 @@ class Budgets(BaseMetric):
         )  # fmt: skip
 
     def _max_steps(self, ctx: EvalContext) -> MetricResult:
-        note = "" if ctx.run.model_steps_captured else " (model calls not captured)"
-        return self._bound(ctx, "max_steps", len(ctx.run.steps), ctx.expect.max_steps or 0, note)
+        limit = ctx.expect.max_steps or 0
+        used = len(ctx.run.steps)
+        if ctx.run.model_steps_captured:
+            return self._bound(ctx, "max_steps", used, limit)
+        if used > limit:
+            return self._bound(
+                ctx, "max_steps", used, limit, " (lower bound: model calls not captured)"
+            )
+        return self._comp(
+            ctx, "max_steps", status="skipped", reason_code="data_unavailable",
+            reason="model calls not captured",
+            details={"used_lower_bound": used, "limit": limit},
+        )  # fmt: skip
 
     def _max_tool_calls(self, ctx: EvalContext) -> MetricResult:
         limit = ctx.expect.max_tool_calls

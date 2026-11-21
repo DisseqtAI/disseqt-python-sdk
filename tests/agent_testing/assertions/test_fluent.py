@@ -12,6 +12,7 @@ REFUND = run_of(
     step(2, "check_policy", {"order_id": "A12"}, effect="read"),
     step(3, "issue_refund", {"order_id": "A12", "amount": 59.99}),
     tools=("get_order", "check_policy", "issue_refund"),
+    captured=True,
 )
 
 

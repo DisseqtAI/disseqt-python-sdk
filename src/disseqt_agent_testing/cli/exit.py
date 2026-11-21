@@ -6,6 +6,7 @@ from typing import Any
 
 PytestToCli = {0: 0, 1: 1, 2: 3, 3: 4, 4: 3, 5: 5}
 Policy = Callable[[Any], int]
+PRIORITY = (130, 4, 3, 1, 2, 5, 0)  # the worse of the suite's code and pytest's wins
 _LOCK = threading.RLock()
 _POLICIES: dict[str, Policy] = {}
 
@@ -37,11 +38,15 @@ def exit_code_for(
     pytest_code: int | None = None,
     policy: str = "default",
     interrupted: bool = False,
+    plain_failed: bool = False,
 ) -> int:
-    """The default policy is ``SuiteResult.exit_code`` (130 > 4 > 3 > 1 > 2 > 5 > 0). A passing
-    suite does not hide a pytest failure: when the suite code is 0 and pytest still exited
-    non-zero (a plain failing test next to the agent cases, a bad flag), pytest's status is
-    mapped. Without a result (pytest stopped before writing one) only the pytest status counts."""
+    """The default policy is ``SuiteResult.exit_code`` (130 > 4 > 3 > 1 > 2 > 5 > 0), merged
+    with pytest's mapped status by the same priority, so neither hides the other: a plain failing
+    test next to an incomplete or all-skipped suite exits 1, and a suite in which no case ran
+    exits 5 even when plain tests passed. pytest also exits 1 for an incomplete agent case, so its
+    1 outranks the suite's 2 only when a test that is not an agent case failed (``plain_failed``).
+    A code from a custom policy that is not in the priority order is kept unless it is 0. Without
+    a result (pytest stopped before writing one) only the pytest status counts."""
     with _LOCK:
         custom = _POLICIES.get(policy)
     if result is None:
@@ -49,6 +54,11 @@ def exit_code_for(
             pytest_code if pytest_code is not None else 4, interrupted=interrupted
         )
     code = custom(result) if custom is not None else int(result.exit_code)
-    if code == 0 and pytest_code is not None and pytest_code != 0:
-        return map_pytest_code(int(pytest_code), interrupted=interrupted)
-    return code
+    if pytest_code is None:
+        return code
+    mapped = map_pytest_code(int(pytest_code), interrupted=interrupted)
+    if code not in PRIORITY:
+        return code
+    if mapped == 1 and code == 2 and not plain_failed:
+        return code
+    return min(code, mapped, key=PRIORITY.index)

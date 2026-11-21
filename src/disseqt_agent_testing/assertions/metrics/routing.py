@@ -4,7 +4,7 @@ from typing import Any
 
 from ...models import Expect, RouteExpect
 from ..config import EvalConfig
-from ..routing import norm_target, offered_targets, route_events
+from ..routing import norm_target, offered_targets, route_events, same_target
 from .base import BaseMetric, EvalContext, MetricResult
 from .registry import register_metric
 
@@ -45,16 +45,19 @@ class Routing(BaseMetric):
             )  # fmt: skip
         mode = routes.mode
         if mode == "exact":
-            ok, code = observed == want, "route.mismatch"
+            same = len(observed) == len(want) and all(map(same_target, observed, want))
+            ok, code = same, "route.mismatch"
         elif mode == "in_order":
             it = iter(observed)
-            ok, code = all(any(t == o for o in it) for t in want), "route.mismatch"
+            ok, code = all(any(same_target(t, o) for o in it) for t in want), "route.mismatch"
         elif mode == "first":
-            ok, code = bool(observed) and bool(want) and observed[0] == want[0], "route.mismatch"
+            ok = bool(observed) and bool(want) and same_target(observed[0], want[0])
+            code = "route.mismatch"
         elif mode == "any":
-            ok, code = any(t in observed for t in want), "route.mismatch"
+            ok = any(same_target(t, o) for t in want for o in observed)
+            code = "route.mismatch"
         else:  # none: none of the listed targets (or no route at all) was taken
-            taken = [t for t in observed if not want or t in want]
+            taken = [t for t in observed if not want or any(same_target(t, w) for w in want)]
             ok, code = not taken, "route.unexpected"
         if ok:
             return self.ok(ctx, 1.0, True, details=details)

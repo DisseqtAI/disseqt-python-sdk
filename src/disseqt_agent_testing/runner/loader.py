@@ -156,10 +156,16 @@ def _split_loc(loc: str) -> tuple[Any, ...]:
 def _merge_defaults(defaults: Mapping[str, Any], entry: Mapping[str, Any]) -> dict[str, Any]:
     merged = dict(entry)
     for key, value in defaults.items():
+        own = entry.get(key)
         if key == "tags":
-            merged["tags"] = sorted({*value, *entry.get("tags", ())})
+            if "tags" not in entry or isinstance(own, list):
+                both = [*value, *(own or ())]
+                merged["tags"] = (
+                    sorted(set(both)) if all(isinstance(t, str) for t in both) else both
+                )
         elif key == "run" and isinstance(value, Mapping):
-            merged["run"] = {**value, **(entry.get("run") or {})}
+            if own is None or isinstance(own, Mapping):
+                merged["run"] = {**value, **(own or {})}
         else:
             merged.setdefault(key, value)
     return merged
@@ -205,7 +211,8 @@ def _check_entry(ctx: _Ctx, data: dict[str, Any], line: int | None, at: tuple[An
         ctx.err("DSQ-C04", _line_for(ctx.lines, (*at, "id")) or line, id=cid)
         ok = False
     reserved = list(RESERVED_TAGS)
-    for tag in data.get("tags", ()) or ():
+    tags = data.get("tags")
+    for tag in tags if isinstance(tags, (list, tuple)) else ():
         if not isinstance(tag, str) or not TAG_PATTERN.fullmatch(tag) or tag in RESERVED_TAGS:
             ctx.errors.append(
                 CollectionErrorRecord(
@@ -312,8 +319,11 @@ def _expand(
             return []
         try:
             rows = reader(target)
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, csv.Error) as exc:
             ctx.err("DSQ-C10", line, detail=f"dataset {label}: {exc}")
+            return []
+        except RecursionError:
+            ctx.err("DSQ-C10", line, detail=f"dataset {label}: a row is nested too deeply")
             return []
     if len(rows) > MAX_DATASET_ROWS:
         ctx.err("DSQ-C10", line, detail=f"{label} has {len(rows)} rows (max {MAX_DATASET_ROWS})")
@@ -361,12 +371,18 @@ def load_file(
     try:
         text = path.read_text(encoding="utf-8")
         doc, ctx.lines = parse(text)
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         ctx.err("DSQ-C01", 1, fmt="case file", problem=str(exc))
         return [], ctx.errors
     except JsonProblem as exc:
         fmt = "YAML" if ext in (".yaml", ".yml") else "JSON"
         ctx.err("DSQ-C01", exc.line, fmt=fmt, problem=exc.problem)
+        return [], ctx.errors
+    except RecursionError:
+        ctx.err("DSQ-C01", 1, fmt="case file", problem="the document is nested too deeply")
+        return [], ctx.errors
+    except ValueError as exc:
+        ctx.err("DSQ-C01", 1, fmt="case file", problem=str(exc))
         return [], ctx.errors
     if not isinstance(doc, dict):
         ctx.err(
@@ -396,6 +412,14 @@ def load_file(
             message="expected a mapping",
         )
         defaults = {}
+    if "tags" in defaults and not isinstance(defaults["tags"], list):
+        ctx.err(
+            "DSQ-C02",
+            _line_for(ctx.lines, ("defaults", "tags")),
+            loc="defaults.tags",
+            message=f"expected a list, got {type(defaults['tags']).__name__}",
+        )
+        defaults = {k: v for k, v in defaults.items() if k != "tags"}
     entries = doc.get("cases")
     if not isinstance(entries, list):
         ctx.err(

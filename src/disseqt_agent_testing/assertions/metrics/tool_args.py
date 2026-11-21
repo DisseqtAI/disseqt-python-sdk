@@ -36,6 +36,9 @@ class ToolArgs(BaseMetric):
     def applicable(self, expect: Expect, config: EvalConfig) -> bool:
         return any(t.args or t.args_mode == "exact" for t in expect.tools)
 
+    def failure_within(self, result: MetricResult, sub_scores: frozenset[str]) -> bool:
+        return bool(sub_scores)  # both sub-scores measure the only failure: wrong arguments
+
     def evaluate(self, ctx: EvalContext) -> MetricResult:
         a = ctx.assignment()
         if not a.pairs:

@@ -1,13 +1,26 @@
 """Fake dispatch: T01-T16, T51 (rules, defaults, errors, signatures, handlers)."""
 
 import inspect
+import threading
 from typing import Any
 
 import pytest
 
-from disseqt_agent_testing.harness import FakeToolError, HarnessConfigError, spy, stub
+from disseqt_agent_testing.harness import (
+    FakeToolError,
+    HarnessConfigError,
+    build_test_orchestrator,
+    spy,
+    stub,
+)
 from disseqt_agent_testing.harness.errors import UnexpectedFakeCall
-from disseqt_agent_testing.models import FakeResponse, FakeSpec, ModelValidationError, Ref
+from disseqt_agent_testing.models import (
+    FakeResponse,
+    FakeSpec,
+    ModelValidationError,
+    Ref,
+    StepEvent,
+)
 
 from .helpers import run_body
 
@@ -225,3 +238,39 @@ def test_t56_setup_mistakes_are_config_errors() -> None:
         )
     with pytest.raises(ModelValidationError):  # plan-01 error, raised before the harness
         FakeResponse(when={"x": Ref("steps[0].result")}, returns=1)
+
+
+def test_a_step_gets_the_rule_of_its_own_position_when_threads_interleave() -> None:
+    spec = FakeSpec(
+        "t",
+        responses=(
+            FakeResponse(returns="first", times=1),
+            FakeResponse(returns="second", times=1),
+        ),
+    )
+    first_started, second_done = threading.Event(), threading.Event()
+
+    def hold_the_first_call(event: StepEvent) -> None:
+        # Gives the second thread every chance to overtake between numbering and rule selection.
+        if event.phase == "start" and event.seq == 1:
+            first_started.set()
+            second_done.wait(0.2)
+
+    def factory(tools: Any) -> Any:
+        def late_call() -> None:
+            first_started.wait(5)
+            tools["t"]()
+            second_done.set()
+
+        def agent(text: str) -> None:
+            other = threading.Thread(target=late_call)
+            other.start()
+            tools["t"]()
+            other.join()
+
+        return agent
+
+    orch = build_test_orchestrator(factory, (spec,))
+    orch.add_listener(hold_the_first_call)
+    r = orch.run("go")
+    assert [(s.seq, s.result) for s in r.run.steps] == [(1, "first"), (2, "second")]

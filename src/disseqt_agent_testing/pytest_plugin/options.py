@@ -77,6 +77,7 @@ class Option:
     ini_type: str | None = (
         None  # a typed ini declaration (int/float/bool/args) where pytest supports it
     )
+    flatten: bool = False  # an append option whose every entry is itself a parsed list
 
     @property
     def dest(self) -> str:
@@ -125,7 +126,9 @@ OPTIONS: tuple[Option, ...] = (
         "DISSEQT_CASE",
         _list(","),
         "comma-separated id globs",
-        help="run only cases whose id matches a glob",
+        action="append",
+        help="run only cases whose id matches a glob (repeat or comma-separate)",
+        flatten=True,
     ),
     Option(
         "tags",
@@ -402,7 +405,10 @@ def resolve_options(config: pytest.Config) -> dict[str, Any]:
                 elif opt.action == "append":
                     items: list[str] = []
                     for r in raw:
-                        items.append(r)
+                        if opt.flatten:
+                            items.extend(opt.parse(str(r)))
+                        else:
+                            items.append(r)
                     value = items
                 else:
                     try:

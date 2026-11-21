@@ -110,6 +110,8 @@ def _order(r: MetricResult) -> tuple[str, ...]:
 
 
 def _forbidden(r: MetricResult) -> tuple[str, ...]:
+    if r.status != "ok":
+        return (_row("forbidden", f"{r.reason_code}: {r.reason}".strip(": "), r.status),)
     if r.passed:
         return (_row("forbidden", "no forbidden call made", "ok"),)
     return (_row("forbidden", f"{r.reason}  [{r.reason_code}]", "FAILED (veto)"),)
@@ -129,6 +131,8 @@ def _budgets(r: MetricResult) -> tuple[str, ...]:
 
 
 def _answer(r: MetricResult) -> tuple[str, ...]:
+    if r.status != "ok":
+        return (_row("answer", f"{r.reason_code}: {r.reason}".strip(": "), r.status),)
     if r.passed:
         return (_row("answer", "expected text present", "ok"),)
     return (_row("answer", f"{r.reason}  [{r.reason_code}]", "FAILED"),)

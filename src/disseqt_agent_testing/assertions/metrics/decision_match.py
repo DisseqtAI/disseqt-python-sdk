@@ -66,10 +66,9 @@ class DecisionMatch(BaseMetric):
         }
         if cls.advisory_label is not None:  # only when an uncalibrated judge disagreed in spirit
             details["advisory_label"] = cls.advisory_label
-        if cls.judge_status == "judge_failed":
-            return self.error(ctx, "judge_failed", "the judge failed", details=details, **kw)
-        if cls.judge_status == "judge_unsure":
-            return self.skip(ctx, "judge_unsure", "the judge was unsure", details=details, **kw)
+        undecided = self.undecided(ctx, cls, details=details, **kw)
+        if undecided is not None:
+            return undecided
         if cls.label == "empty":
             return self.ok(
                 ctx,

@@ -423,3 +423,102 @@ def test_e_register_and_remove_formats(tmp_path: Path) -> None:
         unregister_case_format(".toy")
         unregister_dataset_format(".toydata")
     assert "unsupported extension" in msgs(load_cases(write(tmp_path, "t2.toy", "x")))[0]
+
+
+def test_duplicate_keys_are_compared_as_constructed_values() -> None:
+    assert _yaml.parse_yaml("1: a\n'1': b\n")[0] == {1: "a", "1": "b"}
+    merged = "a: &x {k: 1}\nb: &y {j: 2}\nc:\n  <<: *x\n  <<: *y\n  k: 3\n"
+    assert _yaml.parse_yaml(merged)[0]["c"] == {"k": 3, "j": 2}
+    for text, shown in (("true: a\nTrue: b\n", "True"), ("a: 1\nb: 2\na: 3\n", "a")):
+        with pytest.raises(JsonProblem, match=f"duplicate key '{shown}'") as info:
+            _yaml.parse_yaml(text)
+        assert info.value.line == text.count("\n")
+    with pytest.raises(JsonProblem, match="a mapping key must be a scalar"):
+        _yaml.parse_yaml("[a]: 1\n")
+
+
+def test_numbers_follow_the_yaml_1_2_core_schema() -> None:
+    text = (
+        "a: 010\nb: 0o10\nc: 0x1F\nd: -7\ne: 1e3\nf: .5\ng: -.inf\n"
+        "h: 1_000\ni: 1:30\nj: 0b11\nk: no\nl: '5'\n"
+    )
+    value, _ = _yaml.parse_yaml(text)
+    assert value == {
+        "a": 10, "b": 8, "c": 31, "d": -7, "e": 1000.0, "f": 0.5, "g": float("-inf"),
+        "h": "1_000", "i": "1:30", "j": "0b11", "k": "no", "l": "5",
+    }  # fmt: skip
+    assert type(value["a"]) is int and type(value["e"]) is float
+    with pytest.raises(JsonProblem, match="invalid integer"):
+        _yaml.parse_yaml("a: !!int nope\n")
+
+
+HEAD = "version: 1\ncases:\n  - id: a\n    input: x\n"
+
+
+@pytest.mark.parametrize(
+    ("name", "content", "expected"),
+    [
+        ("utf8.agent.yaml", HEAD.encode() + b'    tags: ["\xff"]\n', ":1: invalid case file: 'utf-8'"),
+        ("utf8.agent.json", b'{"version": 1, "cases": [{"id": "\xff"}]}', ":1: invalid case file:"),
+        ("date.agent.yaml", HEAD + "    follow_ups: [2024-13-45]\n", ":5: invalid YAML: invalid date"),
+        ("alias.agent.yaml", HEAD + "    follow_ups: &a [*a]\n", ":5: invalid YAML: an alias refers"),
+        ("deep.agent.yaml", "a: " + "[" * 3000 + "]" * 3000, "nested too deeply"),
+        ("deep.agent.json", "[" * 100_000, "nested too deeply"),
+    ],
+)  # fmt: skip
+def test_an_unreadable_document_is_a_collection_error(
+    tmp_path: Path, name: str, content: Any, expected: str
+) -> None:
+    path = tmp_path / name
+    path.write_bytes(content if isinstance(content, bytes) else content.encode())
+    loaded = load_cases(path)
+    assert not loaded.cases and len(loaded.errors) == 1 and loaded.errors[0].code == "DSQ-C01"
+    assert expected in loaded.errors[0].message
+
+
+@pytest.mark.parametrize(
+    ("defaults", "extra", "expected"),
+    [
+        ("{tags: [x]}", "tags: null", ":6: cases[0].tags: expected a list, got null"),
+        ("{tags: [x]}", "tags: 5", ":6: cases[0].tags: expected a list, got int"),
+        ("{}", "tags: 5", ":6: cases[0].tags: expected a list, got int"),
+        ("{tags: [x]}", "tags: [{a: 1}]", "is invalid or reserved"),
+        ("{tags: [x]}", "tags: [1]", "tag '1' is invalid or reserved"),
+        ("{tags: 5}", "repeats: 1", ":2: defaults.tags: expected a list, got int"),
+        ("{tags: abc}", "repeats: 1", ":2: defaults.tags: expected a list, got str"),
+        ("{run: {timeout_s: 3}}", "run: 5", "run: RunBlock: expected a mapping"),
+        ("{run: {timeout_s: 3}}", "run: [1]", "run: RunBlock: expected a mapping"),
+    ],
+)
+def test_wrongly_typed_tags_and_run_blocks_are_collection_errors(
+    tmp_path: Path, defaults: str, extra: str, expected: str
+) -> None:
+    text = f"version: 1\ndefaults: {defaults}\ncases:\n  - id: a\n    input: x\n    {extra}\n"
+    loaded = load_cases(write(tmp_path, "c.agent.yaml", text))
+    assert len(loaded.errors) == 1 and expected in loaded.errors[0].message, msgs(loaded)
+
+
+def test_defaults_still_merge_with_a_case_that_has_its_own_tags_and_run(tmp_path: Path) -> None:
+    text = (
+        "version: 1\ndefaults: {tags: [smoke, base], run: {timeout_s: 3}}\ncases:\n"
+        "  - {id: a, input: x, tags: [smoke, extra], run: {skip: later}}\n"
+        "  - {id: b, input: x, run: null}\n"
+    )
+    loaded = load_cases(write(tmp_path, "c.agent.yaml", text))
+    a, b = loaded.cases
+    assert not loaded.errors and a.case.tags == ("base", "extra", "smoke")
+    assert (a.run.timeout_s, a.run.skip) == (3, "later")
+    assert b.case.tags == ("base", "smoke") and b.run.timeout_s == 3
+
+
+def test_a_dataset_the_reader_cannot_parse_is_a_collection_error(tmp_path: Path) -> None:
+    (tmp_path / "big.csv").write_text("name\n" + "x" * 200_000 + "\n")
+    (tmp_path / "deep.jsonl").write_text("[" * 100_000 + "\n")
+    for ref, expected in (
+        ("big.csv", "dataset big.csv: field larger than field limit"),
+        ("deep.jsonl", "dataset deep.jsonl: a row is nested too deeply"),
+    ):
+        text = f'version: 1\ncases:\n  - id: "t_${{name}}"\n    input: x\n    dataset: {ref}\n'
+        loaded = load_cases(write(tmp_path, "d.agent.yaml", text))
+        assert not loaded.cases and loaded.errors[0].code == "DSQ-C10"
+        assert expected in loaded.errors[0].message

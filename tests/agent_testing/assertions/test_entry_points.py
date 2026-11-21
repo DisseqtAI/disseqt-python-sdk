@@ -1,5 +1,7 @@
 """Third-party metrics load from the ``disseqt_agent_testing.metrics`` entry-point group."""
 
+import threading
+import time
 from importlib import metadata
 from typing import Any
 
@@ -70,6 +72,62 @@ def test_a_failing_entry_point_lookup_never_breaks_evaluation(
     monkeypatch.setattr(registry, "_ENTRY_POINTS_LOADED", False)
     monkeypatch.setattr(metadata, "entry_points", boom)
     try:
-        assert evaluate(run_of(), Expect(max_steps=1)).outcome == "passed"
+        assert evaluate(run_of(captured=True), Expect(max_steps=1)).outcome == "passed"
     finally:
+        monkeypatch.setattr(registry, "_ENTRY_POINTS_LOADED", True)
+
+
+def test_a_second_thread_waits_for_a_slow_entry_point_load(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loading = threading.Event()
+
+    def slow_plugin() -> type:
+        loading.set()
+        time.sleep(0.05)
+        return _plugin()
+
+    monkeypatch.setattr(registry, "_ENTRY_POINTS_LOADED", False)
+    monkeypatch.setattr(
+        metadata, "entry_points", lambda *, group: [FakeEntryPoint("slow", slow_plugin)]
+    )
+    seen: dict[str, list[str]] = {}
+
+    def planned(key: str) -> None:
+        seen[key] = [m.name for m in list_metrics()]
+
+    first = threading.Thread(target=planned, args=("first",))
+    second = threading.Thread(target=planned, args=("second",))
+    try:
+        first.start()
+        assert loading.wait(5)
+        second.start()  # arrives while the plugin is still importing
+        first.join(5)
+        second.join(5)
+        assert "from_plugin" in seen["first"] and seen["second"] == seen["first"]
+    finally:
+        unregister_metric("from_plugin")
+        monkeypatch.setattr(registry, "_ENTRY_POINTS_LOADED", True)
+
+
+def test_an_entry_point_that_reads_the_registry_while_loading_does_not_reload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def curious_plugin() -> type:
+        list_metrics()
+        return _plugin()
+
+    def fake_entry_points(*, group: str) -> list[FakeEntryPoint]:
+        calls.append(group)
+        return [FakeEntryPoint("curious", curious_plugin)]
+
+    monkeypatch.setattr(registry, "_ENTRY_POINTS_LOADED", False)
+    monkeypatch.setattr(metadata, "entry_points", fake_entry_points)
+    try:
+        assert "from_plugin" in [m.name for m in list_metrics()]
+        assert len(calls) == 1
+    finally:
+        unregister_metric("from_plugin")
         monkeypatch.setattr(registry, "_ENTRY_POINTS_LOADED", True)

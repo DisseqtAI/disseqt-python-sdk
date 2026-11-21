@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from disseqt_agent_testing.harness import (
+    FakeLLM,
     HarnessConfigError,
     RunAbandonedError,
     build_test_orchestrator,
@@ -274,3 +275,123 @@ def test_t48_t49_t50_harness_half_of_the_refund_proof() -> None:
     # T50: no order id -> no steps and a clarifying question
     ask = refund().run("I want a refund")
     assert ask.run.steps == () and "order number" in (ask.run.final_text or "")
+
+
+def _run_both_ways(orch: Any) -> list[Any]:
+    return [orch.run("go"), asyncio.run(orch.arun("go"))]
+
+
+def test_an_async_agent_that_blocks_past_its_deadline_is_timed_out() -> None:
+    def factory() -> Any:
+        async def agent(text: str) -> str:
+            time.sleep(0.3)  # blocks the loop, so the deadline cannot interrupt it
+            return "late answer"
+
+        return agent
+
+    for r in _run_both_ways(build_test_orchestrator(factory, timeout_s=0.1)):
+        assert r.status == "timed_out" and r.error is None
+        assert r.run.final_answer is None and r.run.final_text is None
+
+
+def test_a_fake_called_while_a_timed_out_agent_cleans_up_does_not_change_the_status() -> None:
+    def factory(tools: Any) -> Any:
+        async def agent(text: str) -> None:
+            try:
+                await asyncio.sleep(30)
+            finally:
+                await tools["release_lock"]()
+
+        return agent
+
+    orch = build_test_orchestrator(factory, {"release_lock": 1}, async_tools=True, timeout_s=0.2)
+    for r in _run_both_ways(orch):
+        assert r.status == "timed_out" and r.error is None
+        assert r.run.steps == ()  # the late call is refused, not recorded
+
+
+def test_a_sync_fake_sleeping_past_the_deadline_in_an_async_agent_is_always_timed_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from disseqt_agent_testing.harness import fakes, orchestrator
+
+    # Equal grace periods are the worst case: the fake and the caller give up at the same moment.
+    monkeypatch.setattr(orchestrator, "GRACE_S", 0.05)
+    monkeypatch.setattr(fakes, "CUT_GRACE_S", 0.05)
+    spec = FakeSpec("slow", default=FakeResponse(returns=1, latency_s=30))
+
+    def factory(tools: Any) -> Any:
+        async def agent(text: str) -> Any:
+            return tools["slow"]()  # a sync fake: its latency blocks the event loop
+
+        return agent
+
+    orch = build_test_orchestrator(factory, (spec,), timeout_s=0.05)
+    for _ in range(8):
+        r = orch.run("go")
+        assert r.status == "timed_out" and r.error is None
+        (step,) = r.run.steps
+        assert step.error == "Abandoned: run timed out" and step.duration_ms is None
+
+
+def test_a_deadline_cut_sleep_ends_the_run_without_waiting_for_the_grace_period() -> None:
+    spec = FakeSpec("slow", default=FakeResponse(returns=1, latency_s=30))
+
+    def factory(tools: Any) -> Any:
+        async def agent(text: str) -> Any:
+            return tools["slow"]()
+
+        return agent
+
+    start = time.monotonic()
+    r = build_test_orchestrator(factory, (spec,), timeout_s=0.1).run("go")
+    assert r.status == "timed_out" and time.monotonic() - start < 1.0
+    assert not any("still running" in w for w in r.warnings)
+
+
+@dataclasses.dataclass
+class _HoldsALock:
+    lock: Any = dataclasses.field(default_factory=threading.Lock)
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+def test_an_answer_that_cannot_be_extracted_is_a_crash_and_keeps_the_steps(is_async: bool) -> None:
+    def factory(tools: Any) -> Any:
+        def agent(text: str) -> Any:
+            tools["t"]()
+            return _HoldsALock()
+
+        async def async_agent(text: str) -> Any:
+            return agent(text)
+
+        return async_agent if is_async else agent
+
+    for r in _run_both_ways(build_test_orchestrator(factory, {"t": 1})):
+        assert r.status == "crashed" and r.error is not None
+        assert r.error.type == "TypeError" and "pickle" in r.error.message
+        assert [s.name for s in r.run.steps] == ["t"]
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+def test_a_config_error_during_a_turn_is_raised_not_recorded_as_a_crash(is_async: bool) -> None:
+    def factory(llm: Any) -> Any:
+        def agent(text: str) -> Any:
+            return llm.complete("text")  # not a sequence of messages
+
+        async def async_agent(text: str) -> Any:
+            return agent(text)
+
+        return async_agent if is_async else agent
+
+    orch = build_test_orchestrator(factory, llm=FakeLLM(script=("hi",)))
+    with pytest.raises(HarnessConfigError, match="needs a sequence of messages"):
+        orch.run("go")
+    with pytest.raises(HarnessConfigError, match="needs a sequence of messages"):
+        asyncio.run(orch.arun("go"))
+
+
+def test_a_huge_int_argument_is_recorded_lossy_instead_of_raising() -> None:
+    r = run_body({"t": 1}, lambda tools: tools["t"](n=10**5000))
+    (step,) = r.run.steps
+    assert r.status == "finished" and step.lossy is True
+    assert step.args["n"] == "<int with 16610 bits>"

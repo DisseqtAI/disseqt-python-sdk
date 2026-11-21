@@ -24,6 +24,7 @@ from .compat import has_xdist, is_worker, node_path
 from .nodes import (
     CATEGORY_KEY,
     RESULT_KEY,
+    XFAIL_KEY,
     AgentCaseFailed,
     AgentCaseFile,
     AgentCaseIncomplete,
@@ -43,6 +44,8 @@ IMPL_KEY = pytest.StashKey[Any]()
 DEFERRED_KEY = pytest.StashKey[pytest.UsageError]()  # a bad option value, reported only on use
 DEFAULT_GLOBS = ["*.agent.yaml", "*.agent.yml", "*.agent.json"]
 DEFERRED_USED_KEY = pytest.StashKey[bool]()
+WORKER_ERRORS_KEY = "disseqt_collection_errors"
+REPEAT_SUFFIX = re.compile(r"\[r\d+\]$")
 MARKERS = (
     "agent(repeats=None, k=None, threshold=None, tags=None, timeout_s=None, use_judge=None, early_stop=None): "
     "run a Python test as an agent case with these repeat settings",
@@ -67,6 +70,8 @@ class State:
     t0: float = field(default_factory=time.monotonic)
     warned: set[str] = field(default_factory=set)
     keyboard_interrupt: bool = False
+    deadline: float | None = None  # monotonic; one suite timeout for the whole session
+    xfail: dict[str, str] = field(default_factory=dict)  # case id -> its ``run: {xfail}`` reason
 
 
 def get_impl(config: pytest.Config) -> "DisseqtImpl":
@@ -92,6 +97,10 @@ def pytest_configure(config: pytest.Config) -> None:
         return
     try:
         options = resolve_options(config)  # DSQ-U01 -> pytest.UsageError
+        if options["early_stop"] and options["split_repeats"]:
+            from ..runner.errors import format_code
+
+            raise pytest.UsageError(format_code("DSQ-U03"))
     except pytest.UsageError as exc:
         if explicitly_configured(config):
             raise
@@ -110,10 +119,6 @@ def pytest_configure(config: pytest.Config) -> None:
         )
     else:
         seed = int(seed_opt)
-    if options["early_stop"] and options["split_repeats"]:
-        from ..runner.errors import format_code
-
-        raise pytest.UsageError(format_code("DSQ-U03"))
     impl = DisseqtImpl(config, State(options, seed, random_seed))
     config.stash[IMPL_KEY] = impl
     config.pluginmanager.register(impl, "disseqt-impl")
@@ -202,6 +207,24 @@ class DisseqtImpl:
             raise pytest.UsageError(str(exc)) from None
         return self._cfg
 
+    def suite_deadline(self) -> float | None:
+        """The monotonic deadline every case of this session shares (``None``: no suite timeout).
+        The clock starts when the test loop does, or at the first case if that hook was missed."""
+        timeout = self.state.options["suite_timeout"]
+        if timeout is not None and self.state.deadline is None:
+            self.state.deadline = time.monotonic() + timeout
+        return self.state.deadline
+
+    @pytest.hookimpl(tryfirst=True)
+    def pytest_runtestloop(self, session: Any) -> None:
+        self.suite_deadline()
+
+    def run_spec(self, spec: Any) -> Any:
+        """``--runxfail`` reports an xfail case as if it were not marked."""
+        if spec.run.xfail and self.config.getoption("runxfail", False):
+            return dataclasses.replace(spec, run=dataclasses.replace(spec.run, xfail=None))
+        return spec
+
     def ascii_only(self) -> bool:
         from ..runner.render import can_unicode
 
@@ -242,8 +265,6 @@ class DisseqtImpl:
             item.add_marker(getattr(pytest.mark, tag))
         if spec.run.skip:
             item.add_marker(pytest.mark.skip(reason=spec.run.skip))
-        if spec.run.xfail:
-            item.add_marker(pytest.mark.xfail(reason=spec.run.xfail, strict=True))
         if split:
             item.add_marker(pytest.mark.xdist_group(name=spec.case.id))
 
@@ -364,30 +385,45 @@ class DisseqtImpl:
         cfg = self.suite_config()
         if item.repeat is not None:
             cfg = dataclasses.replace(cfg, only_repeat=item.repeat, keep_reports="all")
-        result = run_case(
-            item.spec, agent_factory=item._factory, config=cfg, judge=self.judge(item)
-        )
-        self._finish(item, result)
+        spec = self.run_spec(item.spec)
+        deadline = self.suite_deadline()
+        if deadline is not None and time.monotonic() > deadline:
+            result = timed_out_result(spec, cfg, item.repeat)
+        else:
+            result = run_case(
+                spec, agent_factory=item._factory, config=cfg, judge=self.judge(item),
+                suite_deadline=deadline,
+            )  # fmt: skip
+        self._finish(item, same_digest(cut_off_is_incomplete(result), item.spec))
 
     def _finish(self, item: AgentCaseItem, result: Any) -> None:
+        from ..runner.models import CUT_OFF_REASONS
+
         cfg = self.suite_config()
         status = result.status
+        xfail = self.run_spec(item.spec).run.xfail
+        cut_off = result.reason_code in CUT_OFF_REASONS
         if item.repeat is not None and result.repeats:
             # Split mode: this item stands for one repeat, so it passes or fails on that repeat
             # alone (the controller still aggregates one case verdict from all of them).
             own = next((r for r in result.repeats if r.index == item.repeat), None)
             if own is not None and status not in ("error", "skipped"):
-                status = "failed" if own.status == "failed" else own.status
+                status = own.status
                 if own.status == "not_run":
-                    status = "skipped"
+                    cut_off = own.not_run_reason in CUT_OFF_REASONS
+                    status = "incomplete" if cut_off else "skipped"
+                elif own.status == "failed" and xfail:
+                    status = "xfailed"
         category = {"incomplete": "incomplete", "error": "error"}.get(status)
-        item.user_properties.extend(properties_for(result, category))
+        item.user_properties.extend(properties_for(result, category, xfail=xfail))
         if status == "passed":
             return
+        if status == "xfailed":
+            pytest.xfail(xfail or result.reason)
         if status == "skipped":
             pytest.skip(result.reason or "skipped")
         if status == "incomplete":
-            if cfg.incomplete_policy == "skip":
+            if cfg.incomplete_policy == "skip" and not cut_off:
                 pytest.skip(result.reason)
             raise AgentCaseIncomplete(result.reason, result, "incomplete")
         raise AgentCaseFailed(
@@ -416,8 +452,11 @@ class DisseqtImpl:
                 ]  # before the JUnit writer
             from ..runner.models import CaseResult
 
+            reason = next((str(p[1]) for p in props if p[0] == XFAIL_KEY), None)
             for n, entry in enumerate(entries):
                 result = CaseResult.from_dict(json.loads(entry[1]))
+                if reason:
+                    self.state.xfail[result.case_id] = reason
                 self._store(report.nodeid if n == 0 else f"{report.nodeid}#{n}", result)
             return
         spec = self.state.items.get(report.nodeid)
@@ -494,7 +533,14 @@ class DisseqtImpl:
         return None
 
     def pytest_sessionfinish(self, session: Any, exitstatus: Any) -> None:
-        if is_worker(self.config) or not (self.state.results or self.state.collection_errors):
+        if is_worker(self.config):
+            # the controller builds the result; collection problems are only seen here
+            getattr(self.config, "workeroutput", {})[WORKER_ERRORS_KEY] = [
+                e.to_dict() for e in self.state.collection_errors
+            ]
+            return
+        out = self.state.options["output"]
+        if not (self.state.results or self.state.collection_errors or out):
             return
         from ..runner.engine import SuiteState, build_result
 
@@ -506,39 +552,51 @@ class DisseqtImpl:
             cases, tuple(self.state.collection_errors), cfg, suite, self.state.t0, 0
         )
         self.state.suite_result = result
-        out = self.state.options["output"]
         if out:
             result.write(out)
         self.config.hook.pytest_disseqt_suite_result(result=result)
+        if result.exit_code == 1 and session.exitstatus == pytest.ExitCode.OK:
+            # every item was green but a case verdict is not (an xfail case passed in split mode)
+            session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
     def _cases_for_suite(self) -> list[Any]:
-        """One ``CaseResult`` per case. Only split-repeat parts (one repeat each) are merged; two
-        whole results with the same id (two tests using one id) are a duplicate id: each stays its
-        own case (later ones renamed ``id#2``) and a DSQ-C03 error is recorded, so a failure can
-        never be merged away."""
+        """One ``CaseResult`` per case. The ``X[rN]`` items of one case (split mode) stand for a
+        single test: their one-repeat parts are merged, and whole results they synthesised (a
+        skip, a setup error or a crash, repeated by every item) collapse to the worst one. Results
+        for one id from different tests are a duplicate id: each stays its own case (later ones
+        renamed ``id#2``) and a DSQ-C03 error is recorded, so a failure can never be merged away."""
         from ..runner.merge import is_split_part, merge_repeat_results
         from ..runner.models import CollectionErrorRecord
+        from ..runner.render import ORDER
+        from ..runner.xfail import settle_xfail
 
-        by_case: dict[str, list[Any]] = {}
-        for result in self.state.results.values():
-            by_case.setdefault(result.case_id, []).append(result)
+        by_case: dict[str, dict[str, list[Any]]] = {}
+        for nodeid, result in self.state.results.items():
+            test = REPEAT_SUFFIX.sub("", nodeid)
+            by_case.setdefault(result.case_id, {}).setdefault(test, []).append(result)
         cases: list[Any] = []
-        for case_id, parts in by_case.items():
-            split = [p for p in parts if is_split_part(p)]
-            whole = [p for p in parts if not is_split_part(p)]
-            if len(split) == 1:
-                cases.append(split[0])
-            elif split:
-                key = lambda r: min((x.index for x in r.repeats), default=0)  # noqa: E731
-                cases.append(merge_repeat_results(sorted(split, key=key)))
+        for case_id, by_test in by_case.items():
+            whole: list[Any] = []
+            for parts in by_test.values():
+                split = [p for p in parts if is_split_part(p)]
+                candidates = [p for p in parts if not is_split_part(p)]
+                if split:
+                    key = lambda r: min((x.index for x in r.repeats), default=0)  # noqa: E731
+                    merged = (
+                        split[0]
+                        if len(split) == 1
+                        else merge_repeat_results(sorted(split, key=key))
+                    )
+                    candidates.append(settle_xfail(merged, self.state.xfail.get(case_id)))
+                whole.append(min(candidates, key=lambda r: ORDER.get(r.status, len(ORDER))))
             cases.extend(whole[:1])
             for n, dup in enumerate(whole[1:], start=2):
                 cases.append(dataclasses.replace(dup, case_id=f"{case_id}#{n}"))
-            if len(whole) + (1 if split else 0) > 1:
+            if len(whole) > 1:
                 self.state.collection_errors.append(
                     CollectionErrorRecord(
                         None,
-                        f"duplicate case id '{case_id}': {len(whole) + (1 if split else 0)} tests produced "
+                        f"duplicate case id '{case_id}': {len(whole)} tests produced "
                         "a result for it; case ids must be unique across the run",
                         code="DSQ-C03",
                     )
@@ -564,13 +622,57 @@ class DisseqtImpl:
             terminalreporter.write_line(f"disseqt: wrote {out}")
 
 
+def timed_out_result(spec: Any, cfg: Any, repeat: int | None = None) -> Any:
+    """The result of a case (or of one split repeat) the suite timeout left unstarted: undecided,
+    never a green skip."""
+    from ..runner.engine import resolve_n_k
+    from ..runner.errors import format_code
+    from ..runner.models import CaseResult, RepeatRecord, case_digest
+    from ..runner.seeds import derive_seed
+
+    n, k, t = resolve_n_k(spec, cfg)
+    cid = spec.case.id
+    records = tuple(
+        RepeatRecord(
+            i, derive_seed(cfg.seed, cid, i), "not_run",
+            not_run_reason="suite_timeout" if repeat in (None, i) else "only_repeat",
+        )
+        for i in range(n)
+    )  # fmt: skip
+    return CaseResult(
+        cid, "incomplete", source=spec.source, tags=spec.case.tags, reason_code="suite_timeout",
+        reason=format_code("DSQ-S02", s=cfg.suite_timeout_s, id=cid), n_planned=n, k=k, threshold=t,
+        case_digest=case_digest(spec, n, k, t), comparable=False, repeats=records,
+    )  # fmt: skip
+
+
+def cut_off_is_incomplete(result: Any) -> Any:
+    """The deadline can pass between the plugin's check and the runner's: the runner then
+    reports the unstarted case as skipped, which must not turn a timeout green."""
+    from ..runner.models import CUT_OFF_REASONS
+
+    if result.status == "skipped" and result.reason_code in CUT_OFF_REASONS:
+        return dataclasses.replace(result, status="incomplete", comparable=False)
+    return result
+
+
+def same_digest(result: Any, spec: Any) -> Any:
+    """Keep the digest of the case as written when it ran from an adjusted copy of its spec."""
+    from ..runner.models import case_digest
+
+    digest = case_digest(spec, result.n_planned, result.k, result.threshold)
+    if not result.case_digest or result.case_digest == digest:
+        return result
+    return dataclasses.replace(result, case_digest=digest)
+
+
 def _spec_from_nodeid(nodeid: str) -> Any:
     """A stand-in ``CaseSpec`` (id, source path) for a node the controller did not collect."""
     from ..models import AgentTestCase
     from ..runner.models import CaseSource, CaseSpec
 
     path, _, name = nodeid.partition("::")
-    case_id = re.sub(r"\[r\d+\]$", "", name) or "unknown"
+    case_id = REPEAT_SUFFIX.sub("", name) or "unknown"
     return CaseSpec(AgentTestCase(case_id, "-"), CaseSource(path, nodeid=nodeid))
 
 

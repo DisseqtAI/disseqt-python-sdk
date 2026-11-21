@@ -1,5 +1,6 @@
 """Fixtures for Python-defined agent cases. Imports stay lazy: defining them costs nothing."""
 
+import time
 from typing import Any
 
 import pytest
@@ -68,8 +69,15 @@ def _apply_marker(request: pytest.FixtureRequest, spec: Any, config: Any) -> tup
     return dataclasses.replace(spec, case=case, run=run), config
 
 
+def _deadline(request: pytest.FixtureRequest) -> float | None:
+    from .plugin import get_impl
+
+    return get_impl(request.config).suite_deadline()
+
+
 def _raise_for(result: Any, config: Any, request: pytest.FixtureRequest) -> None:
     __tracebackhide__ = True
+    from ..runner.models import CUT_OFF_REASONS
     from .nodes import AgentCaseFailed, AgentCaseIncomplete, properties_for
     from .plugin import get_impl
 
@@ -79,10 +87,12 @@ def _raise_for(result: Any, config: Any, request: pytest.FixtureRequest) -> None
     )  # the controller aggregates it
     if result.status == "passed":
         return
+    if result.status == "xfailed":
+        pytest.xfail(result.reason)
     if result.status == "skipped":
         pytest.skip(result.reason)
     if result.status == "incomplete":
-        if config.incomplete_policy == "skip":
+        if config.incomplete_policy == "skip" and result.reason_code not in CUT_OFF_REASONS:
             pytest.skip(result.reason)
         raise AgentCaseIncomplete(result.reason, result, "incomplete")
     text = result.reason
@@ -106,16 +116,23 @@ def disseqt_run_case(
         __tracebackhide__ = True
         from ..runner.engine import run_case
         from ..runner.models import CaseSpec
+        from .plugin import cut_off_is_incomplete, timed_out_result
 
         spec = case if isinstance(case, CaseSpec) else CaseSpec(case)
         spec, config = _apply_marker(request, spec, kwargs.pop("config", disseqt_config))
-        result = run_case(
-            spec,
-            agent_factory=agent_factory,
-            config=config,
-            judge=kwargs.pop("judge", disseqt_judge),
-            **kwargs,
-        )
+        deadline = kwargs.setdefault("suite_deadline", _deadline(request))
+        if deadline is not None and time.monotonic() > deadline:
+            result = timed_out_result(spec, config)
+        else:
+            result = cut_off_is_incomplete(
+                run_case(
+                    spec,
+                    agent_factory=agent_factory,
+                    config=config,
+                    judge=kwargs.pop("judge", disseqt_judge),
+                    **kwargs,
+                )
+            )
         _raise_for(result, config, request)
         return result
 
@@ -132,16 +149,23 @@ def disseqt_arun_case(
         __tracebackhide__ = True
         from ..runner.aengine import arun_case
         from ..runner.models import CaseSpec
+        from .plugin import cut_off_is_incomplete, timed_out_result
 
         spec = case if isinstance(case, CaseSpec) else CaseSpec(case)
         spec, config = _apply_marker(request, spec, kwargs.pop("config", disseqt_config))
-        result = await arun_case(
-            spec,
-            agent_factory=agent_factory,
-            config=config,
-            judge=kwargs.pop("judge", disseqt_judge),
-            **kwargs,
-        )
+        deadline = kwargs.setdefault("suite_deadline", _deadline(request))
+        if deadline is not None and time.monotonic() > deadline:
+            result = timed_out_result(spec, config)
+        else:
+            result = cut_off_is_incomplete(
+                await arun_case(
+                    spec,
+                    agent_factory=agent_factory,
+                    config=config,
+                    judge=kwargs.pop("judge", disseqt_judge),
+                    **kwargs,
+                )
+            )
         _raise_for(result, config, request)
         return result
 

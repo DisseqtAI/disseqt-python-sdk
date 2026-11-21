@@ -9,6 +9,7 @@ import pytest
 from disseqt_agent_testing.assertions import (
     EvalConfig,
     ExpectConfigError,
+    evaluate,
     register_assignment_backend,
 )
 from disseqt_agent_testing.assertions.assignment import (
@@ -18,7 +19,7 @@ from disseqt_agent_testing.assertions.assignment import (
     unregister_assignment_backend,
 )
 from disseqt_agent_testing.assertions.assignment.backends import scipy_available
-from disseqt_agent_testing.models import AnyValue, Ref, ToolExpect
+from disseqt_agent_testing.models import AnyValue, Expect, Ref, ToolExpect
 
 from .helpers import run_of, step
 
@@ -242,6 +243,96 @@ def test_vendored_solver_edge_shapes() -> None:
     assert assign_max([[1.0], [9.0]]) == [(1, 0)]
 
 
+def bindings(tools: list[ToolExpect], steps: list[Any], backend: str) -> list[tuple[int, int]]:
+    a = solve(tools, *steps, assignment_backend=backend)
+    return [(p.slot.index, p.call_index) for p in a.pairs]
+
+
+def order_outcome(tools: list[ToolExpect], steps: list[Any], backend: str) -> str:
+    expect = Expect(tools=tuple(tools), order="in_order")
+    return str(evaluate(run_of(*steps), expect, assignment_backend=backend).outcome)
+
+
+def random_case(rng: random.Random) -> tuple[list[ToolExpect], list[Any]]:
+    """Few tool names and argument shapes, so equally good pairings are common."""
+    tools = []
+    for _ in range(rng.randint(1, 3)):
+        low = rng.randint(0, 4)
+        high = rng.choice([low, low + 1, low + 2, None]) or None
+        args = rng.choice([{}, {"x": 1}, {"x": AnyValue()}, {"x": 1, "y": 2}])
+        tools.append(ToolExpect(rng.choice("abc"), args, count=(low, high)))
+    shapes: list[dict[str, Any]] = [{}, {"x": 1}, {"x": 2}, {"x": 1, "y": 2}, {"x": 1, "y": 3}]
+    steps = [step(i + 1, rng.choice("abc"), rng.choice(shapes)) for i in range(rng.randint(0, 9))]
+    return tools, steps
+
+
+# Four ``c`` calls bound to one expectation: its slots are interchangeable, so a solver is free to
+# hand them out crossed, and ``in_order`` reads the calls in slot order.
+FOUR_CALLS_ONE_EXPECTATION: tuple[list[ToolExpect], list[Any]] = (
+    [
+        ToolExpect("a", {"x": AnyValue()}, count=(0, 2)),
+        ToolExpect("a", {"x": 1}, count=(0, 2)),
+        ToolExpect("c", {"x": AnyValue()}, count=(2, None)),
+    ],
+    [
+        step(1, "a", {"x": 1, "y": 2}),
+        step(2, "c", {"x": 1, "y": 3}),
+        step(3, "c", {"x": 2}),
+        step(4, "c", {"x": 1, "y": 2}),
+        step(5, "c", {"x": 1, "y": 2}),
+    ],
+)
+FOUR_CALLS_BINDINGS = [(0, 0), (4, 1), (5, 2), (6, 3), (7, 4)]
+
+
+def tie_shuffling_backend(weights: Any) -> list[tuple[int, int]]:
+    """An optimal solver that ignores the position term: rows that weigh (nearly) the same in
+    every column are interchangeable to it, and it hands their columns out in reverse."""
+    pairs = dict(assign_max(weights))
+    done: set[int] = set()
+    for row in range(len(weights)):
+        alike = [
+            r
+            for r in range(row, len(weights))
+            if r not in done
+            and all(abs(x - y) < 1e-6 for x, y in zip(weights[row], weights[r], strict=True))
+        ]
+        done.update(alike)
+        columns = [pairs.pop(r) for r in alike if r in pairs]
+        pairs.update(zip(reversed(alike), sorted(columns), strict=False))
+    return sorted(pairs.items())
+
+
+def test_calls_bound_to_one_expectation_take_its_slots_in_seq_order() -> None:
+    tools, steps = FOUR_CALLS_ONE_EXPECTATION
+    register_assignment_backend("shuffled", tie_shuffling_backend)
+    try:
+        assert bindings(tools, steps, "python") == FOUR_CALLS_BINDINGS
+        assert bindings(tools, steps, "shuffled") == FOUR_CALLS_BINDINGS
+        assert order_outcome(tools, steps, "python") == "passed"
+        assert order_outcome(tools, steps, "shuffled") == "passed"
+    finally:
+        unregister_assignment_backend("shuffled")
+
+
+def test_the_result_does_not_depend_on_how_a_solver_breaks_ties() -> None:
+    rng = random.Random(23)
+    register_assignment_backend("shuffled", tie_shuffling_backend)
+    try:
+        for _ in range(1500):
+            tools, steps = random_case(rng)
+            assert bindings(tools, steps, "shuffled") == bindings(tools, steps, "python")
+    finally:
+        unregister_assignment_backend("shuffled")
+
+
+def test_an_expectation_that_ties_between_two_calls_takes_the_earlier_one() -> None:
+    # The ``a`` slot sits exactly halfway between the two ``a`` calls.
+    tools = [ToolExpect("p"), ToolExpect("a"), ToolExpect("q")]
+    steps = [step(1, "p"), step(2, "a"), step(3, "x"), step(4, "a"), step(5, "q")]
+    assert bindings(tools, steps, "python") == [(0, 0), (1, 1), (2, 4)]
+
+
 @pytest.mark.skipif(not scipy_available(), reason="SciPy not installed")
 def test_a12_python_and_scipy_backends_agree_on_totals_and_assignments() -> None:
     from disseqt_agent_testing.assertions.assignment.backends import get_backend
@@ -253,6 +344,22 @@ def test_a12_python_and_scipy_backends_agree_on_totals_and_assignments() -> None
         a = [(i, j) for i, j in py(w) if w[i][j] > 0]
         b = [(i, j) for i, j in sp(w) if w[i][j] > 0]
         assert abs(sum(w[i][j] for i, j in a) - sum(w[i][j] for i, j in b)) < 1e-9
+
+
+@pytest.mark.skipif(not scipy_available(), reason="SciPy not installed")
+def test_python_scipy_and_auto_backends_give_the_same_bindings_and_verdict() -> None:
+    tools, steps = FOUR_CALLS_ONE_EXPECTATION
+    for backend in ("python", "scipy", "auto"):
+        assert bindings(tools, steps, backend) == FOUR_CALLS_BINDINGS, backend
+        assert order_outcome(tools, steps, backend) == "passed", backend
+    rng = random.Random(5)
+    for _ in range(4000):
+        tools, steps = random_case(rng)
+        assert bindings(tools, steps, "scipy") == bindings(tools, steps, "python")
+    rng = random.Random(5)
+    for _ in range(600):
+        tools, steps = random_case(rng)
+        assert order_outcome(tools, steps, "scipy") == order_outcome(tools, steps, "python")
 
 
 def test_e03_a_temporary_backend_is_used_and_removed() -> None:

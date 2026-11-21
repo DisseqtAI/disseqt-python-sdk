@@ -65,18 +65,42 @@ def to_dict(obj: object) -> dict[str, Any]:
     return encoded
 
 
-def _encode(value: object) -> Any:
+def _encode(value: object, *, shorthand: bool = True) -> Any:
     if isinstance(value, Matcher):
-        return _encode_matcher(value)
+        return _encode_matcher(value, shorthand=shorthand)
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         return _encode_dataclass(value)
     if isinstance(value, Enum):
         return value.value
     if isinstance(value, dict):
-        return {key: _encode(item) for key, item in value.items()}
+        return {key: _encode(item, shorthand=shorthand) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
-        return [_encode(item) for item in value]
+        return [_encode(item, shorthand=shorthand) for item in value]
     return value
+
+
+def _has_marker(tp: Any, marker: str) -> bool:
+    if get_origin(tp) is Annotated:
+        base, found = get_args(tp)[:2]
+        return bool(found == marker) or _has_marker(base, marker)
+    return any(_has_marker(arg, marker) for arg in get_args(tp))
+
+
+@functools.cache
+def _matcher_or_str_fields(cls: type) -> frozenset[str]:
+    """Fields where a bare string means "contains this text", so ``Eq`` must be written tagged."""
+    return frozenset(
+        name for name, hint in _hints(cls).items() if _has_marker(hint, MATCHER_OR_STR_MARKER)
+    )
+
+
+def _holds_tag_key(value: object) -> bool:
+    """True if any object inside ``value`` (at any depth) has a ``"$m"`` key."""
+    if isinstance(value, Mapping):
+        return "$m" in value or any(_holds_tag_key(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_holds_tag_key(item) for item in value)
+    return False
 
 
 def _is_default(f: dataclasses.Field[Any], value: object) -> bool:
@@ -88,18 +112,19 @@ def _is_default(f: dataclasses.Field[Any], value: object) -> bool:
 
 
 def _encode_dataclass(obj: Any) -> dict[str, Any]:
-    cls = type(obj)
+    cls: type = type(obj)
     omit = bool(getattr(cls, "SERDE_OMIT_DEFAULTS", False))
     always: tuple[str, ...] = getattr(cls, "SERDE_ALWAYS", ())
     out: dict[str, Any] = {}
     version = getattr(cls, "SCHEMA_VERSION", None)
     if version is not None:
         out["schema_version"] = version
+    tagged_only = _matcher_or_str_fields(cls)
     for f in dataclasses.fields(obj):
         value = getattr(obj, f.name)
         if omit and f.name not in always and _is_default(f, value):
             continue
-        out[f.name] = _encode(value)
+        out[f.name] = _encode(value, shorthand=f.name not in tagged_only)
     return out
 
 
@@ -108,9 +133,8 @@ def _encode_matcher(matcher: Matcher, *, shorthand: bool = True) -> Any:
     if tag is None:
         raise TypeError(f"matcher class {type(matcher).__name__} is not registered")
     if shorthand and isinstance(matcher, Eq) and matcher.coerce_numeric:
-        value = matcher.value
-        if not (isinstance(value, dict) and "$m" in value):
-            return _encode(value)  # lossless shorthand: a plain JSON value
+        if not _holds_tag_key(matcher.value):
+            return _encode(matcher.value)  # lossless shorthand: a plain JSON value
     out: dict[str, Any] = {"$m": tag}
     for f in dataclasses.fields(matcher):
         out[f.name] = _encode(getattr(matcher, f.name))
@@ -420,7 +444,15 @@ def _decode_matcher(value: Any, path: str, ctx: _Ctx) -> Matcher:
         cls = matcher_class(str(value["$m"]))
         body = {key: item for key, item in value.items() if key != "$m"}
         return _decode_dataclass(cls, body, path, ctx)  # type: ignore[no-any-return]
-    return Eq(freeze_json(value, path))
+    literal = freeze_json(value, path)
+    if _holds_tag_key(literal):
+        raise _fail(
+            path,
+            "a '$m' key inside a plain value is not decoded as a matcher; use "
+            "{'$m': 'dict_match', 'fields': {...}} (or 'contains' / 'unordered' for lists) to "
+            "match inside a value, or {'$m': 'eq', 'value': ...} if '$m' is literal data",
+        )
+    return Eq(literal)
 
 
 # ----------------------------------------------------------------------------- hint checking

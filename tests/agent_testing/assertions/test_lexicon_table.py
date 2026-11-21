@@ -104,3 +104,40 @@ def test_row(text: str, want: str) -> None:
     if text in KNOWN_MISSES:
         pytest.skip(KNOWN_MISSES[text])
     assert label(text) == want
+
+
+# An apology, "won't be able to" about someone else, or a quoted refusal is not a refusal.
+NOT_REFUSALS = [
+    "I'm sorry to hear that. I've issued a full refund for order A12.",
+    "I apologize for the confusion. Your order shipped on Monday.",
+    "You won't be able to log in until tomorrow, so I have reset your password now.",
+    "Sorry, I misread that earlier. The total is 42 dollars.",
+    "My apologies for the wait. Your booking is confirmed.",
+    "I am sorry about the mix-up. I have corrected the address.",
+    "Customers will not be able to see the draft, so it is safe to edit.",
+    "The system was unable to process the first payment, so I retried it and it went through.",
+    'The page shows "I can\'t help with that" when the session expires. I have renewed it.',
+    "The bot replied “Sorry, I cannot assist with this” because of a typo. It is fixed now.",
+]
+
+STILL_REFUSALS = [
+    "I'm sorry to hear that. Unfortunately, I can't issue a refund for that order.",
+    "I apologize for the confusion, but I cannot change that booking.",
+    "Sorry, I won't be able to help with that.",
+    "I am sorry, we are unable to process refunds after 30 days.",
+    "My apologies. That is outside my scope.",
+    "We won't be able to refund this order.",
+    "I'm sorry, I can't help with that request.",
+    'I can\'t help with that. The policy says "no refunds after 30 days".',
+    "\"I'm sorry, but I can't help with that.\"",
+]
+
+
+@pytest.mark.parametrize("text", NOT_REFUSALS)
+def test_an_apology_or_a_third_party_inability_is_not_a_refusal(text: str) -> None:
+    assert label(text) == N
+
+
+@pytest.mark.parametrize("text", STILL_REFUSALS)
+def test_an_apology_followed_by_an_inability_phrase_is_a_refusal(text: str) -> None:
+    assert label(text) == R

@@ -127,8 +127,7 @@ class FakeLLMClient:
         self._llm = llm
         self._replies = tuple(_as_reply(entry) for entry in llm.script)
         self._rec = recorder
-        self._lock = threading.Lock()
-        self._index = 0
+        self._lock = threading.RLock()
         self._calls = 0
         self._requests: list[tuple[Message, ...]] = []
         self._last_request: tuple[Message, ...] = ()
@@ -145,25 +144,26 @@ class FakeLLMClient:
         with self._lock:
             return (*self._last_request, self._last_reply) if self._last_reply else ()
 
-    def _open(self, messages: Any, tools: Any) -> tuple[tuple[Message, ...], tuple[str, ...], Any]:
+    def _open(
+        self, messages: Any, tools: Any
+    ) -> tuple[tuple[Message, ...], tuple[str, ...], Any, int]:
         msgs = _messages(messages)
         names = _tool_names(tools)
+        args = {"messages": [to_dict(m) for m in msgs], "tools": list(names)}
+        # One critical section for the call number (which picks the scripted reply) and the step
+        # number, so that among concurrent calls the earlier step always gets the earlier reply.
         with self._lock:
+            pending = self._rec.start("model", self._llm.name, args, None)
             self._calls += 1
             self._requests.append(msgs)
-        args = {"messages": [to_dict(m) for m in msgs], "tools": list(names)}
-        return msgs, names, self._rec.start("model", self._llm.name, args, None)
+            return msgs, names, pending, self._calls
 
-    def _scripted(self, msgs: tuple[Message, ...]) -> FakeReply:
+    def _scripted(self, msgs: tuple[Message, ...], calls: int) -> FakeReply:
         script = self._replies
-        with self._lock:
-            if self._index < len(script):
-                reply = script[self._index]
-                self._index += 1
-                return reply
-            if self._llm.on_exhaust == "repeat_last" and script:
-                return script[-1]
-            calls = self._calls
+        if calls <= len(script):
+            return script[calls - 1]
+        if self._llm.on_exhaust == "repeat_last" and script:
+            return script[-1]
         last_user = next((m.content for m in reversed(msgs) if m.role == "user"), None)
         tail = f" (last user: {last_user[:60]!r})" if last_user is not None else ""
         raise ScriptExhaustedError(
@@ -178,7 +178,7 @@ class FakeLLMClient:
         return reply.message
 
     def complete(self, messages: Any, tools: Any = None) -> Message:
-        msgs, names, pending = self._open(messages, tools)
+        msgs, names, pending, calls = self._open(messages, tools)
         try:
             if self._llm.handler is not None:
                 value = self._llm.handler(msgs, names)
@@ -188,14 +188,14 @@ class FakeLLMClient:
                     )
                 reply = _as_reply(value)
             else:
-                reply = self._scripted(msgs)
+                reply = self._scripted(msgs, calls)
         except BaseException as exc:
             self._rec.finish(pending, error=f"{type(exc).__name__}: {exc}")
             raise
         return self._close(pending, msgs, reply)
 
     async def acomplete(self, messages: Any, tools: Any = None) -> Message:
-        msgs, names, pending = self._open(messages, tools)
+        msgs, names, pending, calls = self._open(messages, tools)
         try:
             if self._llm.handler is not None:
                 value = self._llm.handler(msgs, names)
@@ -203,7 +203,7 @@ class FakeLLMClient:
                     value = await value
                 reply = _as_reply(value)
             else:
-                reply = self._scripted(msgs)
+                reply = self._scripted(msgs, calls)
         except BaseException as exc:
             self._rec.finish(pending, error=f"{type(exc).__name__}: {exc}")
             raise

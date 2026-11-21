@@ -9,7 +9,7 @@ from .models import CaseResult, RepeatRecord, SuiteResult
 
 SYMBOLS = {"passed": "✓", "failed": "✗", "incomplete": "?", "not_run": "·"}
 ASCII = {"passed": "P", "failed": "F", "incomplete": "?", "not_run": "."}
-ORDER = {"error": 0, "failed": 1, "incomplete": 2, "skipped": 3, "passed": 4}
+ORDER = {"error": 0, "failed": 1, "incomplete": 2, "skipped": 3, "xfailed": 4, "passed": 5}
 
 
 def can_unicode(stream: object = None) -> bool:
@@ -35,6 +35,7 @@ def _word(status: str) -> str:
         "error": "ERROR",
         "skipped": "SKIPPED",
         "passed": "PASSED",
+        "xfailed": "XFAILED",
     }[status]
 
 
@@ -109,9 +110,10 @@ def summary_table(result: SuiteResult, ascii_only: bool = False) -> list[str]:
             f"{_word(c.status):<10} {c.case_id:<32} {strip_of(c.repeats, ascii_only):<10}{stats}"
         )
     t = result.totals
+    xfailed = f", {t.xfailed} xfailed" if t.xfailed else ""
     out.append(
         f"{t.cases} cases: {t.passed} passed, {t.failed} failed, {t.incomplete} incomplete, "
-        f"{t.skipped} skipped, {t.error} error; repeats run {t.repeats_run}, not run {t.repeats_not_run}"
+        f"{t.skipped} skipped, {t.error} error{xfailed}; repeats run {t.repeats_run}, not run {t.repeats_not_run}"
     )  # fmt: skip
     u = result.judge_usage
     if u.calls or u.error_repeats:

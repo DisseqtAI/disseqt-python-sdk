@@ -108,43 +108,61 @@ class Order(BaseMetric):
                 reason="" if ok else f"observed order {[p.step.name for p in sorted(a.pairs, key=lambda p: p.step.seq)]}",
                 details={"mode": mode, "lis": lis, "matched": len(seqs), "seqs": seqs},
             )  # fmt: skip
-        # exact: every recorded call, no extras, each at its declared position
-        want = len(a.slots)
+        # exact: every required call, no extras, expectations in declared order. Optional slots
+        # that no call filled are not expected, and calls of one expectation are interchangeable,
+        # so the matched calls are compared by expectation rather than by slot position.
+        by_call = sorted(a.pairs, key=lambda p: p.call_index)
+        width = len(by_call) + 1
+        positioned = longest_increasing(
+            [p.slot.expect_index * width + k for k, p in enumerate(by_call)]
+        )
+        want = len(a.pairs) + len(a.missing_required)
         got = len(a.calls)
-        positioned = sum(1 for p in a.pairs if p.call_index == p.slot.index)
-        ok = want == got and positioned == want and not a.missing_required
+        ok = positioned == len(by_call) and not a.missing_required and not a.unmatched_calls
         value = positioned / max(want, got, 1)
+        declared = [te.name for te in ctx.expect.tools]
         return self._component(
             ctx, "sequence", status="ok", value=value, passed=ok,
             reason_code=None if ok else "order.exact",
-            reason="" if ok else f"expected exactly {want} calls in order, observed {[s.name for s in a.calls]}",
+            reason="" if ok else f"expected exactly {declared} in order, observed {[s.name for s in a.calls]}",
             details={"mode": mode, "expected": want, "observed": got, "positioned": positioned},
         )  # fmt: skip
 
     def _edges(self, ctx: EvalContext, edges: list[tuple[str, str]]) -> MetricResult:
         a = ctx.assignment()
+        required = {s.expect_id for s in a.slots if s.required}
         violated: list[dict[str, Any]] = []
         satisfied: list[dict[str, Any]] = []
+        not_checked: list[dict[str, Any]] = []
         for u, v in edges:
             bu, bv = a.bound(u), a.bound(v)
             row = {"before": u, "after": v}
-            if not bu or not bv:
-                violated.append({**row, "code": "order.edge_unverifiable",
-                                 "missing": [x for x, b in ((u, bu), (v, bv)) if not b]})  # fmt: skip
+            missing = [x for x, b in ((u, bu), (v, bv)) if not b]
+            if missing:
+                if any(x in required for x in missing):
+                    violated.append({**row, "code": "order.edge_unverifiable", "missing": missing})
+                else:  # an optional call that never happened constrains nothing
+                    not_checked.append({**row, "missing": missing})
                 continue
-            groups = {s.parallel_group for s in (*bu, *bv)}
+            first_u, first_v = bu[0], bv[0]  # bound calls are in seq order
             if (
-                len(groups) == 1
-                and None not in groups
-                and bu[0].parallel_group == bv[0].parallel_group
+                first_u.parallel_group is not None
+                and first_u.parallel_group == first_v.parallel_group
             ):
                 violated.append({**row, "code": "order.edge_same_batch"})
                 continue
-            if min(s.seq for s in bu) < min(s.seq for s in bv):
+            if first_u.seq < first_v.seq:
                 satisfied.append(row)
             else:
                 violated.append({**row, "code": "order.edge_violated",
-                                 "seqs": [min(s.seq for s in bu), min(s.seq for s in bv)]})  # fmt: skip
+                                 "seqs": [first_u.seq, first_v.seq]})  # fmt: skip
+        checked = len(satisfied) + len(violated)
+        if not checked:
+            return self._component(
+                ctx, "edges", status="skipped", reason_code="not_applicable",
+                reason="no edge has both of its calls",
+                details={"satisfied": [], "violated": [], "not_checked": not_checked},
+            )  # fmt: skip
         ok = not violated
         first = violated[0] if violated else None
         reason = ""
@@ -154,9 +172,12 @@ class Order(BaseMetric):
                 f"expected {first['before']} before {first['after']}; observed {' -> '.join(names)}"
             )
         return self._component(
-            ctx, "edges", status="ok", value=len(satisfied) / len(edges), passed=ok,
+            ctx, "edges", status="ok", value=len(satisfied) / checked, passed=ok,
             reason_code=first["code"] if first else None, reason=reason,
-            details={"satisfied": satisfied, "violated": violated},
+            details={
+                "satisfied": satisfied, "violated": violated,
+                **({"not_checked": not_checked} if not_checked else {}),
+            },
         )  # fmt: skip
 
     def _same_step(self, ctx: EvalContext, pairs: list[tuple[str, str]]) -> MetricResult:

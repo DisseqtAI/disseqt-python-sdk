@@ -11,6 +11,7 @@ from typing import Any, Protocol
 from ..codes import message
 
 _SAFE = re.compile(r"[^A-Za-z0-9._-]")
+_KEY = re.compile(r"[0-9a-f]{64}")
 
 
 class CacheCorrupt(Exception):
@@ -81,5 +82,17 @@ class JsonDirStore:
             with open(folder / f"{os.getpid()}.txt", "a", encoding="utf-8") as handle:
                 handle.write(f"{safe_segment(provider)}__{safe_segment(model)}/{key[:2]}/{key}\n")
 
+    def owns(self, path: Path) -> bool:
+        """Whether ``path`` sits where ``put`` writes: ``<provider>__<model>/<key[:2]>/<key>.json``
+        with a SHA-256 key. Anything else under the directory belongs to someone else."""
+        try:
+            parts = path.relative_to(self.root).parts
+        except ValueError:
+            return False
+        if len(parts) != 3 or "__" not in parts[0] or path.suffix != ".json":
+            return False
+        return bool(_KEY.fullmatch(path.stem)) and parts[1] == path.stem[:2] and path.is_file()
+
     def list(self) -> list[Path]:
-        return sorted(p for p in self.root.rglob("*.json") if ".touched" not in p.parts)
+        """The cache entries only, so ``verify`` and ``prune`` never touch another file."""
+        return sorted(p for p in self.root.glob("*/*/*.json") if self.owns(p))

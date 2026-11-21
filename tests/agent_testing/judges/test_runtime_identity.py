@@ -385,3 +385,49 @@ def test_judge_config_is_validated() -> None:
             JudgeConfig(**bad)  # type: ignore[arg-type]
     with pytest.raises(Exception):  # noqa: B017
         KindConfig(samples=0)
+
+
+def test_cancelling_one_caller_leaves_an_identical_concurrent_call_running() -> None:
+    def script(req: Any) -> Any:
+        return FakeSlow(0.2, label("ask"))
+
+    async def scenario() -> tuple[Any, int]:
+        with engine(script, kinds={"decision": KindConfig(samples=1)}) as (eng, model):
+            first = asyncio.ensure_future(eng.ajudge(decision_task()))
+            await asyncio.sleep(0.05)
+            second = asyncio.ensure_future(eng.ajudge(decision_task()))
+            await asyncio.sleep(0.05)
+            first.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await first
+            verdict = await asyncio.wait_for(second, 5)
+            return verdict, len(model.calls)
+
+    verdict, calls = asyncio.run(scenario())
+    assert (verdict.status, verdict.label) == ("ok", "ask")
+    assert calls == 2  # the follower took the request over
+
+
+def test_sync_judge_on_the_engine_loop_thread_raises_instead_of_deadlocking() -> None:
+    errors: list[BaseException] = []
+    holder: list[Any] = []
+
+    def script(req: Any) -> Any:
+        if req.messages[-1]["content"].count("inner?"):
+            return label("ask")
+        try:
+            holder[0].judge(decision_task("inner?"))
+        except RuntimeError as exc:
+            errors.append(exc)
+        return label("ask")
+
+    with engine(script, kinds={"decision": KindConfig(samples=1)}) as (eng, _):
+        holder.append(eng)
+        done: list[Any] = []
+        worker = threading.Thread(target=lambda: done.append(eng.judge(decision_task())))
+        worker.daemon = True
+        worker.start()
+        worker.join(3)
+        assert not worker.is_alive() and done[0].label == "ask"
+        assert len(errors) == 1 and "loop thread" in str(errors[0])
+        assert eng.judge(decision_task("after?")).label == "ask"  # the engine still works

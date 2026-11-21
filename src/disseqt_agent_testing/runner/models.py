@@ -10,7 +10,7 @@ import hashlib
 import json
 import os
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import KW_ONLY, dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
@@ -22,7 +22,7 @@ from ..models._frozen import JSONObject, freeze_mapping
 from .config import SuiteConfig
 
 SCHEMA_VERSION = "1"
-CASE_STATUSES = ("passed", "failed", "incomplete", "skipped", "error")
+CASE_STATUSES = ("passed", "failed", "incomplete", "skipped", "error", "xfailed")
 REPEAT_STATUSES = ("passed", "failed", "incomplete", "not_run")
 NOT_RUN_REASONS = (
     "early_stop",
@@ -264,6 +264,7 @@ class Totals:
     error: int = 0
     repeats_run: int = 0
     repeats_not_run: int = 0
+    xfailed: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {f: getattr(self, f) for f in self.__dataclass_fields__}
@@ -321,6 +322,25 @@ class JudgeUsage:
 
 
 CUT_OFF_REASONS = ("suite_timeout", "case_timeout", "cancelled")  # incomplete whatever the policy
+DELIBERATE_REASONS = ("only_repeat", "early_stop")  # a repeat left out on purpose, never cut off
+
+
+def cut_off_reason(reasons: Iterable[str | None]) -> str | None:
+    """The cut-off reason among the not-run reasons of a case's repeats, if any repeat has one."""
+    found = set(reasons)
+    return next((r for r in CUT_OFF_REASONS if r in found), None)
+
+
+def not_run_reason_of(reasons: Iterable[str | None]) -> str | None:
+    """Why a case with no repeat run did not run: a cut-off first, then any reason that is not a
+    deliberate omission (with ``only_repeat`` every other repeat carries that reason, which says
+    nothing about the selected one)."""
+    listed = [r for r in reasons if r]
+    return (
+        cut_off_reason(listed)
+        or next((r for r in listed if r not in DELIBERATE_REASONS), None)
+        or next(iter(listed), None)
+    )
 
 
 def compute_exit_code(

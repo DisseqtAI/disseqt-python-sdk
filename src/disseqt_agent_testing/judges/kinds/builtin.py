@@ -51,11 +51,15 @@ def _norm_text(text: str) -> str:
     return _SPACES.sub(" ", unicodedata.normalize("NFKC", text)).strip().casefold()
 
 
-def _as_number(value: Any) -> float | None:
+def _as_number(value: Any) -> int | float | None:
+    """The value itself, never converted: ``int == float`` is exact in Python, while ``float()``
+    collapses different integers above 2**53."""
     if isinstance(value, bool):
         return None
-    if isinstance(value, (int, float)):
-        return float(value) if math.isfinite(value) else None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and math.isfinite(value):
+        return value
     return None
 
 

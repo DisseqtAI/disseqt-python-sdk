@@ -193,3 +193,113 @@ def test_packaging_ships_py_typed_and_keeps_design_notes_out_of_the_sdist() -> N
     sdist = text.split("[tool.hatch.build.targets.sdist]")[1].split("\n[")[0]
     assert '"/plan.md"' in sdist and '"/plans"' in sdist
     assert '"src/disseqt_agent_testing"' in text.split("[tool.hatch.build.targets.wheel]")[1]
+
+
+def test_repeated_case_flags_all_reach_pytest_mode(tmp_path: Path) -> None:
+    write_demo(tmp_path)
+    for order in (("refund_wrong_order", "refund_happy"), ("refund_happy", "refund_wrong_order")):
+        flags = [a for cid in order for a in ("--case", cid)]
+        for extra in ((), ("--no-pytest",)):
+            r = cli(tmp_path, "test", "tests/agent_cases", *flags, *extra)
+            assert r.returncode == 1, (order, extra, r.stdout + r.stderr)
+
+
+def test_no_agent_case_beside_a_passing_plain_test_exits_5_in_both_modes(tmp_path: Path) -> None:
+    (tmp_path / "test_plain.py").write_text("def test_ok():\n    assert True\n")
+    for extra in ((), ("--no-pytest",)):
+        r = cli(tmp_path, "test", ".", *extra)
+        assert r.returncode == 5, (extra, r.stdout + r.stderr)
+
+
+def test_a_failing_plain_test_beats_an_all_skipped_suite(tmp_path: Path) -> None:
+    from ..plugin.conftest import case as mkcase
+    from ..plugin.conftest import casefile
+
+    skipped = mkcase("sk").replace('"}', '", skip: "later"}', 1)
+    (tmp_path / "c.agent.yaml").write_text(casefile(skipped))
+    assert cli(tmp_path, "test", ".").returncode == 5
+    (tmp_path / "test_plain.py").write_text("def test_boom():\n    assert False\n")
+    r = cli(tmp_path, "test", ".")
+    assert r.returncode == 1, r.stdout + r.stderr
+
+
+def test_a_failing_plain_test_beats_an_incomplete_suite(tmp_path: Path) -> None:
+    from ..plugin.conftest import case as mkcase
+    from ..plugin.conftest import casefile
+
+    slow = [mkcase(f"s{i}", "make_slow_agent", repeats=3) for i in range(3)]
+    (tmp_path / "c.agent.yaml").write_text(casefile(*slow))
+    args = ("test", ".", "--workers", "1", "--suite-timeout", "0.45")
+    assert cli(tmp_path, *args).returncode == 2
+    (tmp_path / "test_plain.py").write_text("def test_boom():\n    assert False\n")
+    r = cli(tmp_path, *args)
+    assert r.returncode == 1, r.stdout + r.stderr
+
+
+class _Suite:
+    def __init__(self, exit_code: int):
+        self.exit_code = exit_code
+
+
+@pytest.mark.parametrize(
+    ("suite", "pytest_code", "plain_failed", "expected"),
+    [
+        (0, 1, True, 1),
+        (2, 1, True, 1),
+        (5, 1, True, 1),
+        (2, 1, False, 2),  # pytest's 1 is the incomplete agent item itself
+        (5, 0, False, 5),
+        (1, 2, False, 3),
+        (3, 1, True, 3),
+        (2, 0, False, 2),
+        (0, 5, False, 5),
+    ],
+)
+def test_exit_codes_merge_by_priority(
+    suite: int, pytest_code: int, plain_failed: bool, expected: int
+) -> None:
+    from disseqt_agent_testing.cli.exit import exit_code_for
+
+    got = exit_code_for(_Suite(suite), pytest_code=pytest_code, plain_failed=plain_failed)
+    assert got == expected
+
+
+@pytest.mark.parametrize("no_pytest", [True, False])
+def test_two_runs_in_one_process_do_not_share_the_agent_module(
+    tmp_path: Path, no_pytest: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[3]))
+    codes = []
+    for name, factory in (("one", "make_good_agent"), ("two", "make_wrong_agent")):
+        project = tmp_path / name
+        project.mkdir()
+        _simple_case_file(project)
+        (project / "project_agents_29.py").write_text(
+            f"from tests.agent_testing._support.runner_agents import {factory} as make\n"
+        )
+        monkeypatch.chdir(project)
+        args = ["test", "c.agent.yaml", "--agent", "project_agents_29:make"]
+        codes.append(main(args + (["--no-pytest"] if no_pytest else [])))
+        assert "project_agents_29" not in sys.modules
+    assert codes == [0, 1]
+
+
+@pytest.mark.parametrize("no_pytest", [True, False])
+def test_an_xfail_case_gives_the_same_exit_code_in_both_modes(
+    tmp_path: Path, no_pytest: bool
+) -> None:
+    from ..plugin.conftest import case as mkcase
+    from ..plugin.conftest import casefile
+
+    extra = ("--no-pytest",) if no_pytest else ()
+    for agent, expected, status in (
+        ("make_wrong_agent", 0, "xfailed"),
+        ("make_good_agent", 1, "failed"),
+    ):
+        text = mkcase("xf", agent).replace(f':{agent}"}}', f':{agent}", xfail: "known bug"}}')
+        (tmp_path / "x.agent.yaml").write_text(casefile(text))
+        r = cli(tmp_path, "test", "x.agent.yaml", "--output", "o.json", *extra)
+        assert r.returncode == expected, (agent, r.stdout + r.stderr)
+        data = json.loads((tmp_path / "o.json").read_text())
+        assert [c["status"] for c in data["cases"]] == [status]

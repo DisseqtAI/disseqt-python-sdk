@@ -135,7 +135,7 @@ def test_uncalibrated_policy_warns_or_blocks_in_gating() -> None:
             return self.skip(ctx, "judge_uncalibrated", "label=yes")
 
     try:
-        warn = evaluate(run_of(), Expect(max_steps=1))
+        warn = evaluate(run_of(captured=True), Expect(max_steps=1))
         assert warn.outcome == "passed" and any("not gated" in w for w in warn.warnings)
         assert (
             evaluate(run_of(), Expect(max_steps=1), on_uncalibrated="incomplete").outcome

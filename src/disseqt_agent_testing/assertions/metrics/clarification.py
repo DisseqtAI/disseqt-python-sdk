@@ -72,11 +72,16 @@ class Clarification(BaseMetric):
         )
 
     def _turn(self, ctx: EvalContext, turn: int) -> MetricResult:
-        spec = ctx.expect.clarify
+        # ``clarify`` describes the question asked on turn 0; later ask turns are only checked
+        # for asking (and not acting first)
+        spec = ctx.expect.clarify if turn == 0 else None
         assert spec is None or isinstance(spec, ClarifyExpect)
         if turn >= turn_count(ctx.run):
             return self._fail(ctx, turn, "decision.turn_missing", f"the run has no turn {turn}")
         cls = ctx.classification(turn)
+        undecided = self.undecided(ctx, cls, turn=turn, scope="turn", details={"actual": cls.label})
+        if undecided is not None:
+            return undecided
         if cls.label != "ask":
             return self._fail(
                 ctx,

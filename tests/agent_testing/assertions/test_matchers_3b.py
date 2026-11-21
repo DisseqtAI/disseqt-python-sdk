@@ -95,6 +95,61 @@ def test_m17_contains_for_strings_and_lists() -> None:
     assert one(Contains((1,)), 5).code == "type_error:array->integer"
 
 
+class Raises:
+    def __call__(self, value: Any) -> bool:
+        raise RuntimeError("boom")
+
+
+def statuses(matcher: Any, actual: Any, ctx: MatchContext = CTX) -> list[tuple[str, Any, Any]]:
+    out = match_value(matcher, freeze_json(actual), ctx)
+    return [(r.status, r.ok, r.code) for r in out]
+
+
+def test_an_unmeasured_matcher_inside_unordered_or_contains_stays_unmeasured() -> None:
+    sem = Semantic("the capital of France")
+    skipped = [("skipped", None, "judge_unavailable")]
+    assert statuses(sem, "Paris") == skipped
+    assert statuses(Unordered((sem,)), ["Paris"]) == skipped
+    assert statuses(Unordered((1, sem)), [1, "Paris"]) == skipped
+    assert statuses(Contains((sem,)), ["Paris", 2]) == skipped
+    assert statuses(Contains((sem, "rome")), "Paris and Rome") == skipped
+    boom = MatchContext(predicates={"boom": Raises()})
+    error = [("error", None, "predicate_error")]
+    assert statuses(Unordered((Predicate("boom"),)), [1], boom) == error
+    assert statuses(Contains((Predicate("boom"),)), [1], boom) == error
+    assert statuses(Unordered((Predicate("boom"), sem)), [1, 2], boom) == error
+
+
+def test_a_decided_mismatch_inside_unordered_or_contains_is_still_a_failure() -> None:
+    sem = Semantic("the capital of France")
+    # the unmeasured item cannot rescue these: sizes differ, or a plain item has no partner
+    assert one(Unordered((sem,)), ["Paris", "Rome"]).code == "value_error:unordered"
+    assert one(Unordered((1, sem)), [2, 3]).code == "value_error:unordered"
+    assert one(Unordered((1, sem)), [1]).code == "value_error:unordered"
+    assert one(Contains((1, sem)), [2]).code == "value_error:contains"
+    assert one(Contains((sem,)), []).code == "value_error:contains"
+    assert one(Contains((sem, "oslo")), "Paris and Rome").code == "value_error:contains"
+    # and a decided match does not need the unmeasured one
+    assert one(Contains((1,)), [1, "x"]).ok and one(Unordered((1, 2)), [2, 1]).ok
+
+
+def test_an_unmeasured_default_is_not_an_unexpected_argument() -> None:
+    sem = Semantic("a polite note")
+    m = DictMatch({"a": 1}, mode="exact", defaults={"note": sem})
+    assert statuses(m, {"a": 1, "note": "thanks"}) == [
+        ("ok", True, None),
+        ("skipped", None, "judge_unavailable"),
+    ]
+    expect = Expect(tools=(ToolExpect("t", {"a": 1}, args_mode="exact", defaults={"note": sem}),))
+    rep = evaluate(run_of(step(1, "t", {"a": 1, "note": "thanks"})), expect)
+    args = next(c for c in rep.checks if c.name == "tool_args")
+    assert args.status == "skipped" and rep.outcome == "incomplete"
+    listed = Expect(tools=(ToolExpect("t", {"tags": Unordered((sem,))}),))
+    rep = evaluate(run_of(step(1, "t", {"tags": ["x"]})), listed)
+    args = next(c for c in rep.checks if c.name == "tool_args")
+    assert args.status == "skipped" and rep.outcome == "incomplete"
+
+
 def test_m18_dict_match_modes() -> None:
     sub = DictMatch({"a": 1})
     assert one(sub, {"a": 1, "b": 2}).ok

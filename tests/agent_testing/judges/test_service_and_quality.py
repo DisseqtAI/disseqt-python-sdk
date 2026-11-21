@@ -152,9 +152,9 @@ def test_service_without_transport_or_url_fails_closed(monkeypatch: pytest.Monke
     with pytest.raises(JudgeConfigError) as err:
         ServiceModel("m-1")
     assert err.value.code == "service_not_configured"
-    monkeypatch.setenv("DISSEQT_JUDGE_SERVICE_URL", "http://svc.invalid/")
+    monkeypatch.setenv("DISSEQT_JUDGE_SERVICE_URL", "https://svc.invalid/")
     live = ServiceModel("m-1")
-    assert live.networked and live.base_url == "http://svc.invalid"
+    assert live.networked and live.base_url == "https://svc.invalid"
 
 
 def test_service_provider_string_resolves_through_the_registry() -> None:

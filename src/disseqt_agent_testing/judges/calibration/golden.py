@@ -8,7 +8,8 @@ One JSON object per line::
 
 ``source`` is ``human`` (counts toward gating), ``silver_code`` (labelled by a deterministic rule)
 or ``draft`` (written by a tool or an assistant: a starting point for human labelling, never
-evidence). Only ``human`` items can make a calibration report gate.
+evidence). Only ``human`` items can make a calibration report gate; an item without a ``source``
+is a ``draft``.
 """
 
 import csv
@@ -23,6 +24,7 @@ from ..templates import get_template
 
 SCHEMA_VERSION = "1"
 SOURCES = ("human", "silver_code", "draft")
+DEFAULT_SOURCE = "draft"  # an item that does not say who labelled it is never gating evidence
 DEFAULT_DIR = Path(".disseqt/golden")
 
 
@@ -37,7 +39,7 @@ class GoldenItem:
     inputs: Mapping[str, Any]
     label: str
     _: KW_ONLY
-    source: str = "human"
+    source: str = DEFAULT_SOURCE
     adjudicated: bool = False
     few_shot: bool = False
     tags: tuple[str, ...] = ()
@@ -62,7 +64,7 @@ class GoldenItem:
                 str(data["kind"]),
                 dict(data["inputs"]),
                 str(data["label"]),
-                source=str(data.get("source", "human")),
+                source=str(data.get("source", DEFAULT_SOURCE)),
                 adjudicated=bool(data.get("adjudicated", False)),
                 few_shot=bool(data.get("few_shot", False)),
                 tags=tuple(str(t) for t in data.get("tags", ())),

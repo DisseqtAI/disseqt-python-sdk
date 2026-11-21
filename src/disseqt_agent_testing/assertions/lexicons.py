@@ -12,7 +12,7 @@ _LOCK = threading.RLock()
 @dataclass(slots=True, frozen=True)
 class LexiconPack:
     lang: str
-    # always a refusal when they open the answer (apologies / inability)
+    # always a refusal when they open the answer (statements of inability)
     refusal_prefixes: tuple[str, ...]
     # only a refusal when followed by one of ``action_verbs`` ("I cannot help" yes, "I cannot
     # stress enough" no)
@@ -22,6 +22,9 @@ class LexiconPack:
     interrogatives: tuple[str, ...]
     question_cues: tuple[str, ...]  # clarification phrases that need no question mark
     closers: tuple[str, ...]  # "anything else?" style sign-offs: never a clarifying question
+    # openings that are a refusal only when an inability phrase follows ("I'm sorry, I can't
+    # do that" yes, "I'm sorry to hear that. I've issued the refund." no)
+    apology_prefixes: tuple[str, ...] = ()
 
 
 _PACKS: dict[str, LexiconPack] = {}
@@ -50,13 +53,16 @@ def get_lexicon(lang: str) -> LexiconPack:
 
 EN = LexiconPack(
     lang="en",
-    refusal_prefixes=(
+    apology_prefixes=(
         "i'm sorry",
         "i am sorry",
         "i apologize",
+        "i apologise",
         "my apologies",
         "sorry,",
         "sorry.",
+    ),
+    refusal_prefixes=(
         "i'm unable to",
         "i am unable to",
         "unfortunately, i can't",
@@ -81,14 +87,14 @@ EN = LexiconPack(
         "recommend", "advise", "write", "send", "approve", "grant", "authorize", "verify",
     ),  # fmt: skip
     refusal_patterns=(
-        r"\bcan'?t help with\b",
-        r"\bnot able to (?:assist|help)\b",
-        r"\b(?:won'?t|will not|cannot|can'?t) be able to\b",
+        r"\b(?:i|we) (?:can'?t|cannot) help with\b",
+        r"\b(?:i|we)(?:'m|'re| am| are) not able to (?:assist|help)\b",
+        r"\b(?:i|we) (?:won'?t|will not|cannot|can'?t) be able to\b",
         r"\boutside (?:of )?my (?:scope|capabilities)\b",
         r"\bi (?:can'?t|cannot|won'?t) (?:help|assist|provide|do)\b",
         r"\b(?:is|are) not eligible\b",
         r"\bnot eligible for\b",
-        r"\bunable to (?:help|assist|process|complete)\b",
+        r"\b(?:i|we)(?:'m|'re| am| are) unable to (?:help|assist|process|complete)\b",
     ),
     interrogatives=(
         "what", "which", "who", "whom", "whose", "when", "where", "why", "how", "can", "could",

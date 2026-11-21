@@ -85,10 +85,13 @@ async def arun_suite(
     cases: Any, *, agent_factory: Callable[..., Any] | None = None, config: SuiteConfig = SuiteConfig(),
     judge: Judge | None = None, limiter: Limiter | None = None, filter: Any = None,
     on_event: EventCallback | None = None, orchestrator: Orchestrator | None = None,
+    suite_deadline: float | None = None,
 ) -> SuiteResult:  # fmt: skip
     specs, errors = to_specs(cases, filter)
     t0 = time.monotonic()
     suite = SuiteState(config, on_event)
+    if suite_deadline is not None:
+        suite.deadline = suite_deadline
     wrapped = make_judge(judge, config, limiter)
     results: list[CaseResult] = []
     plans: list[Plan] = []
@@ -150,11 +153,11 @@ async def arun_suite(
 async def arun_case(
     case: Any, *, agent_factory: Callable[..., Any] | None = None, orchestrator: Orchestrator | None = None,
     config: SuiteConfig = SuiteConfig(), judge: Judge | None = None, limiter: Limiter | None = None,
-    on_event: EventCallback | None = None,
+    on_event: EventCallback | None = None, suite_deadline: float | None = None,
 ) -> CaseResult:  # fmt: skip
     spec = case if isinstance(case, CaseSpec) else CaseSpec(case)
     result = await arun_suite(
         [spec], agent_factory=agent_factory, orchestrator=orchestrator, config=config, judge=judge,
-        limiter=limiter, on_event=on_event,
+        limiter=limiter, on_event=on_event, suite_deadline=suite_deadline,
     )  # fmt: skip
     return result.cases[0]

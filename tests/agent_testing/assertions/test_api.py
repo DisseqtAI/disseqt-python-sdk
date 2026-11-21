@@ -104,7 +104,7 @@ def test_g07_a_metric_that_raises_is_an_error_and_the_rest_stay_intact() -> None
             raise RuntimeError("kaput")
 
     try:
-        rep = evaluate(run_of(step(1, "a")), Expect(max_steps=3))
+        rep = evaluate(run_of(step(1, "a"), captured=True), Expect(max_steps=3))
     finally:
         unregister_metric("explodes")
     bad = rep.check("explodes")
@@ -192,7 +192,7 @@ def test_incomplete_raises_the_subclass_with_the_could_not_verify_line() -> None
 
 
 def test_x01_a_report_has_no_truth_value() -> None:
-    rep = evaluate(run_of(), Expect(max_steps=1))
+    rep = evaluate(run_of(captured=True), Expect(max_steps=1))
     with pytest.raises(TypeError, match="use report.passed"):
         bool(rep)
     assert rep.passed is True

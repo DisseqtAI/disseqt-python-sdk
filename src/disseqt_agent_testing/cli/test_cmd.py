@@ -97,8 +97,8 @@ def pytest_args(ns: argparse.Namespace, output: str) -> list[str]:
     ):  # fmt: skip
         if value is not None:
             args += [flag, str(value)]
-    for c in ns.case:
-        args += ["--disseqt-case", c]
+    if ns.case:
+        args += ["--disseqt-case", ",".join(ns.case)]
     for t in ns.tags:
         args += ["--disseqt-tags", t]
     for flag, on in (
@@ -115,10 +115,21 @@ def pytest_args(ns: argparse.Namespace, output: str) -> list[str]:
 
 class _Probe:
     """A pytest plugin for the CLI: sees a real keyboard interrupt (pytest also exits 2 for a
-    collection error) and puts the rootdir on ``sys.path``, as ``python -m pytest`` would."""
+    collection error), notes whether a test that is not an agent case failed, and puts the
+    rootdir on ``sys.path``, as ``python -m pytest`` would."""
 
     def __init__(self) -> None:
         self.interrupted = False
+        self.plain_failed = False
+
+    def pytest_runtest_logreport(self, report: Any) -> None:
+        if not report.failed:
+            return
+        agent = ".agent." in report.nodeid.split("::", 1)[0] or any(
+            str(key).startswith("disseqt.") for key, _ in report.user_properties
+        )
+        if not agent:
+            self.plain_failed = True
 
     def pytest_keyboard_interrupt(self, excinfo: Any) -> None:
         import pytest
@@ -136,15 +147,46 @@ class _Probe:
 @contextlib.contextmanager
 def _cwd_on_path() -> Iterator[None]:
     """Console scripts do not put the working directory on ``sys.path`` (``python -m`` does), so
-    ``--agent agents.refund:make`` would not import. Restored afterwards."""
+    ``--agent agents.refund:make`` would not import. Restored afterwards, together with the
+    project modules the run imported: a later run in the same process (another project, or the
+    same one after an edit) must import its own ``agents`` module, not this run's."""
     saved = list(sys.path)
+    loaded = set(sys.modules)
     cwd = os.getcwd()
     if cwd not in sys.path:
         sys.path.insert(0, cwd)
     try:
         yield
     finally:
+        _forget_project_modules(loaded, [cwd, *(p for p in sys.path if p and p not in saved)])
         sys.path[:] = saved
+
+
+def _forget_project_modules(loaded_before: set[str], roots: list[str]) -> None:
+    """Drop the modules first imported during the run from under ``roots``. Installed packages
+    and submodules of a package that was already imported are left alone."""
+    import importlib
+
+    def prefix(path: str) -> str:
+        return os.path.join(os.path.realpath(path), "")
+
+    project = tuple(prefix(r) for r in roots)
+    installed = tuple(prefix(p) for p in {sys.prefix, sys.base_prefix, sys.exec_prefix})
+    for name, module in list(sys.modules.items()):
+        if name in loaded_before or name.partition(".")[0] in loaded_before:
+            continue
+        try:
+            origin = getattr(module, "__file__", None) or next(iter(module.__path__), None)
+        except Exception:  # a lazy or broken module object: not ours to judge
+            continue
+        if not origin:
+            continue
+        path = os.path.realpath(str(origin))
+        if "site-packages" in path.split(os.sep) or path.startswith(installed):
+            continue
+        if path.startswith(project):
+            del sys.modules[name]
+    importlib.invalidate_caches()
 
 
 def _write_failed(path: str, exc: OSError) -> int:
@@ -177,7 +219,9 @@ def run_pytest_mode(ns: argparse.Namespace) -> int:
                     shutil.copyfile(out, dest)
                 except OSError as exc:
                     return _write_failed(str(ns.output), exc)
-        return exit_code_for(result, pytest_code=code, interrupted=probe.interrupted)
+        return exit_code_for(
+            result, pytest_code=code, interrupted=probe.interrupted, plain_failed=probe.plain_failed
+        )
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

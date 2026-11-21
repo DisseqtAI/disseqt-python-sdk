@@ -53,18 +53,31 @@ class JudgeLimiter:
             self._active += 1
             self.peak = max(self.peak, self._active)
 
+    def _give_back(self) -> None:
+        """The token wait was interrupted after the permit was taken: hand the permit back."""
+        if self._sem is not None:
+            self._sem.release()
+
     def acquire(self) -> None:
         if self._sem is not None:
             self._sem.acquire()
-        while (wait := self._take_token()) > 0:
-            time.sleep(wait)
+        try:
+            while (wait := self._take_token()) > 0:
+                time.sleep(wait)
+        except BaseException:
+            self._give_back()
+            raise
         self._entered()
 
     async def aacquire(self) -> None:
         while self._sem is not None and not self._sem.acquire(blocking=False):
             await asyncio.sleep(0.005)
-        while (wait := self._take_token()) > 0:
-            await asyncio.sleep(wait)
+        try:
+            while (wait := self._take_token()) > 0:
+                await asyncio.sleep(wait)
+        except BaseException:  # a cancellation lands here
+            self._give_back()
+            raise
         self._entered()
 
     def release(self) -> None:

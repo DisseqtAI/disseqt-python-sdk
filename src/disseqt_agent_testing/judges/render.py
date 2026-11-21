@@ -1,7 +1,8 @@
 """Deterministic rendering of judge inputs: redaction, truncation, tag escaping, size caps.
 
-Order of operations for every field: redact secrets, truncate, then escape ``</`` so recorded data
-can never close a tag the prompt relies on."""
+Order of operations for every field: redact secrets, truncate, then escape ``</`` and the opening
+form of the prompt's own block tags, so recorded data can never close or open a tag the prompt
+relies on."""
 
 import json
 import re
@@ -17,13 +18,23 @@ MAX_MESSAGES = 20
 MAX_CALLS = 40
 TOTAL_CAP = 32_000
 
+# A key/value secret in plain (``password: x``), JSON (``"api_key":"x"``), Python-repr
+# (``'token': 'x'``) or JSON-inside-a-JSON-string (``\"api_key\":\"x\"``) form. A quoted value
+# is taken whole, spaces included.
+_QUOTE = r"""(?:\\?["'])?"""
+_VALUE = r"""(?:\\"[^"\\]*\\"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\S+)"""
 DEFAULT_REDACT: tuple[str, ...] = (
     r"sk-[A-Za-z0-9_\-]{16,}",
     r"AKIA[0-9A-Z]{16}",
+    r"gh[pousr]_[A-Za-z0-9]{30,}",
+    r"github_pat_[A-Za-z0-9_]{22,}",
+    r"xox[abeoprs]-[A-Za-z0-9\-]{10,}",
+    r"eyJ[A-Za-z0-9_\-]{8,}\.eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]*",
     r"(?i)bearer\s+[A-Za-z0-9._\-]{16,}",
-    r"(?i)(?:api[_-]?key|authorization|secret|password|token)\s*[:=]\s*\S+",
+    rf"(?i){_QUOTE}(?:api[_-]?key|authorization|secret|password|token){_QUOTE}\s*[:=]\s*{_VALUE}",
 )
 REDACTED = "[REDACTED]"
+_TAG = re.compile(r"<([A-Za-z][A-Za-z0-9_]*)>")
 
 
 def redact(text: str, patterns: Sequence[str] = ()) -> str:
@@ -38,8 +49,14 @@ def truncate(text: str, cap: int) -> str:
     return f"{text[:cap]}...[truncated {len(text) - cap} chars]"
 
 
-def escape(text: str) -> str:
-    return text.replace("</", "<\\/")
+def escape(text: str, tags: Sequence[str] = ()) -> str:
+    """``</`` can never close a tag, and ``<NAME`` can never open one of the prompt's own blocks
+    (``tags``, matched without regard to case). Any other ``<`` is left as written."""
+    text = text.replace("</", "<\\/")
+    names = "|".join(re.escape(tag) for tag in tags if tag)
+    if not names:
+        return text
+    return re.sub(rf"<(?=(?:{names})(?![A-Za-z0-9_.:\-]))", r"<\\", text, flags=re.IGNORECASE)
 
 
 def as_text(value: Any) -> str:
@@ -113,8 +130,10 @@ def render_messages(
     """The system and user messages. The user message is at most ``total_cap`` characters."""
     cleaned = [(tag, truncate(redact(text, redact_patterns), TEXT_CAP * 2)) for tag, text in blocks]
 
+    tags = sorted({tag for tag, _ in blocks} | set(_TAG.findall(template.system)))
+
     def build(parts: list[tuple[str, str]]) -> str:
-        return "\n\n".join(f"<{tag}>\n{escape(text)}\n</{tag}>" for tag, text in parts)
+        return "\n\n".join(f"<{tag}>\n{escape(text, tags)}\n</{tag}>" for tag, text in parts)
 
     user = build(cleaned)
     while len(user) > total_cap:  # shrink the biggest block until it fits

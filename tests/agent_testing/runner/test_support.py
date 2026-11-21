@@ -133,6 +133,40 @@ def test_a_limiter_with_no_cap_and_no_rate_passes_straight_through() -> None:
     assert limiter.peak == 1
 
 
+def test_a_cancelled_async_acquire_gives_its_permit_back() -> None:
+    limiter = JudgeLimiter(max_concurrency=1, rps=0.5)
+
+    async def go() -> None:
+        await limiter.aacquire()  # takes the only token; the next one is 2 s away
+        limiter.release()
+        waiting = asyncio.ensure_future(limiter.aacquire())
+        await asyncio.sleep(0.05)
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+
+    asyncio.run(go())
+    assert limiter._sem is not None and limiter._sem.acquire(blocking=False)
+    limiter._sem.release()
+    assert limiter._active == 0
+
+
+def test_an_interrupted_sync_acquire_gives_its_permit_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    limiter = JudgeLimiter(max_concurrency=1, rps=0.5)
+    limiter.acquire()
+    limiter.release()
+
+    def interrupted(seconds: float) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("disseqt_agent_testing.runner.limiter.time.sleep", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        limiter.acquire()
+    assert limiter._sem is not None and limiter._sem.acquire(blocking=False)
+
+
 def test_the_limited_judge_forwards_the_eval_scope_when_the_judge_has_one() -> None:
     class Scoped(FakeJudge):
         entered = 0

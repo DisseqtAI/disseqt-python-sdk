@@ -1,7 +1,377 @@
 {
+  "$defs": {
+    "case": {
+      "properties": {
+        "case_digest": {
+          "type": "string"
+        },
+        "case_id": {
+          "type": "string"
+        },
+        "comparable": {
+          "type": "boolean"
+        },
+        "duration_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "error": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "extra": {
+          "type": "object"
+        },
+        "k": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "n_planned": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "reason_code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repeat_report": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "repeats": {
+          "items": {
+            "$ref": "#/$defs/repeat"
+          },
+          "type": "array"
+        },
+        "source": {
+          "properties": {
+            "index": {
+              "type": "integer"
+            },
+            "line": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "nodeid": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "status": {
+          "enum": [
+            "passed",
+            "failed",
+            "incomplete",
+            "skipped",
+            "error",
+            "xfailed"
+          ]
+        },
+        "stopped_early": {
+          "type": "boolean"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "threshold": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "case_id",
+        "status",
+        "source",
+        "tags",
+        "n_planned",
+        "k",
+        "threshold",
+        "repeats",
+        "case_digest"
+      ],
+      "type": "object"
+    },
+    "repeat": {
+      "properties": {
+        "decision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "duration_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "failure_codes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "index": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "judge_calls": {
+          "type": "integer"
+        },
+        "judge_cost_unknown": {
+          "type": "integer"
+        },
+        "judge_cost_usd": {
+          "type": "number"
+        },
+        "judge_error": {
+          "type": "boolean"
+        },
+        "judge_tokens": {
+          "type": "integer"
+        },
+        "not_run_reason": {
+          "enum": [
+            "early_stop",
+            "case_timeout",
+            "suite_timeout",
+            "fail_fast",
+            "cancelled",
+            "only_repeat",
+            null
+          ]
+        },
+        "report": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "run_status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "seed": {
+          "type": "integer"
+        },
+        "status": {
+          "enum": [
+            "passed",
+            "failed",
+            "incomplete",
+            "not_run"
+          ]
+        },
+        "trace_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "index",
+        "seed",
+        "status",
+        "failure_codes"
+      ],
+      "type": "object"
+    }
+  },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "SuiteResult",
-  "type": "object",
+  "properties": {
+    "aggregate": {
+      "properties": {
+        "consistently_failing": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "flaky_cases": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "mean_pass_at_1": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "mean_pass_hat_k": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "pass_hat_k_curve": {
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "cases": {
+      "items": {
+        "$ref": "#/$defs/case"
+      },
+      "type": "array"
+    },
+    "collection_errors": {
+      "items": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "config": {
+      "type": "object"
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "duration_ms": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "environment": {
+      "type": "object"
+    },
+    "exit_code": {
+      "type": "integer"
+    },
+    "extra": {
+      "type": "object"
+    },
+    "interrupted": {
+      "type": "boolean"
+    },
+    "judge_usage": {
+      "type": "object"
+    },
+    "run_label": {
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1"
+    },
+    "seed": {
+      "type": "integer"
+    },
+    "suite_digest": {
+      "type": "string"
+    },
+    "suite_id": {
+      "type": "string"
+    },
+    "totals": {
+      "properties": {
+        "cases": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "error": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "failed": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "incomplete": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "passed": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "repeats_not_run": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "repeats_run": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "skipped": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "xfailed": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cases",
+        "passed",
+        "failed",
+        "incomplete",
+        "skipped",
+        "error",
+        "repeats_run",
+        "repeats_not_run",
+        "xfailed"
+      ],
+      "type": "object"
+    }
+  },
   "required": [
     "schema_version",
     "suite_id",
@@ -18,370 +388,6 @@
     "interrupted",
     "exit_code"
   ],
-  "properties": {
-    "schema_version": {
-      "const": "1"
-    },
-    "suite_id": {
-      "type": "string"
-    },
-    "run_label": {
-      "type": "string"
-    },
-    "suite_digest": {
-      "type": "string"
-    },
-    "created_at": {
-      "type": "string"
-    },
-    "duration_ms": {
-      "type": [
-        "number",
-        "null"
-      ]
-    },
-    "seed": {
-      "type": "integer"
-    },
-    "config": {
-      "type": "object"
-    },
-    "environment": {
-      "type": "object"
-    },
-    "cases": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/case"
-      }
-    },
-    "totals": {
-      "type": "object",
-      "required": [
-        "cases",
-        "passed",
-        "failed",
-        "incomplete",
-        "skipped",
-        "error",
-        "repeats_run",
-        "repeats_not_run"
-      ],
-      "properties": {
-        "cases": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "passed": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "failed": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "incomplete": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "skipped": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "error": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "repeats_run": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "repeats_not_run": {
-          "type": "integer",
-          "minimum": 0
-        }
-      }
-    },
-    "aggregate": {
-      "type": "object",
-      "properties": {
-        "mean_pass_at_1": {
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "mean_pass_hat_k": {
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "flaky_cases": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "consistently_failing": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "pass_hat_k_curve": {
-          "type": "array"
-        }
-      }
-    },
-    "judge_usage": {
-      "type": "object"
-    },
-    "collection_errors": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": [
-          "message"
-        ],
-        "properties": {
-          "path": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "line": {
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "code": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          }
-        }
-      }
-    },
-    "interrupted": {
-      "type": "boolean"
-    },
-    "exit_code": {
-      "type": "integer"
-    },
-    "extra": {
-      "type": "object"
-    }
-  },
-  "$defs": {
-    "case": {
-      "type": "object",
-      "required": [
-        "case_id",
-        "status",
-        "source",
-        "tags",
-        "n_planned",
-        "k",
-        "threshold",
-        "repeats",
-        "case_digest"
-      ],
-      "properties": {
-        "case_id": {
-          "type": "string"
-        },
-        "status": {
-          "enum": [
-            "passed",
-            "failed",
-            "incomplete",
-            "skipped",
-            "error"
-          ]
-        },
-        "source": {
-          "type": "object",
-          "properties": {
-            "path": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "line": {
-              "type": [
-                "integer",
-                "null"
-              ]
-            },
-            "index": {
-              "type": "integer"
-            },
-            "nodeid": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          }
-        },
-        "tags": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "reason_code": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "reason": {
-          "type": "string"
-        },
-        "error": {
-          "type": [
-            "object",
-            "null"
-          ]
-        },
-        "n_planned": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "k": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "threshold": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1
-        },
-        "repeat_report": {
-          "type": [
-            "object",
-            "null"
-          ]
-        },
-        "repeats": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/repeat"
-          }
-        },
-        "stopped_early": {
-          "type": "boolean"
-        },
-        "comparable": {
-          "type": "boolean"
-        },
-        "case_digest": {
-          "type": "string"
-        },
-        "duration_ms": {
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "extra": {
-          "type": "object"
-        }
-      }
-    },
-    "repeat": {
-      "type": "object",
-      "required": [
-        "index",
-        "seed",
-        "status",
-        "failure_codes"
-      ],
-      "properties": {
-        "index": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "seed": {
-          "type": "integer"
-        },
-        "status": {
-          "enum": [
-            "passed",
-            "failed",
-            "incomplete",
-            "not_run"
-          ]
-        },
-        "not_run_reason": {
-          "enum": [
-            "early_stop",
-            "case_timeout",
-            "suite_timeout",
-            "fail_fast",
-            "cancelled",
-            "only_repeat",
-            null
-          ]
-        },
-        "run_status": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "decision": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "failure_codes": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "trace_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "duration_ms": {
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "judge_calls": {
-          "type": "integer"
-        },
-        "judge_tokens": {
-          "type": "integer"
-        },
-        "judge_cost_usd": {
-          "type": "number"
-        },
-        "judge_cost_unknown": {
-          "type": "integer"
-        },
-        "judge_error": {
-          "type": "boolean"
-        },
-        "report": {
-          "type": [
-            "object",
-            "null"
-          ]
-        }
-      }
-    }
-  }
+  "title": "SuiteResult",
+  "type": "object"
 }

@@ -2,6 +2,7 @@
 
 import asyncio
 import dataclasses
+import threading
 from typing import Any
 
 import pytest
@@ -13,7 +14,14 @@ from disseqt_agent_testing.harness import (
     ScriptExhaustedError,
     build_test_orchestrator,
 )
-from disseqt_agent_testing.models import Message, MsgToolCall, Usage, from_dict, to_dict
+from disseqt_agent_testing.models import (
+    Message,
+    MsgToolCall,
+    StepEvent,
+    Usage,
+    from_dict,
+    to_dict,
+)
 from tests.agent_testing._support.refund_agent import FAKES, make_llm_refund_agent, refund_script
 
 
@@ -186,3 +194,31 @@ def test_the_script_is_a_frozen_value() -> None:
     assert from_dict(Message, to_dict(llm.script[0].message)) == llm.script[0].message
     with pytest.raises(dataclasses.FrozenInstanceError):
         llm.name = "x"  # type: ignore[misc]
+
+
+def test_a_model_step_gets_the_reply_of_its_own_position_when_threads_interleave() -> None:
+    first_started, second_done = threading.Event(), threading.Event()
+
+    def hold_the_first_call(event: StepEvent) -> None:
+        if event.phase == "start" and event.seq == 1:
+            first_started.set()
+            second_done.wait(0.2)
+
+    def factory(llm: Any) -> Any:
+        def late_call() -> None:
+            first_started.wait(5)
+            llm.complete(["b"])
+            second_done.set()
+
+        def agent(text: str) -> None:
+            other = threading.Thread(target=late_call)
+            other.start()
+            llm.complete(["a"])
+            other.join()
+
+        return agent
+
+    orch = build_test_orchestrator(factory, llm=FakeLLM(script=("first", "second")))
+    orch.add_listener(hold_the_first_call)
+    r = orch.run("go")
+    assert [(s.seq, s.result["content"]) for s in r.run.steps] == [(1, "first"), (2, "second")]

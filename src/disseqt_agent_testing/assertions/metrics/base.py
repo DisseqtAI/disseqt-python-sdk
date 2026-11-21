@@ -282,3 +282,21 @@ class BaseMetric:
 
     def error(self, ctx: EvalContext, code: str, reason: str = "", **fields: Any) -> MetricResult:
         return self.make(ctx, status="error", reason_code=code, reason=reason, **fields)
+
+    def undecided(
+        self, ctx: EvalContext, cls: "Classification", **fields: Any
+    ) -> MetricResult | None:
+        """The error/skipped result for a turn whose decision judge failed or was unsure, else
+        ``None``. ``cls.label`` is then only the low-confidence heuristic guess, so no check may
+        pass or fail on it."""
+        if cls.judge_status == "judge_failed":
+            return self.error(ctx, "judge_failed", "the judge failed", **fields)
+        if cls.judge_status == "judge_unsure":
+            return self.skip(ctx, "judge_unsure", "the judge was unsure", **fields)
+        return None
+
+    def failure_within(self, result: MetricResult, sub_scores: frozenset[str]) -> bool:
+        """Whether every cause of this failed ``result`` is measured by one of ``sub_scores``.
+        A ``min_scores`` threshold on a sub-score replaces the pass bar for that sub-score only,
+        so it clears a failure only when this is true. The default is that it never does."""
+        return False

@@ -48,7 +48,7 @@ REFUND = Expect(
     ),
     order="partial",
     forbidden=(ForbiddenCall("delete_*"),),
-    max_steps=6,
+    max_tool_calls=6,
 )
 
 

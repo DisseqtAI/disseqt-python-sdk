@@ -68,37 +68,79 @@ def _type_is(m: TypeIs, actual: Any, path: Segments, ctx: MatchContext) -> list[
     return [failed(path, shown, actual, f"type_error:{'|'.join(m.types)}->{json_type(actual)}")]
 
 
-def _element_ok(matcher: Any, element: Any, ctx: MatchContext, path: Segments) -> bool:
-    return all(r.status == "ok" and r.ok for r in match_value(matcher, element, ctx, path))
+def _element(
+    matcher: Any, element: Any, ctx: MatchContext, path: Segments
+) -> tuple[bool | None, list[MatchResult]]:
+    """``True`` / ``False`` when the element was decided, else ``None`` with the skipped or error
+    leaves that kept it from being decided. A real mismatch outweighs an undecided leaf."""
+    results = match_value(matcher, element, ctx, path)
+    if any(r.status == "ok" and r.ok is False for r in results):
+        return False, []
+    undecided = [r for r in results if r.status != "ok"]
+    return (None, undecided) if undecided else (True, [])
 
 
-def _multiset(items: tuple[Any, ...], elements: list[Any], ctx: MatchContext, path: Segments):  # type: ignore[no-untyped-def]
-    """Match items to distinct elements by maximum bipartite matching (never ``sorted()``)."""
+def _unmeasured(
+    undecided: list[MatchResult], path: Segments, shown: str, actual: Any
+) -> list[MatchResult]:
+    """One leaf for a container whose outcome hangs on leaves that could not be measured: an
+    error if any of them errored, otherwise skipped, with the first such leaf's code."""
+    errors = [r for r in undecided if r.status == "error"]
+    first = (errors or undecided)[0]
+    return [
+        MatchResult(
+            first.status, None, first.score, first.code, path, shown, actual, first.reason,
+            any(r.judged for r in undecided), first.details,
+        )
+    ]  # fmt: skip
+
+
+def _matching(
+    weights: list[list[float]], n_elements: int
+) -> tuple[list[tuple[int, int]], list[int], list[int]]:
     from ..assignment.hungarian import assign_max
 
-    weights = [
-        [1.0 if _element_ok(item, el, ctx, (*path, j)) else 0.0 for j, el in enumerate(elements)]
-        for item in items
-    ]
     pairs = (
         [(i, j) for i, j in assign_max(weights) if weights[i][j] > 0]
-        if weights and elements
+        if weights and n_elements
         else []
     )
     used_items = {i for i, _ in pairs}
     used_elems = {j for _, j in pairs}
-    missing = [i for i in range(len(items)) if i not in used_items]
-    extra = [j for j in range(len(elements)) if j not in used_elems]
+    missing = [i for i in range(len(weights)) if i not in used_items]
+    extra = [j for j in range(n_elements) if j not in used_elems]
     return pairs, missing, extra
+
+
+def _multiset(
+    items: tuple[Any, ...], elements: list[Any], ctx: MatchContext, path: Segments
+) -> tuple[list[int], list[int], list[int], list[int], list[MatchResult]]:
+    """Match items to distinct elements by maximum bipartite matching (never ``sorted()``).
+    Returns the missing items and extra elements counting decided matches only, the same two
+    lists when every undecided cell is given the benefit of the doubt, and the undecided leaves.
+    """
+    cells = [
+        [_element(item, el, ctx, (*path, j)) for j, el in enumerate(elements)] for item in items
+    ]
+    sure = [[1.0 if ok is True else 0.0 for ok, _ in row] for row in cells]
+    maybe = [[0.0 if ok is False else 1.0 for ok, _ in row] for row in cells]
+    undecided = [leaf for row in cells for _, leaves in row for leaf in leaves]
+    _, missing, extra = _matching(sure, len(elements))
+    if not undecided:
+        return missing, extra, missing, extra, []
+    _, could_miss, could_extra = _matching(maybe, len(elements))
+    return missing, extra, could_miss, could_extra, undecided
 
 
 def _unordered(m: Unordered, actual: Any, path: Segments, ctx: MatchContext) -> list[MatchResult]:
     shown = describe(m)
     if not isinstance(actual, (list, tuple)):
         return [failed(path, shown, actual, f"type_error:array->{json_type(actual)}")]
-    _, missing, extra = _multiset(m.items, list(actual), ctx, path)
-    if not missing and not extra and len(m.items) == len(actual):
+    missing, extra, could_miss, could_extra, undecided = _multiset(m.items, list(actual), ctx, path)
+    if not missing and not extra:
         return [passed(path, shown, actual)]
+    if undecided and not could_miss and not could_extra:
+        return _unmeasured(undecided, path, shown, actual)
     return [
         failed(
             path, shown, actual, "value_error:unordered",
@@ -113,12 +155,18 @@ def _contains(m: Contains, actual: Any, path: Segments, ctx: MatchContext) -> li
     if isinstance(actual, str):
         folded = actual.casefold()
         missing = []
+        unsure: list[MatchResult] = []
         for item in m.items:
             if isinstance(item, Eq) and isinstance(item.value, str):
                 if item.value.casefold() not in folded:
                     missing.append(item.value)
-            elif not _element_ok(item, actual, ctx, path):
+                continue
+            ok, leaves = _element(item, actual, ctx, path)
+            unsure.extend(leaves)
+            if ok is False:
                 missing.append(describe(item))
+        if unsure and not missing:
+            return _unmeasured(unsure, path, shown, actual)
         if not missing:
             return [passed(path, shown, actual)]
         return [
@@ -133,9 +181,11 @@ def _contains(m: Contains, actual: Any, path: Segments, ctx: MatchContext) -> li
         ]
     if not isinstance(actual, (list, tuple)):
         return [failed(path, shown, actual, f"type_error:array->{json_type(actual)}")]
-    _, missing_i, _ = _multiset(m.items, list(actual), ctx, path)
+    missing_i, _, could_miss, _, undecided = _multiset(m.items, list(actual), ctx, path)
     if not missing_i:
         return [passed(path, shown, actual)]
+    if undecided and not could_miss:
+        return _unmeasured(undecided, path, shown, actual)
     names = [describe(m.items[i]) for i in missing_i]
     return [
         failed(path, shown, actual, "value_error:contains", f"missing {names}", {"missing": names})
@@ -147,15 +197,15 @@ def _dict_match(m: DictMatch, actual: Any, path: Segments, ctx: MatchContext) ->
     if not isinstance(actual, dict):
         return [failed(path, shown, actual, f"type_error:object->{json_type(actual)}")]
     body = {k: v for k, v in actual.items() if not any(fnmatchcase(k, g) for g in m.ignore)}
+    undecided: list[MatchResult] = []
     for key, matcher in m.defaults.items():
-        if (
-            key in body
-            and key not in m.fields
-            and _element_ok(matcher, body[key], ctx, (*path, key))
-        ):
-            del body[key]
+        if key in body and key not in m.fields:
+            ok, leaves = _element(matcher, body[key], ctx, (*path, key))
+            if ok is not False:  # at its default, or not measurable: never an unexpected key
+                undecided.extend(leaves)
+                del body[key]
     spec = {k: v for k, v in m.fields.items() if not any(fnmatchcase(k, g) for g in m.ignore)}
-    return match_dict(spec, body, ctx, path, exact=m.mode == "exact")
+    return [*match_dict(spec, body, ctx, path, exact=m.mode == "exact"), *undecided]
 
 
 def _zone(name: str | None) -> tzinfo:

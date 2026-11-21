@@ -3,18 +3,36 @@ match ``route_patterns``). Targets are compared after normalization, so ``"Billi
 ``transfer_to_billing_agent`` name the same destination."""
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 
 from ..models import AgentRun, Step
 from .config import EvalConfig
 
-_NON_ALNUM = re.compile(r"[^a-z0-9]+")
+_SEPARATORS = re.compile(r"_+")
+
+
+def _is_name_char(ch: str) -> bool:
+    # letters, digits and the combining marks that belong to them, in any script
+    return unicodedata.category(ch)[0] in "LMN"
 
 
 def norm_target(name: str) -> str:
-    text = _NON_ALNUM.sub("_", name.casefold()).strip("_")
+    """NFKC + casefold, with every run of other characters as one ``_``. A name with no letter
+    or digit at all keeps its own (folded) text, so two different names never share a target."""
+    folded = unicodedata.normalize("NFKC", name).casefold()
+    text = _SEPARATORS.sub("_", "".join(ch if _is_name_char(ch) else "_" for ch in folded))
+    text = text.strip("_")
+    if not text:
+        return folded.strip()
     return text[: -len("_agent")] if text.endswith("_agent") and len(text) > 6 else text
+
+
+def same_target(a: str, b: str) -> bool:
+    """Two normalised targets name one destination. An empty target names nothing, so it never
+    equals another, not even another empty one."""
+    return bool(a) and a == b
 
 
 @dataclass(slots=True, frozen=True)

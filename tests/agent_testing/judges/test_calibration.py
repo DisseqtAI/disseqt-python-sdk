@@ -234,7 +234,7 @@ def test_a_report_written_by_calibration_unlocks_the_engine_gate(tmp_path: Path)
 def test_root_cause_never_gates_even_with_perfect_agreement() -> None:
     items = [GoldenItem(f"r{n}", "root_cause",
                         {"failed_checks": ["x"], "conversation": [{"role": "user", "turn": 0, "text": "hi"}]},
-                        "wrong_args") for n in range(200)]  # fmt: skip
+                        "wrong_args", source="human") for n in range(200)]  # fmt: skip
     model = FakeJudgeModel(lambda req: {"reasoning": "r", "label": "wrong_args"})
     eng = make_judge(model, require_calibration="off", kinds={"root_cause": KindConfig(samples=1)},
                      backoff_base_s=0.0, cache_mode="off")  # fmt: skip
@@ -283,7 +283,7 @@ def test_cli_cache_commands(tmp_path: Path, capsys: pytest.CaptureFixture[str]) 
     from disseqt_agent_testing.judges import JsonDirStore
 
     store = JsonDirStore(tmp_path / "c")
-    store.put("fake", "m", "k" * 8, {"response": {"text": "x"}})
+    store.put("fake", "m", "0f" * 32, {"key": "0f" * 32, "response": {"text": "x"}})
     assert judges_cli(["cache", "stats", "--dir", str(tmp_path / "c")]) == 0
     assert "1 entries" in capsys.readouterr().out
     assert judges_cli(["cache", "verify", "--dir", str(tmp_path / "c")]) == 0
@@ -371,3 +371,117 @@ def test_cli_calibrate_writes_a_report_and_exits_1_when_it_cannot_gate(
                            "--model", "clifake:m-1"]) == 3  # fmt: skip
     finally:
         unregister_provider("clifake")
+
+
+def test_macro_f1_counts_a_class_the_judge_never_gets_right() -> None:
+    pairs = [("a", "a")] * 10 + [("b", "b")] * 10 + [("c", "a")] * 10 + [("a", "c")]
+    s = multiclass_stats(pairs)
+    per = s["per_class"]
+    assert per["c"]["precision"] == 0.0 and per["c"]["recall"] == 0.0 and per["c"]["f1"] == 0.0
+    assert s["macro_f1"] == pytest.approx((per["a"]["f1"] + per["b"]["f1"] + 0.0) / 3)
+    assert s["macro_f1"] < 0.8  # below the multiclass gate floor
+    perfect = multiclass_stats([("a", "a")] * 3 + [("b", "b")] * 3)
+    assert perfect["macro_f1"] == 1.0
+
+
+def test_a_golden_item_without_a_source_is_a_draft_and_never_gates(tmp_path: Path) -> None:
+    path = tmp_path / "g.jsonl"
+    rows = []
+    for i in golden_set():
+        row = i.to_dict()
+        del row["source"]
+        rows.append(json.dumps(row))
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    items = load_golden(path)
+    assert {i.source for i in items} == {"draft"}
+    assert GoldenItem("x", KIND, items[0].inputs, "pass").source == "draft"
+    r = calibrate_kind(engine_for(fake()), KIND, items)
+    assert not r.gating_allowed and r.counts["human_test"] == {}
+    human = calibrate_kind(engine_for(fake()), KIND, golden_set())
+    assert human.gating_allowed  # explicitly human-labelled sets still gate
+
+
+def _lookup(tmp_path: Path, *reports: dict[str, Any] | str | None) -> Any:
+    from disseqt_agent_testing.judges import JudgeConfig
+    from disseqt_agent_testing.judges.calibration import lookup_calibration
+    from disseqt_agent_testing.judges.kinds import get_kind
+
+    dirs = []
+    for n, report in enumerate(reports):
+        root = tmp_path / f"cal{n}"
+        dirs.append(str(root))
+        if report is None:
+            continue
+        target = root / KIND / "idhash.json"
+        target.parent.mkdir(parents=True)
+        target.write_text(report if isinstance(report, str) else json.dumps(report))
+    spec = get_kind(KIND)
+    assert spec is not None
+    return lookup_calibration(spec, "idhash", JudgeConfig(calibration_dirs=tuple(dirs)))
+
+
+def _report(**changes: Any) -> dict[str, Any]:
+    base = {"kind": KIND, "identity_hash": "idhash", "gating_allowed": True, "failures": []}
+    return {**base, **changes}
+
+
+def test_the_first_calibration_report_found_decides(tmp_path: Path) -> None:
+    ok = _lookup(tmp_path / "a", None, _report(), _report(gating_allowed=False))
+    assert (ok.gating, ok.status, ok.source) == ("gate", "calibrated", "project")
+    failing = _lookup(tmp_path / "b", _report(gating_allowed=False), _report())
+    assert (failing.gating, failing.status) == ("advisory", "failing")
+    unreadable = _lookup(tmp_path / "c", "not json", _report())
+    assert (unreadable.gating, unreadable.status) == ("advisory", "failing")
+    assert _lookup(tmp_path / "d", None, None).status == "none"
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"kind": "decision"},
+        {"identity_hash": "another"},
+        {"failures": ["kappa 0.1 is below 0.6"]},
+        {"failures": None},
+        {"gating_allowed": "true"},
+    ],
+)
+def test_a_report_must_match_its_kind_and_identity_and_list_no_failures(
+    tmp_path: Path, changes: dict[str, Any]
+) -> None:
+    status = _lookup(tmp_path, _report(**changes))
+    assert (status.gating, status.status) == ("advisory", "failing")
+    for missing in ("kind", "identity_hash", "failures"):
+        report = _report()
+        del report[missing]
+        assert _lookup(tmp_path / missing, report).gating == "advisory"
+
+
+def test_cache_prune_and_verify_leave_files_the_store_did_not_write(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import os
+
+    from disseqt_agent_testing.judges import JsonDirStore
+
+    key = "ab" + "c" * 62
+    store = JsonDirStore(tmp_path)
+    store.put("fake", "m", key, {"key": key, "response": {"text": "x"}})
+    strangers = [
+        tmp_path / "package.json",
+        tmp_path / "web" / "tsconfig.json",
+        tmp_path / "fake__m" / "ab" / "notes.json",
+        tmp_path / "a" / "ab" / f"{key}.json",
+        tmp_path / "fake__m" / "zz" / f"{key}.json",
+    ]
+    for stranger in strangers:
+        stranger.parent.mkdir(parents=True, exist_ok=True)
+        stranger.write_text('{"name": "mine"}')
+    entry = store.path_for("fake", "m", key)
+    for path in (*strangers, entry):
+        os.utime(path, (0, 0))
+    assert store.list() == [entry]
+    assert judges_cli(["cache", "verify", "--dir", str(tmp_path)]) == 0
+    assert judges_cli(["cache", "prune", "--dir", str(tmp_path), "--older-than-days", "1"]) == 0
+    out = capsys.readouterr().out
+    assert "1 entries pruned" in out and "package.json" not in out
+    assert not entry.exists() and all(s.exists() for s in strangers)

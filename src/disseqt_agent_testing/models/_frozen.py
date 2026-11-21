@@ -179,8 +179,9 @@ def capture_json(value: object) -> "tuple[JSONValue, bool]":
     """Leniently turn any Python value into frozen JSON. Returns ``(value, lossy)``.
 
     JSON-able parts are kept exactly. Anything else becomes ``repr`` (truncated to 2,000
-    characters); NaN and infinities become the strings ``"NaN"`` / ``"Infinity"``; non-string dict
-    keys are stringified; structures deeper than 20 levels (including cycles) are cut. Whenever
+    characters); NaN and infinities become the strings ``"NaN"`` / ``"Infinity"``; integers over
+    the size limit of ``freeze_json`` become ``"<int with N bits>"``; non-string dict keys are
+    stringified; structures deeper than 20 levels (including cycles) are cut. Whenever
     something is changed, ``lossy`` is ``True``. This function never raises.
     """
     lossy = False
@@ -193,8 +194,14 @@ def capture_json(value: object) -> "tuple[JSONValue, bool]":
         if isinstance(item, str) and has_surrogate(item):
             lossy = True  # keep recording safe: replace what cannot be written as UTF-8
             return item.encode("utf-8", "replace").decode("utf-8")
-        if item is None or isinstance(item, (bool, str, int)):
+        if item is None or isinstance(item, (bool, str)):
             return item
+        if isinstance(item, int):
+            bits = abs(item).bit_length()
+            if bits <= MAX_INT_BITS:
+                return item
+            lossy = True  # freeze_json refuses it, so the step could not be built
+            return f"<int with {bits} bits>"
         if isinstance(item, float):
             if math.isfinite(item):
                 return item

@@ -270,7 +270,7 @@
     {
       "name": "budgets",
       "version": "1",
-      "params_hash": "12315e700291d272",
+      "params_hash": "c19faa0ced09d960",
       "scope": "run",
       "turn": null,
       "status": "ok",
@@ -285,9 +285,9 @@
       "details": {},
       "components": [
         {
-          "name": "budgets.max_steps",
+          "name": "budgets.max_tool_calls",
           "version": "1",
-          "params_hash": "12315e700291d272",
+          "params_hash": "c19faa0ced09d960",
           "scope": "run",
           "turn": null,
           "status": "ok",

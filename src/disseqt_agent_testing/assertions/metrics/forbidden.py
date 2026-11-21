@@ -4,6 +4,7 @@ from fnmatch import fnmatchcase
 from typing import Any
 
 from ...models import Expect, ForbiddenCall, Step
+from ..assignment import expect_id, name_ok, pair_eval
 from ..config import EvalConfig
 from ..matching import MatchContext, describe, match_dict
 from .base import BaseMetric, EvalContext, MetricResult
@@ -37,16 +38,36 @@ class ForbiddenCalls(BaseMetric):
     def _exempt(self, ctx: EvalContext, fc: ForbiddenCall, hit: Step) -> bool:
         """Exempt only by an earlier prerequisite that succeeded (``error is None``) and did not
         run concurrently with the hit (same non-None ``parallel_group``). ``unless_after`` is a
-        ``ToolExpect.id`` (the model validates this), so there is no name-glob form."""
+        ``ToolExpect.id`` (the model validates this), so there is no name-glob form. The
+        prerequisite is any call that fully satisfies that expectation, not only the one the
+        assignment bound to it: with a repeated prerequisite the assignment may bind a later
+        call."""
         if fc.unless_after is None:
             return False
-        earlier = ctx.assignment().bound(fc.unless_after)
-        return any(
-            s.seq < hit.seq
+        bound = ctx.assignment().bound(fc.unless_after)
+        candidates = [
+            s
+            for s in ctx.calls()
+            if s.seq < hit.seq
             and s.error is None
             and not (s.parallel_group is not None and s.parallel_group == hit.parallel_group)
-            for s in earlier
+        ]
+        if any(s in bound for s in candidates):
+            return True
+        prerequisite = next(
+            (te for i, te in enumerate(ctx.expect.tools) if expect_id(te, i) == fc.unless_after),
+            None,
         )
+        if prerequisite is None:
+            return False
+        mctx = MatchContext(run=ctx.run, use_judge=False, predicates=ctx.config.predicates)
+        for s in candidates:
+            if not name_ok(prerequisite, s):
+                continue
+            ev = pair_eval(prerequisite, s, mctx, ctx.config.min_pair_score)
+            if not (ev.failed_leaves or ev.incomplete or ev.errored):
+                return True
+        return False
 
     def evaluate(self, ctx: EvalContext) -> MetricResult:
         mctx = MatchContext(run=ctx.run, use_judge=False, predicates=ctx.config.predicates)

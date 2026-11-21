@@ -24,6 +24,7 @@ _FENCE = re.compile(r"```.*?```", re.S)
 _INLINE = re.compile(r"`[^`\n]*`")
 _URL = re.compile(r"https?://\S+")
 _QUOTED = re.compile(r"^\s*>.*$", re.M)
+_SPOKEN = re.compile(r'"[^"\n]*"|“[^”\n]*”|«[^»\n]*»')
 _SENTENCE = re.compile(r"[^.!?。！？؟\n]*[.!?。！？؟]+|[^.!?。！？؟\n]+")
 _APOSTROPHES = str.maketrans({"’": "'", "‘": "'", "ʼ": "'", "´": "'"})
 SUBSTANTIVE_WORDS = 40
@@ -77,9 +78,31 @@ def _is_handoff(step: Step, cfg: EvalConfig) -> bool:
     return any(fnmatchcase(step.name, p) for p in cfg.route_patterns)
 
 
+def _inability(text: str, pack: LexiconPack, prefixes: tuple[str, ...]) -> str | None:
+    """An inability phrase anywhere in ``text``: an always-refusal phrase, a modal followed by an
+    action verb, or a refusal pattern."""
+    for phrase in prefixes:
+        if re.search(rf"(?<!\w){re.escape(phrase)}", text):
+            return phrase
+    for modal in pack.modal_prefixes:
+        for found in re.finditer(rf"(?<!\w){re.escape(modal)}\s+([\w'-]+)", text):
+            if found.group(1) in pack.action_verbs:
+                return modal
+    for pattern in pack.refusal_patterns:
+        match = re.search(pattern, text)
+        if match:
+            return match.group()
+    return None
+
+
 def is_refusal(text: str, pack: LexiconPack, cfg: EvalConfig, raw: str | None = None) -> str | None:
     """Return the matched phrase or ``None``. Only the opening (two sentences / 200 chars) counts;
-    an apology followed by a lot of substantive text, or by code, is not a refusal."""
+    an apology followed by a lot of substantive text, or by code, is not a refusal. An apology
+    alone is not one either: an inability phrase has to follow it. Words the agent only quotes
+    (``the page says "I can't help with that"``) are not its own."""
+    unquoted = _SPOKEN.sub(" ", text)
+    if unquoted.strip():
+        text = unquoted
     head_sents = sentences(text)[:2]
     head = " ".join(head_sents)[:200].lower()
     lowered = text.lower()
@@ -87,11 +110,17 @@ def is_refusal(text: str, pack: LexiconPack, cfg: EvalConfig, raw: str | None = 
     excluded = tuple(p.lower() for p in cfg.lexicons.refusal_exclude)
     if any(p in lowered for p in excluded):
         return None
+    always = (*pack.refusal_prefixes, *extra)
     hit: str | None = None
-    for prefix in (*pack.refusal_prefixes, *extra):
+    for prefix in always:
         if head.startswith(prefix):
             hit = prefix
             break
+    if hit is None:
+        for prefix in pack.apology_prefixes:
+            if head.startswith(prefix):
+                hit = _inability(head[len(prefix) :], pack, always)
+                break
     if hit is None:
         for prefix in pack.modal_prefixes:
             if head.startswith(prefix):

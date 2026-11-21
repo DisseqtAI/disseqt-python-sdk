@@ -42,11 +42,14 @@ from .models import (
     Totals,
     case_digest,
     compute_exit_code,
+    cut_off_reason,
+    not_run_reason_of,
     suite_digest_of,
 )
 from .seeds import _CURRENT_REPEAT, RepeatContext, derive_seed
 from .stats import decide, pass_hat_k
 from .summarize import failure_codes_of, summarize_repeats
+from .xfail import settle_xfail
 
 GRACE_S = 2.0
 EventCallback = Callable[[Any], None]
@@ -111,9 +114,14 @@ class SuiteState:
             self.cancelled = True
 
     def warn(self, text: str) -> None:
+        """Never raises: with warnings turned into errors (``-W error``) the text goes to stderr,
+        so a warning cannot abort the run or escape the event path."""
         with self.lock:
             self.warnings.append(text)
-        warnings.warn(text, DisseqtWarning, stacklevel=3)
+        try:
+            warnings.warn(text, DisseqtWarning, stacklevel=3)
+        except Exception:
+            print(f"DisseqtWarning: {text}", file=sys.stderr)
 
     def emit(self, event: Any) -> None:
         """Serialized; a callback that raises is disabled (DSQ-W08), never fatal."""
@@ -319,9 +327,11 @@ def prepare(
                 spec, info, "missing_dependency", format_code("DSQ-S05", module=module, id=cid)
             )
     if suite.past_deadline():
-        return _skipped(
-            spec, info, "suite_timeout", format_code("DSQ-S02", s=config.suite_timeout_s, id=cid)
-        )
+        return CaseResult(
+            cid, "incomplete", source=spec.source, tags=spec.case.tags, reason_code="suite_timeout",
+            reason=format_code("DSQ-S02", s=config.suite_timeout_s, id=cid),
+            n_planned=n, k=k, threshold=t, case_digest=case_digest(spec, n, k, t), comparable=False,
+        )  # fmt: skip
     if config.only_repeat is not None and not 0 <= config.only_repeat < n:
         raise SuiteConfigError(format_code("DSQ-U02", i=config.only_repeat, id=cid, n=n))
     needs_judge = bool(spec.case.use_judge)
@@ -449,7 +459,7 @@ def finalize(plan: Plan, suite: SuiteState) -> CaseResult:
                 reason=f.message, error=f.error, n_planned=n, k=k, threshold=t, case_digest=digest,
             )  # fmt: skip
         elif not ran:
-            reason = next((o.not_run_reason for o in outs if o.not_run_reason), "cancelled")
+            reason = not_run_reason_of(o.not_run_reason for o in outs) or "cancelled"
             text = {
                 "suite_timeout": format_code(
                     "DSQ-S02", s=suite.config.suite_timeout_s, id=spec.case.id
@@ -502,7 +512,7 @@ def finalize(plan: Plan, suite: SuiteState) -> CaseResult:
                         n=n,
                     )
             elif status == "incomplete":
-                code = "undecided"
+                code = cut_off_reason(o.not_run_reason for o in outs) or "undecided"
                 reason = format_code(
                     "DSQ-I01",
                     id=spec.case.id,
@@ -522,9 +532,9 @@ def finalize(plan: Plan, suite: SuiteState) -> CaseResult:
                 comparable=not stopped and all(o.status != "not_run" for o in outs), case_digest=digest,
                 duration_ms=duration,
             )  # fmt: skip
-            plan.result = result
+            plan.result = result = settle_xfail(result, spec.run.xfail)
             return result
-        plan.result = result
+        plan.result = result = settle_xfail(result, spec.run.xfail)
         return result
 
 
@@ -552,6 +562,7 @@ def build_result(
         cases=len(cases), passed=sum(c.status == "passed" for c in cases), failed=sum(c.status == "failed" for c in cases),
         incomplete=sum(c.status == "incomplete" for c in cases), skipped=sum(c.status == "skipped" for c in cases),
         error=sum(c.status == "error" for c in cases),
+        xfailed=sum(c.status == "xfailed" for c in cases),
         repeats_run=sum(1 for c in cases for r in c.repeats if r.status != "not_run"),
         repeats_not_run=sum(1 for c in cases for r in c.repeats if r.status == "not_run"),
     )  # fmt: skip
@@ -613,7 +624,10 @@ def to_specs(
     cases: Any, filter: Any = None
 ) -> tuple[list[CaseSpec], tuple[CollectionErrorRecord, ...]]:
     if isinstance(cases, LoadedSuite):
-        return list(cases.cases), cases.errors
+        specs = list(cases.cases)
+        if filter is not None and filter.active:
+            specs = [s for s in specs if filter.matches(s.case.id, s.case.tags)]
+        return specs, cases.errors
     if isinstance(cases, CaseSpec):
         cases = [cases]
     loaded = load_cases(cases, filter=filter)
@@ -636,6 +650,7 @@ def run_suite(
     cases: Any, *, agent_factory: Callable[..., Any] | None = None, config: SuiteConfig = SuiteConfig(),
     judge: Judge | None = None, limiter: Limiter | None = None, filter: Any = None,
     on_event: EventCallback | None = None, orchestrator: Orchestrator | None = None,
+    suite_deadline: float | None = None,
 ) -> SuiteResult:  # fmt: skip
     """Run every case's repeats and return a deterministic ``SuiteResult``.
 
@@ -646,6 +661,8 @@ def run_suite(
     specs, errors = to_specs(cases, filter)
     t0 = time.monotonic()
     suite = SuiteState(config, on_event)
+    if suite_deadline is not None:
+        suite.deadline = suite_deadline
     wrapped = make_judge(judge, config, limiter)
     results: list[CaseResult] = []
     plans: list[Plan] = []
@@ -734,7 +751,8 @@ def _enforce_case_deadlines(
     results: list[CaseResult],
 ) -> None:
     """A case past its deadline stops starting units; units still running get ``GRACE_S`` to
-    return before they are abandoned (recorded ``not_run/case_timeout``)."""
+    return before they are abandoned (recorded ``not_run/case_timeout``). The futures of an
+    abandoned case leave the wait set, so a stuck unit cannot hold the run open."""
     limit = suite.config.case_timeout_s
     if limit is None:
         return
@@ -748,7 +766,9 @@ def _enforce_case_deadlines(
                 for r in sorted(plan.pending):
                     plan.record(not_run(r, "case_timeout"))
                 _finish_if_done(plan, suite, results)
-    _ = futures
+    for fut in [f for f, (plan, _) in futures.items() if plan.result is not None]:
+        fut.cancel()
+        del futures[fut]
 
 
 def _abandon_all(plans: list[Plan], suite: SuiteState, results: list[CaseResult]) -> None:
@@ -768,13 +788,13 @@ def _abandon_all(plans: list[Plan], suite: SuiteState, results: list[CaseResult]
 def run_case(
     case: Any, *, agent_factory: Callable[..., Any] | None = None, orchestrator: Orchestrator | None = None,
     config: SuiteConfig = SuiteConfig(), judge: Judge | None = None, limiter: Limiter | None = None,
-    on_event: EventCallback | None = None,
+    on_event: EventCallback | None = None, suite_deadline: float | None = None,
 ) -> CaseResult:  # fmt: skip
     """One case, same engine as ``run_suite`` (so the verdict is identical either way)."""
     spec = case if isinstance(case, CaseSpec) else CaseSpec(case)
     result = run_suite(
         [spec], agent_factory=agent_factory, orchestrator=orchestrator, config=config, judge=judge,
-        limiter=limiter, on_event=on_event,
+        limiter=limiter, on_event=on_event, suite_deadline=suite_deadline,
     )  # fmt: skip
     return result.cases[0]
 

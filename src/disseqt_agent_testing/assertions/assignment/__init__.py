@@ -3,6 +3,7 @@
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from fnmatch import fnmatchcase
+from fractions import Fraction
 from typing import Any
 
 from ...models import AgentRun, FakeSpec, Step, ToolExpect, parse_ref_source
@@ -14,6 +15,7 @@ from .hungarian import assign_max
 
 CALL_KINDS = ("tool", "subagent")
 POSITION_EPS = 1e-7
+SCORE_TOL = 1e-12
 
 
 def calls_of(run: AgentRun) -> tuple[Step, ...]:
@@ -99,25 +101,34 @@ def build_slots(tools: Sequence[ToolExpect], calls: Sequence[Step]) -> tuple[Slo
     return tuple(slots)
 
 
-def _strip(args: Mapping[str, Any], te: ToolExpect, ctx: MatchContext) -> dict[str, Any]:
+def _strip(
+    args: Mapping[str, Any], te: ToolExpect, ctx: MatchContext
+) -> tuple[dict[str, Any], list[MatchResult]]:
+    """Drop ignored keys and keys still at their default. A default whose matcher could not be
+    decided is dropped too and its skipped/error leaves are returned, so it stays unmeasured
+    instead of turning into an ``unexpected_param`` failure."""
     from ..matching import match_value
 
     out = dict(args)
+    undecided: list[MatchResult] = []
     for key in list(out):
         if any(fnmatchcase(key, g) for g in te.ignore):
             del out[key]
     for key, matcher in te.defaults.items():
         if key in out and key not in te.args:
-            if all(r.ok for r in match_value(matcher, out[key], ctx, (key,))):
-                del out[key]
-    return out
+            results = match_value(matcher, out[key], ctx, (key,))
+            if any(r.status == "ok" and r.ok is False for r in results):
+                continue
+            undecided.extend(r for r in results if r.status != "ok")
+            del out[key]
+    return out, undecided
 
 
 def pair_eval(te: ToolExpect, step: Step, ctx: MatchContext, min_pair_score: float) -> PairEval:
     ctx.consumer = step
-    actual = _strip(step.args, te, ctx)
+    actual, undecided = _strip(step.args, te, ctx)
     spec = {k: v for k, v in te.args.items() if not any(fnmatchcase(k, g) for g in te.ignore)}
-    leaves = match_dict(spec, actual, ctx, (), exact=te.args_mode == "exact")
+    leaves = [*match_dict(spec, actual, ctx, (), exact=te.args_mode == "exact"), *undecided]
     decided = [r.score for r in leaves if r.status == "ok"]
     score = sum(decided) / len(decided) if decided else 1.0
     incomplete = any(r.status == "skipped" for r in leaves)
@@ -152,6 +163,83 @@ def check_ref_graph(tools: Sequence[ToolExpect]) -> None:
             if kind == "call" and target in ids:
                 deps[eid].add(target)
     check_ref_cycles(deps)
+
+
+Pairing = list[tuple[int, int]]
+
+
+def _canonical(
+    pairs: Pairing, slots: Sequence[Slot], n_calls: int, evals: Mapping[tuple[int, int], PairEval]
+) -> Pairing:
+    """The canonical form of an optimal pairing, so the result does not depend on how a solver
+    breaks ties. Slots of one expectation are interchangeable: its calls go to its first slots
+    (required ones come first) in ``seq`` order. Between expectations a change is taken only when
+    it keeps the scores and the number of matched required slots and follows declared order more
+    closely (exact arithmetic, the lower indices winning an exact tie): two expectations trade
+    calls, or a call moves to another expectation, or an expectation takes a free call instead.
+    """
+    n = len(slots)
+    members: dict[int, list[int]] = {}
+    for slot in slots:
+        members.setdefault(slot.expect_index, []).append(slot.index)
+
+    def compact(current: Pairing) -> Pairing:
+        held: dict[int, list[int]] = {}
+        for i, j in current:
+            held.setdefault(slots[i].expect_index, []).append(j)
+        return sorted(
+            pair for e, js in held.items() for pair in zip(members[e], sorted(js), strict=False)
+        )
+
+    def worth(current: Pairing) -> tuple[int, float] | None:
+        if any(pair not in evals for pair in current):
+            return None
+        required = sum(1 for i, _ in current if slots[i].required)
+        return required, sum(evals[pair].score for pair in current)
+
+    def key(current: Pairing) -> tuple[Fraction, Pairing]:
+        total = Fraction(0)
+        for i, j in current:
+            frac_i = Fraction(i, n - 1) if n > 1 else Fraction(0)
+            frac_j = Fraction(j, n_calls - 1) if n_calls > 1 else Fraction(0)
+            total += (frac_i - frac_j) ** 2
+        return total, current
+
+    def neighbours(current: Pairing) -> list[Pairing]:
+        out: list[Pairing] = []
+        used_slots = {i for i, _ in current}
+        used_calls = {j for _, j in current}
+        free_calls = [j for j in range(n_calls) if j not in used_calls]
+        free_slot = {
+            e: next(i for i in slot_ids if i not in used_slots)
+            for e, slot_ids in members.items()
+            if any(i not in used_slots for i in slot_ids)
+        }
+        for a, (i, j) in enumerate(current):
+            rest = current[:a] + current[a + 1 :]
+            out.extend([*rest, (i, j2)] for j2 in free_calls)
+            out.extend(
+                [*rest, (i2, j)] for e, i2 in free_slot.items() if e != slots[i].expect_index
+            )
+            for b in range(a + 1, len(current)):
+                i2, j2 = current[b]
+                if slots[i2].expect_index != slots[i].expect_index:
+                    out.append([*rest[: b - 1], *rest[b:], (i, j2), (i2, j)])
+        return out
+
+    best = compact(pairs)
+    target = worth(best)
+    improved = True
+    while improved and target is not None:  # the key strictly decreases over a finite set
+        improved = False
+        for candidate in map(compact, neighbours(best)):
+            value = worth(candidate)
+            if value is None or value[0] != target[0] or abs(value[1] - target[1]) > SCORE_TOL:
+                continue
+            if key(candidate) < key(best):
+                best, improved = candidate, True
+                break
+    return best
 
 
 def assign(
@@ -193,10 +281,14 @@ def assign(
         for (i, j), ev in evals.items():
             frac_i = i / (n - 1) if n > 1 else 0.0
             frac_j = j / (m - 1) if m > 1 else 0.0
-            align = POSITION_EPS / (big_b * n * m) * (1 - abs(frac_i - frac_j))
+            # squared, so that of two equally scored pairings the non-crossing one weighs more
+            align = POSITION_EPS / (big_b * n * m) * (1 - (frac_i - frac_j) ** 2)
             weights[i][j] = big_b * (1 if slots[i].required else 0) + 1 + ev.score / big_b + align
         backend = get_backend(config.assignment_backend)
-        pairs_idx = [(i, j) for i, j in backend(weights) if weights[i][j] > 0]
+        # The position term is far below float precision for large inputs and solvers break
+        # exact ties differently, so the result is put into canonical form afterwards.
+        solved = [(i, j) for i, j in backend(weights) if weights[i][j] > 0]
+        pairs_idx = _canonical(solved, slots, m, evals)
 
     # Phase B: rebind expectation Refs to the calls actually assigned, without re-solving.
     bound_lists: dict[str, list[Step]] = {}

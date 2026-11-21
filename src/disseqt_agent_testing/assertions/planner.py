@@ -148,7 +148,8 @@ def _skipped_threshold(
 
 
 def apply_threshold(result: MetricResult, check: PlannedCheck) -> MetricResult:
-    """Recompute ``passed`` against a threshold. A threshold can never clear a veto."""
+    """Recompute ``passed`` against a threshold. A threshold can never clear a veto, and a
+    threshold on sub-scores alone clears only a failure those sub-scores measure."""
     if result.status != "ok" or not check.metric.thresholdable:
         return result
     if check.threshold is None and not check.sub_thresholds:
@@ -176,7 +177,12 @@ def apply_threshold(result: MetricResult, check: PlannedCheck) -> MetricResult:
         if result.passed is False:
             return result
         return _skipped_threshold(result, check, missing)
-    passed = ok and not result.vetoed
+    cleared = (
+        result.passed is not False
+        or check.threshold is not None
+        or check.metric.failure_within(result, frozenset(s for s, _ in check.sub_thresholds))
+    )
+    passed = ok and cleared and not result.vetoed
     code = None if passed else (result.reason_code or "threshold.below")
     if not ok:
         code = "threshold.below"

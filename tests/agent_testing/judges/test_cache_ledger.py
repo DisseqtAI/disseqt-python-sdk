@@ -278,8 +278,8 @@ def test_l01_max_calls_stops_further_attempts() -> None:
 
 
 def test_l02_max_usd_is_checked_before_every_attempt() -> None:
-    """Cost is only known once a call settles, so a serial run can overshoot the cap by at most
-    one call; the next attempt is then refused."""
+    """Once a call has settled, its real cost is held for every later attempt, so the third
+    sample (0.8 spent + 0.4 held) is refused instead of overshooting the cap."""
     price = Price(1.0, 1.0)
     options: dict[str, Any] = {
         "networked": True, "cache_mode": "off", "price": price, "cost_per_call": 0.4,
@@ -287,13 +287,13 @@ def test_l02_max_usd_is_checked_before_every_attempt() -> None:
     }  # fmt: skip
     with engine(lambda r: label("ask"), **options) as (eng, model):
         first = eng.judge(decision_task())
-        assert first.status == "ok" and eng.ledger.spent_usd <= 1.0 + 0.4
+        assert first.status == "ok" and eng.ledger.spent_usd == pytest.approx(0.8)
         refused = eng.judge(decision_task("another question?"))
         assert (
             refused.error_code == "budget_exceeded"
             and "budget exhausted: max_usd" in refused.reason
         )
-        assert len(model.calls) == 3
+        assert len(model.calls) == 2 and eng.ledger.spent_usd <= 1.0
 
 
 def test_l03_an_unpriced_networked_model_cannot_have_a_dollar_cap() -> None:
@@ -342,3 +342,88 @@ def test_engine_stats_and_context_manager() -> None:
     assert stats["judge_calls"] == 1 and stats["samples"] == 3 and stats["pending"] == 0
     with pytest.raises(RuntimeError, match="closed"):
         eng.judge(decision_task())
+
+
+def test_concurrent_samples_cannot_overrun_max_usd() -> None:
+    from disseqt_agent_testing.judges import KindConfig
+
+    with engine(
+        lambda r: FakeSlow(0.01, label("ask")), cost_per_call=0.08, max_usd=0.10,
+        kinds={"decision": KindConfig(samples=5)},
+    ) as (eng, model):  # fmt: skip
+        v = eng.judge(decision_task())
+        summary = eng.ledger.summary()
+        assert summary["spent_usd"] == pytest.approx(0.08) and summary["spent_usd"] <= 0.10
+        assert len(model.calls) == 1 and summary["calls"] == 1
+        assert v.status == "error" and v.error_code == "budget_exceeded"
+        assert "budget exhausted: max_usd" in v.reason
+
+
+def test_concurrent_samples_within_the_cap_all_run() -> None:
+    from disseqt_agent_testing.judges import KindConfig
+
+    with engine(
+        lambda r: FakeSlow(0.01, label("ask")), cost_per_call=0.01, max_usd=0.10,
+        kinds={"decision": KindConfig(samples=5)},
+    ) as (eng, model):  # fmt: skip
+        v = eng.judge(decision_task())
+        assert (v.status, v.samples) == ("ok", 5) and len(model.calls) == 5
+        assert eng.ledger.summary()["spent_usd"] == pytest.approx(0.05)
+        assert not any("exceeded max_usd" in w for w in eng.warnings)
+
+
+def test_a_single_call_dearer_than_the_cap_is_reported() -> None:
+    from disseqt_agent_testing.judges import KindConfig
+
+    with engine(
+        lambda r: label("ask"), cost_per_call=0.25, max_usd=0.10,
+        kinds={"decision": KindConfig(samples=3)},
+    ) as (eng, model):  # fmt: skip
+        v = eng.judge(decision_task())
+        assert len(model.calls) == 1 and eng.ledger.summary()["spent_usd"] == pytest.approx(0.25)
+        assert v.error_code == "budget_exceeded"
+        assert any("exceeded max_usd" in w for w in eng.warnings)
+
+
+def test_the_ledger_holds_the_highest_cost_seen_for_a_model() -> None:
+    from disseqt_agent_testing.judges import BudgetExceeded, CostLedger
+
+    ledger = CostLedger(max_usd=1.0)
+    first = ledger.try_reserve(0.01, "m")
+    assert first is not None and ledger.try_reserve(0.01, "m") is None  # cost not known yet
+    other = ledger.try_reserve(0.01, "other")
+    assert other is not None  # another model is not held back by it
+    ledger.release(other)
+    ledger.settle(first, 0.4)
+    second, third = ledger.try_reserve(0.01, "m"), ledger.try_reserve(0.01, "m")
+    assert second is not None and third is None  # 0.4 spent + 0.4 held: no room for a third
+    ledger.settle(second, 0.4)
+    with pytest.raises(BudgetExceeded):
+        ledger.try_reserve(0.01, "m")
+    assert ledger.spent_usd == pytest.approx(0.8) and ledger.calls == 2
+
+
+def test_a_gate_override_is_removed_by_identity_not_by_position() -> None:
+    a_in, b_in, a_out = threading.Event(), threading.Event(), threading.Event()
+    seen: list[bool] = []
+
+    def thread_a() -> None:
+        with allow_judge_requests(True):
+            a_in.set()
+            b_in.wait(5)
+        a_out.set()
+
+    def thread_b() -> None:
+        a_in.wait(5)
+        with allow_judge_requests(False):
+            b_in.set()
+            a_out.wait(5)
+            seen.append(requests_allowed(None, "record"))
+
+    workers = [threading.Thread(target=thread_a), threading.Thread(target=thread_b)]
+    for w in workers:
+        w.start()
+    for w in workers:
+        w.join(5)
+    assert seen == [False]
+    assert requests_allowed(None, "record") is True  # nothing is left on the stack

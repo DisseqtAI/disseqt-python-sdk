@@ -36,6 +36,16 @@ class ToolSelection(BaseMetric):
             bool(expect.tools) or expect.allowed_tools is not None or expect.extra_calls == "forbid"
         )
 
+    def failure_within(self, result: MetricResult, sub_scores: frozenset[str]) -> bool:
+        """Recall measures missing calls and precision measures unexpected ones; F1 measures both.
+        (Hallucinated, disallowed and over-count calls are vetoes, which no threshold clears.)"""
+        details = result.details
+        if details.get("missing") and not sub_scores & {"recall", "f1"}:
+            return False
+        if details.get("unexpected") and not sub_scores & {"precision", "f1"}:
+            return False
+        return True
+
     def evaluate(self, ctx: EvalContext) -> MetricResult:
         a = ctx.assignment()
         run, expect = ctx.run, ctx.expect

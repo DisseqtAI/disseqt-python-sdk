@@ -2,6 +2,7 @@
 or a fake. Two phases (see plan 03 section 8): provisional (every name-matching earlier call is a
 candidate) and rebind (only the calls the assignment bound to the source expectation)."""
 
+import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from fnmatch import fnmatchcase
@@ -128,6 +129,52 @@ class RefResolver:
         return RefOutcome(values=tuple(values), resolved_from=label)
 
 
+# Scripts written without spaces between words (Thai, Lao, Myanmar, Khmer; CJK is found by width).
+_UNSPACED = ((0x0E00, 0x0EFF), (0x1000, 0x109F), (0x1780, 0x17FF))
+
+
+def _joins(ch: str) -> bool:
+    """Whether ``ch`` next to a value makes that value part of a longer token."""
+    if unicodedata.category(ch)[0] not in "LMN":
+        return False
+    if unicodedata.east_asian_width(ch) in ("W", "F"):
+        return False
+    return not any(low <= ord(ch) <= high for low, high in _UNSPACED)
+
+
+def _fold(text: str) -> str:
+    return unicodedata.normalize("NFKC", text).casefold()
+
+
+def occurs_as_token(value: str, text: str) -> bool:
+    """``value`` occurs in ``text`` as whole tokens: ``A12`` is in ``refund order A12.``, but
+    ``1`` and ``a`` are not. A decimal point between digits is inside a token, so ``59`` is not in
+    ``59.99``."""
+    needle, hay = _fold(value).strip(), _fold(text)
+    if not needle:
+        return False
+    start = hay.find(needle)
+    while start != -1:
+        end = start + len(needle)
+        if not _extends(hay, start, -1, needle[0]) and not _extends(hay, end - 1, 1, needle[-1]):
+            return True
+        start = hay.find(needle, start + 1)
+    return False
+
+
+def _extends(hay: str, edge: int, direction: int, edge_char: str) -> bool:
+    """Whether the token that holds ``hay[edge]`` continues past it in ``direction``."""
+    if not _joins(edge_char):
+        return False
+    near = edge + direction
+    if not 0 <= near < len(hay):
+        return False
+    if _joins(hay[near]):
+        return True
+    far = near + direction
+    return edge_char.isdigit() and hay[near] == "." and 0 <= far < len(hay) and hay[far].isdigit()
+
+
 def match_ref(ref: Ref, actual: Any, path: Segments, ctx: MatchContext) -> list[MatchResult]:
     from .impls import deep_equal
 
@@ -145,12 +192,8 @@ def match_ref(ref: Ref, actual: Any, path: Segments, ctx: MatchContext) -> list[
         ]
     details = {"source": ref.source, "resolved_from": outcome.resolved_from}
     if outcome.text is not None:
-        needle = (
-            str(actual).casefold()
-            if actual is not None and not isinstance(actual, (dict, list, tuple))
-            else None
-        )
-        if needle and needle in outcome.text.casefold():
+        scalar = actual is not None and not isinstance(actual, (dict, list, tuple))
+        if scalar and occurs_as_token(str(actual), outcome.text):
             return [passed(path, shown, actual)]
         return [
             failed(

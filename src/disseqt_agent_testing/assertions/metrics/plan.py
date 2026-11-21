@@ -54,9 +54,11 @@ class Plan(BaseMetric):
     def _constraints(self, ctx: EvalContext) -> MetricResult:
         spec = ctx.expect.plan
         assert isinstance(spec, PlanExpect)
+        n_calls = len(ctx.calls())
+        # a run with no calls did not converge on anything, so the score is unmeasured
         convergence = (
-            min(1.0, spec.optimal_tool_calls / max(len(ctx.calls()), 1))
-            if spec.optimal_tool_calls is not None
+            min(1.0, spec.optimal_tool_calls / n_calls)
+            if spec.optimal_tool_calls is not None and n_calls
             else None
         )
         rows: list[dict[str, Any]] = []

@@ -6,7 +6,7 @@ from ...models import Expect, RefuseExpect, ScopeExpect
 from ..classify import clean_text, turn_output
 from ..config import EvalConfig
 from ..judge import JudgeTask, interpret_verdict
-from ..routing import norm_target, route_events
+from ..routing import norm_target, route_events, same_target
 from .answer import norm
 from .base import BaseMetric, EvalContext, MetricResult
 from .registry import register_metric
@@ -33,6 +33,9 @@ class Refusal(BaseMetric):
         assert isinstance(spec, RefuseExpect)
         cls = ctx.classification(0)
         details = {"actual": cls.label, "rule": cls.rule, "confidence": cls.confidence}
+        undecided = self.undecided(ctx, cls, details=details)
+        if undecided is not None:
+            return undecided
         if cls.label != "refuse":
             return self.ok(ctx, 0.0, False, reason_code="refuse.not_refused",
                            reason=f"expected a refusal, got {cls.label}", details=details)  # fmt: skip
@@ -95,6 +98,9 @@ class Scope(BaseMetric):
         spec = ctx.expect.scope
         assert isinstance(spec, ScopeExpect)
         cls = ctx.classification(0)
+        undecided = self.undecided(ctx, cls, details={"cell": None, "actual": cls.label})
+        if undecided is not None:
+            return undecided
         if cls.label == "empty":
             return self.ok(ctx, 0.0, False, reason_code="decision.empty",
                            reason="the agent produced no output", details={"cell": None})  # fmt: skip
@@ -173,8 +179,11 @@ class Intent(BaseMetric):
                 return self.ok(ctx, 0.0, False, reason_code="intent.unresolved",
                                reason=f"intent_source {source!r} resolved to nothing",
                                details={"expected": list(ctx.expect.intents), "source": source})  # fmt: skip
-            got = norm_target(str(value)) if source == "route" else str(value).casefold()
-            ok = got in [norm_target(w) if source == "route" else w for w in wanted]
+            if source == "route":
+                got = norm_target(str(value))
+                ok = any(same_target(got, norm_target(w)) for w in wanted)
+            else:
+                ok = str(value).casefold() in wanted
             details = {"expected": list(ctx.expect.intents), "actual": value, "source": source}
             if ok:
                 return self.ok(ctx, 1.0, True, details=details)

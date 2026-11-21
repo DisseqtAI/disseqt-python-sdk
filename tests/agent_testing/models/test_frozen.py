@@ -150,6 +150,15 @@ class TestCaptureJson:
         value, lossy = capture_json({1, 2})
         assert lossy is True and isinstance(value, str)
 
+    def test_ints_over_the_size_limit_become_a_marker_and_lossy(self):
+        value, lossy = capture_json({"n": 10**5000, "m": [-(10**5000)], "ok": 10**3999})
+        assert lossy is True
+        assert value["n"] == "<int with 16610 bits>" and value["m"] == ("<int with 16610 bits>",)
+        assert value["ok"] == 10**3999
+        assert freeze_json(value) == value  # what was captured can always be stored in a step
+        assert capture_json(10**3999) == (10**3999, False)
+        assert capture_json(True) == (True, False)
+
 
 class TestFrozenDictHardening:
     def test_calling_init_again_cannot_mutate(self):

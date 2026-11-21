@@ -2,13 +2,35 @@
 
 from collections.abc import Sequence
 
-from .models import CaseResult, RepeatRecord
+from .errors import format_code
+from .models import DELIBERATE_REASONS, CaseResult, RepeatRecord, cut_off_reason
 from .summarize import summarize_repeats
 
 
 def is_split_part(result: CaseResult) -> bool:
     """True for a result that ran only some repeats of its case (``only_repeat`` replay)."""
     return any(r.not_run_reason == "only_repeat" for r in result.repeats)
+
+
+def _rank(rec: RepeatRecord) -> int:
+    """Which record of one repeat index to keep: a repeat that ran, then one that was cut off,
+    then any other not-run record; the ``only_repeat`` placeholder of another part comes last."""
+    if rec.status != "not_run":
+        return 3
+    if cut_off_reason((rec.not_run_reason,)) is not None:
+        return 2
+    return 0 if rec.not_run_reason in DELIBERATE_REASONS else 1
+
+
+def _breakdown(records: Sequence[RepeatRecord]) -> str:
+    counts: dict[str, int] = {}
+    for rec in records:
+        if rec.status == "incomplete":
+            counts["incomplete"] = counts.get("incomplete", 0) + 1
+        elif rec.status == "not_run":
+            label = f"not run: {rec.not_run_reason or 'cancelled'}"
+            counts[label] = counts.get(label, 0) + 1
+    return "; ".join(f"{n} {label}" for label, n in sorted(counts.items())) or "none"
 
 
 def merge_repeat_results(parts: Sequence[CaseResult]) -> CaseResult:
@@ -25,21 +47,34 @@ def merge_repeat_results(parts: Sequence[CaseResult]) -> CaseResult:
     for part in parts:
         for rec in part.repeats:
             old = by_index.get(rec.index)
-            if old is None or (old.status == "not_run" and rec.status != "not_run"):
+            if old is None or _rank(rec) > _rank(old):
                 by_index[rec.index] = rec
     records = tuple(by_index[i] for i in sorted(by_index))
-    if base.status in ("error", "skipped") and not any(r.status != "not_run" for r in records):
+    cut = cut_off_reason(r.not_run_reason for r in records)
+    if not any(r.status != "not_run" for r in records) and (
+        base.status == "error" or (base.status == "skipped" and cut is None)
+    ):
         return base
     reports = [r.report if r.status != "not_run" else None for r in records]
     rr = summarize_repeats(
         reports, k=base.k, threshold=base.threshold, n_planned=base.n_planned, case_id=base.case_id
     )
-    reason, code = "", None
-    if rr.outcome == "failed":
+    reason: str = ""
+    code: str | None = None
+    d = rr.n_passed + rr.n_failed
+    if rr.outcome == "incomplete":
+        code = cut or "undecided"
+        reason = format_code(
+            "DSQ-I01",
+            id=base.case_id,
+            U=base.n_planned - d,
+            n=base.n_planned,
+            breakdown=_breakdown(records),
+            k=base.k,
+            t=base.threshold,
+        )
+    elif rr.outcome == "failed":
         code = "below_threshold"
-        from .errors import format_code
-
-        d = rr.n_passed + rr.n_failed
         reason = format_code(
             "DSQ-F01",
             id=base.case_id,

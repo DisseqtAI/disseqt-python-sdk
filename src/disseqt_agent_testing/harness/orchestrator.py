@@ -317,10 +317,13 @@ class Orchestrator:
                 raw = _drain_sync(raw)
                 if inspect.isasyncgen(raw):
                     raw = asyncio.run(_drain_async(raw))
+                output = extract_answer(raw, self._config.extract, adapter.extract)
+            except HarnessConfigError:
+                raise
             except Exception as exc:
                 box.fail("crashed", exc, limit)
                 return
-            box.outputs.append(extract_answer(raw, self._config.extract, adapter.extract))
+            box.outputs.append(output)
 
     # ------------------------------------------------------------------ run (async)
 
@@ -377,10 +380,13 @@ class Orchestrator:
                 if inspect.isawaitable(raw):
                     raw = await raw
                 raw = await _drain_async(_drain_sync(raw))
+                output = extract_answer(raw, self._config.extract, adapter.extract)
+            except HarnessConfigError:
+                raise
             except Exception as exc:
                 box.fail("crashed", exc, limit)
                 return
-            box.outputs.append(extract_answer(raw, self._config.extract, adapter.extract))
+            box.outputs.append(output)
 
     async def _guarded(self, run: _Run, body: Any) -> None:
         """Run ``body`` under the run's deadline.
@@ -399,11 +405,14 @@ class Orchestrator:
             raise
         if task in done:
             task.result()  # re-raises HarnessConfigError / BaseException from the body
-            return
-        run.box.status = "timed_out"  # our own deadline
+            if run.remaining() != 0.0:
+                return
+            # Done, but only after the deadline: the body blocked the loop, so the timeout could
+            # not interrupt it. Same outcome as a sync agent that overruns.
         run.rec.close("timed_out")  # in-flight steps become "Abandoned: run timed out"
-        task.cancel()
-        await self._settle(task)
+        if task not in done:
+            task.cancel()
+            await self._settle(task)
 
     @staticmethod
     async def _settle(task: "asyncio.Future[Any]") -> None:
@@ -470,8 +479,10 @@ class Orchestrator:
             rec.close("crashed")
             raise box.config_exc
         else:
-            status = box.status
-            rec.close(status)
+            # The first close is final: a run the deadline already closed stays timed out even
+            # if the agent failed afterwards (for example in cleanup that calls a refused fake).
+            rec.close(box.status)
+            status = rec.closed or box.status
         outputs = list(box.outputs)
         finished = status == "finished" and len(outputs) == len(run.inputs)
         last = outputs[-1] if finished else None

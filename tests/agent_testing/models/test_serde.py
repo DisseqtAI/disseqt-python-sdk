@@ -9,17 +9,26 @@ from disseqt_agent_testing.models import (
     AgentRun,
     AgentTestCase,
     Approx,
+    Contains,
+    DateEq,
     Decision,
+    DictMatch,
     Eq,
     Expect,
+    ForbiddenCall,
     FrozenDict,
     Message,
     ModelValidationError,
     MsgToolCall,
+    Normalized,
+    OneOf,
     Optional_,
     Ref,
+    Regex,
     RunResult,
     ToolExpect,
+    TypeIs,
+    Unordered,
     _migrate,
     from_dict,
     to_dict,
@@ -522,3 +531,102 @@ class TestDecoderRobustness:
         # re-decodes that call. Its filled id must still be call_1, not call_2.
         probe = from_dict(Probe, {"items": [{"name": "a"}, 5]}, fill_ids=True)
         assert probe.items[0].id == "call_1" and probe.items[1] == 5
+
+
+NESTED_TAG_LITERAL = {"id": {"$m": "regex", "pattern": "^A"}}
+MATCHERS = [
+    Eq("pai"),
+    Eq(5),
+    Eq(None),
+    Eq([1, "a"]),
+    Eq({"k": 1}),
+    Eq(1, coerce_numeric=False),
+    Eq({"$m": "approx"}),
+    Eq(NESTED_TAG_LITERAL),
+    Eq([NESTED_TAG_LITERAL]),
+    OneOf(("a", 1)),
+    Regex("^A"),
+    Approx(1.5, abs_tol=0.1),
+    Normalized(("x",)),
+    TypeIs(("string",)),
+    DateEq("2026-01-01", tz="Europe/Berlin"),
+    Optional_(Eq("x")),
+    Optional_(Eq(NESTED_TAG_LITERAL)),
+    Contains((Eq("x"), Regex("y"), Eq(NESTED_TAG_LITERAL))),
+    Unordered((Eq(1), Eq({"a": [1]}), Optional_(Eq(2)))),
+    DictMatch({"a": Eq("x"), "b": DictMatch({"c": Eq(NESTED_TAG_LITERAL)})}, defaults={"d": Eq(0)}),
+]
+
+
+class TestMatcherWireFormat:
+    @pytest.mark.parametrize("matcher", MATCHERS, ids=repr)
+    def test_every_matcher_round_trips_in_every_position(self, matcher):
+        assert json_round_trip(matcher) == matcher
+        for holder in (
+            Expect(answer_contains=(matcher, "text"), answer_excludes=("text", matcher)),
+            ToolExpect("x", {"a": matcher}),
+            ForbiddenCall("x", {"a": matcher}),
+        ):
+            again = json_round_trip(holder)
+            assert again == holder
+            assert [type(m) for m in again_matchers(again)] == [
+                type(m) for m in again_matchers(holder)
+            ]
+
+    def test_eq_in_a_matcher_or_string_field_stays_an_equality_check(self):
+        expect = Expect(answer_contains=(Eq("pai"), "pai"), answer_excludes=(Eq(5),))
+        data = to_dict(expect)
+        assert data["answer_contains"] == [
+            {"$m": "eq", "value": "pai", "coerce_numeric": True},
+            "pai",
+        ]
+        assert data["answer_excludes"] == [{"$m": "eq", "value": 5, "coerce_numeric": True}]
+        again = json_round_trip(expect)
+        assert again.answer_contains == (Eq("pai"), "pai")
+        assert again.answer_excludes == (Eq(5),)
+
+    def test_bare_strings_in_a_matcher_or_string_field_keep_meaning_substring(self):
+        expect = from_dict(Expect, {"answer_contains": ["ok"], "answer_excludes": ["no"]})
+        assert expect.answer_contains == ("ok",) and expect.answer_excludes == ("no",)
+        assert to_dict(expect)["answer_contains"] == ["ok"]
+
+    def test_bare_values_in_argument_positions_still_load_as_eq(self):
+        data = {"name": "x", "args": {"a": "A", "b": {"k": [1, {"j": 2}]}, "c": None}}
+        tool = from_dict(ToolExpect, data)
+        assert tool.args == {"a": Eq("A"), "b": Eq({"k": [1, {"j": 2}]}), "c": Eq(None)}
+        assert to_dict(tool)["args"] == data["args"]
+
+    @pytest.mark.parametrize(
+        "bare",
+        [
+            {"filter": NESTED_TAG_LITERAL},
+            {"filter": [NESTED_TAG_LITERAL]},
+            [{"a": NESTED_TAG_LITERAL}],
+        ],
+    )
+    def test_a_tagged_matcher_nested_in_a_plain_value_is_rejected(self, bare):
+        with pytest.raises(ModelValidationError, match=r"ForbiddenCall\.args\.a.*\$m"):
+            from_dict(ForbiddenCall, {"name": "pay", "args": {"a": bare}})
+        with pytest.raises(ModelValidationError, match=r"\$m"):
+            from_dict(Contains, {"$m": "contains", "items": [bare]})
+
+    def test_a_literal_tag_key_needs_the_explicit_eq_form(self):
+        data = {"name": "pay", "args": {"a": {"$m": "eq", "value": {"filter": NESTED_TAG_LITERAL}}}}
+        veto = from_dict(ForbiddenCall, data)
+        assert veto.args is not None and veto.args["a"] == Eq({"filter": NESTED_TAG_LITERAL})
+        assert to_dict(veto)["args"]["a"]["$m"] == "eq"
+
+    def test_dict_match_is_the_way_to_nest_a_matcher_in_an_object(self):
+        data = {
+            "name": "pay",
+            "args": {"filter": {"$m": "dict_match", "fields": {"id": NESTED_TAG_LITERAL["id"]}}},
+        }
+        veto = from_dict(ForbiddenCall, data)
+        assert veto.args is not None
+        assert veto.args["filter"] == DictMatch({"id": Regex("^A")})
+
+
+def again_matchers(holder):
+    from disseqt_agent_testing.models.matchers import walk_matchers
+
+    return list(walk_matchers(holder))

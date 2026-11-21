@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 _LOCK = threading.RLock()
-_OVERRIDES: list[bool] = []
+_OVERRIDES: list[tuple[object, bool]] = []  # (token, flag): each block removes its own entry
 
 
 def is_ci() -> bool:
@@ -19,7 +19,7 @@ def requests_allowed(config_allow: bool | None, cache_mode: str) -> bool:
     then the default rule: disallowed when ``CI`` is truthy and the cache mode is ``replay``."""
     with _LOCK:
         if _OVERRIDES:
-            return _OVERRIDES[-1]
+            return _OVERRIDES[-1][1]
     if config_allow is not None:
         return config_allow
     env = os.environ.get("DISSEQT_ALLOW_JUDGE_REQUESTS")
@@ -30,11 +30,14 @@ def requests_allowed(config_allow: bool | None, cache_mode: str) -> bool:
 
 @contextmanager
 def allow_judge_requests(flag: bool = True) -> Iterator[None]:
-    """``with allow_judge_requests(False):`` overrides the gate temporarily (nesting restores)."""
+    """``with allow_judge_requests(False):`` overrides the gate temporarily (nesting restores).
+    The override is process-wide: while blocks from several threads overlap, the one entered last
+    and still open applies to every thread."""
+    entry = (object(), bool(flag))
     with _LOCK:
-        _OVERRIDES.append(bool(flag))
+        _OVERRIDES.append(entry)
     try:
         yield
     finally:
         with _LOCK:
-            _OVERRIDES.pop()
+            _OVERRIDES[:] = [e for e in _OVERRIDES if e[0] is not entry[0]]

@@ -285,7 +285,7 @@ def test_f04_undecidable_matchers_in_a_veto_are_rejected_at_construction() -> No
 
 
 def test_b01_inclusive_bounds() -> None:
-    run = run_of(step(1, "a"), step(2, "b"), step(3, "c"))
+    run = run_of(step(1, "a"), step(2, "b"), step(3, "c"), captured=True)
     assert only(report(run, Expect(max_steps=3)), "budgets").passed
     r = only(report(run, Expect(max_steps=2)), "budgets")
     assert (

@@ -49,6 +49,7 @@ def _rebuild(cls: type, message: str, data: Any, category: str) -> AgentCaseFail
 
 CATEGORY_KEY = "disseqt.category"
 RESULT_KEY = "disseqt.case_result"
+XFAIL_KEY = "disseqt.xfail"
 
 
 class AgentCaseFile(pytest.File):
@@ -119,9 +120,12 @@ class AgentCaseItem(pytest.Item):
         return super().repr_failure(excinfo)
 
 
-def properties_for(result: Any, category: str | None = None) -> list[tuple[str, Any]]:
+def properties_for(
+    result: Any, category: str | None = None, *, xfail: str | None = None
+) -> list[tuple[str, Any]]:
     """Compact JUnit properties plus the large transient ``disseqt.case_result`` the controller
-    pops before the JUnit writer sees it."""
+    pops before the JUnit writer sees it. ``xfail`` is the case's expected-failure reason: the
+    controller needs it to settle a case it merges from split repeats."""
     rr = result.repeat_report
     compact: dict[str, Any] = {
         "disseqt.case_id": result.case_id, "disseqt.status": result.status, "disseqt.n": result.n_planned,
@@ -141,5 +145,7 @@ def properties_for(result: Any, category: str | None = None) -> list[tuple[str, 
     props: list[tuple[str, Any]] = [(k, v) for k, v in compact.items() if v is not None]
     if category:
         props.append((CATEGORY_KEY, category))
+    if xfail:
+        props.append((XFAIL_KEY, xfail))
     props.append((RESULT_KEY, json.dumps(result.to_dict(), sort_keys=True, allow_nan=False)))
     return props

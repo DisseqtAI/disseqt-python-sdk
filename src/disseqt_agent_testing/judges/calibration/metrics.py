@@ -48,11 +48,7 @@ def multiclass_stats(pairs: Sequence[tuple[str, str]]) -> dict[str, Any]:
         fn = sum(1 for t, p in pairs if t == c and p != c)
         fp = sum(1 for t, p in pairs if t != c and p == c)
         prec, rec = _div(tp, tp + fp), _div(tp, tp + fn)
-        f1 = (
-            _div(2 * prec * rec, prec + rec)
-            if prec is not None and rec is not None
-            else (0.0 if tp + fn else None)
-        )
+        f1 = _div(2 * tp, 2 * tp + fp + fn) if tp + fn else None  # no true positives: 0.0
         per[c] = {"precision": prec, "recall": rec, "f1": f1, "support": float(tp + fn)}
     f1s = [v["f1"] for v in per.values() if v["f1"] is not None]
     return {"per_class": per, "macro_f1": sum(f1s) / len(f1s) if f1s else None,

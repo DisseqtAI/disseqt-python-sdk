@@ -24,7 +24,7 @@ from .codes import JudgeConfigError, message
 from .config import JudgeConfig, JudgeOptions, KindConfig, resolve_config
 from .identity import JudgeIdentity, sha256_hex
 from .kinds import JudgeKindSpec, get_kind, list_kinds
-from .ledger import BudgetExceeded, CostLedger
+from .ledger import BudgetExceeded, CostLedger, Reservation
 from .models.base import (
     ExtraMissing,
     JudgeModel,
@@ -74,6 +74,10 @@ class _ModelSpec:
         return f"{self.provider}:{self.model_id}"
 
 
+class _LeaderGone(Exception):
+    """The caller that owned a shared in-flight sample was cancelled before it had a result."""
+
+
 class _EvalScope:
     def __init__(self) -> None:
         self.count = 0
@@ -82,6 +86,9 @@ class _EvalScope:
 
 _EVAL: contextvars.ContextVar[_EvalScope | None] = contextvars.ContextVar(
     "judge_eval_scope", default=None
+)
+_PENDING: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar(
+    "judge_pending_warnings", default=None
 )
 _SECRET_ENV = ("DISSEQT_API_KEY", "DISSEQT_JUDGE_SERVICE_KEY", "DISSEQT_PROJECT_ID")
 
@@ -106,6 +113,8 @@ class JudgeEngine:
             config.cache_dir, track=os.environ.get("DISSEQT_JUDGE_CACHE_TRACK") == "1"
         )
         self._inflight: dict[str, asyncio.Future[SampleOutcome]] = {}  # loop thread only
+        self._budget_waiters: list[asyncio.Future[None]] = []  # loop thread only
+        self._overrun_warned = False
         self._sems: dict[str, asyncio.Semaphore] = {}  # loop thread only
         self._circuit: set[str] = set()
         self._rejects_temp: set[str] = set()  # models that refused temperature/top_p (this engine)
@@ -128,13 +137,17 @@ class JudgeEngine:
         capped = self._eval_cap(task.kind)
         if capped is not None:
             return capped
-        return self._rt.run(self._judge(task))
+        verdict, pending = self._rt.run(self._judge_collecting(task))
+        self._emit(pending)
+        return verdict
 
     async def ajudge(self, task: JudgeTask) -> JudgeVerdict:
         capped = self._eval_cap(task.kind)
         if capped is not None:
             return capped
-        return await self._rt.arun(self._judge(task))
+        verdict, pending = await self._rt.arun(self._judge_collecting(task))
+        self._emit(pending)
+        return verdict
 
     @contextmanager
     def eval_scope(self) -> Any:
@@ -173,9 +186,28 @@ class JudgeEngine:
 
     # ------------------------------------------------------------------ helpers
     def _warn(self, text: str) -> None:
+        """Record the warning. Inside a judge call it is only queued: the caller's thread emits
+        it once the verdict exists, so a warnings-as-errors filter cannot abort a paid call."""
         with self._lock:
             self.warnings.append(text)
-        warnings.warn(text, JudgeWarning, stacklevel=3)
+        pending = _PENDING.get()
+        if pending is not None:
+            pending.append(text)
+        else:
+            warnings.warn(text, JudgeWarning, stacklevel=3)
+
+    @staticmethod
+    def _emit(pending: list[str]) -> None:
+        for text in pending:
+            try:
+                warnings.warn(text, JudgeWarning, stacklevel=3)
+            except JudgeWarning:  # an "error" filter: the text stays in ``engine.warnings``
+                pass
+
+    async def _judge_collecting(self, task: JudgeTask) -> tuple[JudgeVerdict, list[str]]:
+        pending: list[str] = []
+        _PENDING.set(pending)  # this task's own context; the sample tasks inherit it
+        return await self._judge(task), pending
 
     def _bump(self, key: str, n: int = 1) -> None:
         with self._lock:
@@ -420,9 +452,14 @@ class JudgeEngine:
             output_schema=schema, schema_name=spec.name, params=params, sample_index=index + 1000 * order,
             kind=spec.name, prompt_hash=template.prompt_hash,
         )  # fmt: skip
-        existing = self._inflight.get(key)
-        if existing is not None:  # single-flight: identical concurrent requests share one result
-            shared = await asyncio.shield(existing)
+        while True:  # single-flight: identical concurrent requests share one result
+            existing = self._inflight.get(key)
+            if existing is None:
+                break
+            try:
+                shared = await asyncio.shield(existing)
+            except _LeaderGone:
+                continue  # its owner was cancelled: take the request over, or follow whoever did
             return SampleOutcome(order, index, shared.ok, shared.label, shared.parsed, shared.code,
                                  shared.detail, shared.cached, 0, 0.0, shared.recorded_cost)  # fmt: skip
         future: asyncio.Future[SampleOutcome] = asyncio.get_running_loop().create_future()
@@ -449,7 +486,9 @@ class JudgeEngine:
             )
         except BaseException as exc:
             if not future.done():
-                future.set_exception(exc)
+                # this caller's own cancellation is not the other callers' result
+                gone = isinstance(exc, asyncio.CancelledError)
+                future.set_exception(_LeaderGone() if gone else exc)
                 future.exception()  # mark retrieved: no "never retrieved" noise for a failed leader
             raise
         else:
@@ -680,6 +719,44 @@ class JudgeEngine:
         except (OSError, CacheCorrupt) as exc:  # the verdict is good; only the recording failed
             self._warn_once(f"judge cache write failed ({type(exc).__name__}); verdict not cached")
 
+    async def _reserve(self, estimate: float, model: str) -> Reservation:
+        """Reserve against the caps, waiting while the ledger wants an unsettled call to finish
+        first. Raises ``BudgetExceeded``."""
+        while True:
+            reservation = self.ledger.try_reserve(estimate, model)
+            if reservation is not None:
+                return reservation
+            waiter: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+            self._budget_waiters.append(waiter)
+            try:
+                await waiter
+            finally:
+                if waiter in self._budget_waiters:
+                    self._budget_waiters.remove(waiter)
+
+    def _wake_budget_waiters(self) -> None:
+        waiters, self._budget_waiters = self._budget_waiters, []
+        for waiter in waiters:
+            if not waiter.done():
+                waiter.set_result(None)
+
+    def _settle(
+        self, reservation: Reservation, actual: float, tokens: int = 0, *, answered: bool = True
+    ) -> None:
+        self.ledger.settle(reservation, actual, tokens, answered=answered)
+        self._wake_budget_waiters()
+        over = self.ledger.overrun_usd()
+        if over > 0 and not self._overrun_warned:
+            self._overrun_warned = True
+            self._warn(
+                f"judge spend exceeded max_usd {self.config.max_usd} by ${over:.4f}: a call cost "
+                "more than was held for it; no further live call is admitted"
+            )
+
+    def _release(self, reservation: Reservation) -> None:
+        self.ledger.release(reservation)
+        self._wake_budget_waiters()
+
     async def _call(
         self,
         instance: JudgeModel,
@@ -707,7 +784,7 @@ class JudgeEngine:
                 else 0.0
             )
             try:
-                reservation = self.ledger.reserve(est)
+                reservation = await self._reserve(est, model.label)
             except BudgetExceeded as exc:
                 s = self.ledger.summary()
                 return SampleOutcome(current.order, current.sample_index, False, None, None, "budget_exceeded",
@@ -721,19 +798,19 @@ class JudgeEngine:
                         instance.complete(current), timeout=cfg.attempt_timeout_s
                     )
             except (asyncio.TimeoutError, TimeoutError):
-                self.ledger.settle(reservation, 0.0)
+                self._settle(reservation, 0.0, answered=False)
                 last_code, last_status, last_retry = "timeout", "", None
             except ProviderTransient as exc:
-                self.ledger.settle(reservation, 0.0)
+                self._settle(reservation, 0.0, answered=False)
                 last_code = "rate_limited" if str(exc.status) == "429" else "provider_error"
                 last_status, last_retry = str(exc.status), exc.retry_after_s
             except ProviderAuth as exc:
-                self.ledger.release(reservation)
+                self._release(reservation)
                 self._circuit.add(model.label)
                 return SampleOutcome(current.order, current.sample_index, False, None, None, "auth_config",
                                      message("auth_config", model=model.label, detail=_cap(self._scrub(str(exc), model))))  # fmt: skip
             except ProviderBadRequest as exc:
-                self.ledger.release(reservation)
+                self._release(reservation)
                 named = [k for k in TEMPERATURE_KEYS if k in str(exc) and k in current.params]
                 if named:  # one resend without the parameters the model refuses; remembered
                     with self._lock:
@@ -747,14 +824,14 @@ class JudgeEngine:
                 return SampleOutcome(current.order, current.sample_index, False, None, None, "provider_error",
                                      message("provider_error", model=model.label, status=400, detail=_cap(self._scrub(str(exc), model))))  # fmt: skip
             except ExtraMissing as exc:
-                self.ledger.release(reservation)
+                self._release(reservation)
                 return SampleOutcome(current.order, current.sample_index, False, None, None, "extra_missing",
                                      message("extra_missing", model=model.label, extra=exc.extra))  # fmt: skip
             except (FakeScriptExhausted, asyncio.CancelledError):
-                self.ledger.release(reservation)
+                self._release(reservation)
                 raise
             except Exception as exc:
-                self.ledger.release(reservation)
+                self._release(reservation)
                 return SampleOutcome(current.order, current.sample_index, False, None, None, "provider_error",
                                      message("provider_error", model=model.label, status="", detail=_cap(self._scrub(f"{type(exc).__name__}: {exc}", model))))  # fmt: skip
             else:
@@ -771,7 +848,7 @@ class JudgeEngine:
                     if price and resp.usage
                     else 0.0
                 )
-                self.ledger.settle(reservation, actual, total_tokens(resp.usage))
+                self._settle(reservation, actual, total_tokens(resp.usage))
                 return resp, actual
             elapsed = time.monotonic() - started
             delay = (
