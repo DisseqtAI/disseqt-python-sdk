@@ -1,0 +1,318 @@
+{
+  "schema_version": "1",
+  "case_id": "refund_wrong_order",
+  "outcome": "failed",
+  "harness": {
+    "status": "finished",
+    "error": null,
+    "violations": [],
+    "warnings": [
+      "model calls not captured: no FakeLLM or LLM instrumentation; max_llm_calls and token metrics will be skipped"
+    ],
+    "trace_id": "golden-trace-id"
+  },
+  "decisions": [
+    {
+      "turn": 0,
+      "label": "call",
+      "confidence": 1.0,
+      "rule": "write_call",
+      "evidence": [
+        "issue_refund"
+      ],
+      "judged": false
+    }
+  ],
+  "summary": {
+    "n_checks": 6,
+    "n_passed": 5,
+    "n_failed": 1,
+    "n_skipped": 0,
+    "n_error": 0,
+    "n_incomplete": 0
+  },
+  "scores": {
+    "decision_match": 1.0,
+    "tool_selection": 1.0,
+    "tool_selection.precision": 1.0,
+    "tool_selection.recall": 1.0,
+    "tool_selection.f1": 1.0,
+    "tool_args": 0.75,
+    "tool_args.arg_score": 0.75,
+    "tool_args.arg_exact": 0.5,
+    "order": 1.0,
+    "forbidden_calls": 1.0,
+    "budgets": 1.0
+  },
+  "checks": [
+    {
+      "name": "decision_match",
+      "version": "1",
+      "params_hash": "3d04182a53970ba9",
+      "scope": "turn",
+      "turn": null,
+      "status": "ok",
+      "value": 1.0,
+      "passed": true,
+      "threshold": null,
+      "vetoed": false,
+      "required": true,
+      "weight": 1.0,
+      "reason_code": null,
+      "reason": "",
+      "details": {},
+      "components": [
+        {
+          "name": "decision_match",
+          "version": "1",
+          "params_hash": "3d04182a53970ba9",
+          "scope": "turn",
+          "turn": 0,
+          "status": "ok",
+          "value": 1.0,
+          "passed": true,
+          "threshold": null,
+          "vetoed": false,
+          "required": true,
+          "weight": 1.0,
+          "reason_code": null,
+          "reason": "",
+          "details": {
+            "expected": [
+              "call"
+            ],
+            "actual": "call",
+            "confidence": 1.0,
+            "rule": "write_call",
+            "evidence": [
+              "issue_refund"
+            ],
+            "low_confidence": false
+          },
+          "components": [],
+          "judged": false,
+          "extra": {}
+        }
+      ],
+      "judged": false,
+      "extra": {}
+    },
+    {
+      "name": "tool_selection",
+      "version": "1",
+      "params_hash": "5e318e1432e5ccaa",
+      "scope": "run",
+      "turn": null,
+      "status": "ok",
+      "value": 1.0,
+      "passed": true,
+      "threshold": null,
+      "vetoed": false,
+      "required": true,
+      "weight": 1.0,
+      "reason_code": null,
+      "reason": "",
+      "details": {
+        "scores": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0
+        },
+        "matched": [
+          {
+            "expect": "lookup",
+            "call": "call-1"
+          },
+          {
+            "expect": "refund",
+            "call": "call-3"
+          }
+        ],
+        "missing": [],
+        "unexpected": [],
+        "hallucinated": [],
+        "not_allowed": [],
+        "wrong_count": [],
+        "required": 2,
+        "extra_calls": "allow_reads",
+        "allowed_reads": [
+          {
+            "call_id": "call-2",
+            "name": "check_policy",
+            "effect": "read",
+            "turn": 0
+          }
+        ]
+      },
+      "components": [],
+      "judged": false,
+      "extra": {}
+    },
+    {
+      "name": "tool_args",
+      "version": "1",
+      "params_hash": "ab7639eab3853e83",
+      "scope": "run",
+      "turn": null,
+      "status": "ok",
+      "value": 0.75,
+      "passed": false,
+      "threshold": null,
+      "vetoed": false,
+      "required": true,
+      "weight": 1.0,
+      "reason_code": "ungrounded_value",
+      "reason": "1 argument(s) wrong",
+      "details": {
+        "scores": {
+          "arg_score": 0.75,
+          "arg_exact": 0.5
+        },
+        "pairs": [
+          {
+            "call_id": "call-3",
+            "expect": "refund",
+            "path": [
+              "order_id"
+            ],
+            "path_str": "$.order_id",
+            "code": "ungrounded_value",
+            "expected": "Ref('call:lookup.result.order_id') = 'A12'",
+            "actual": "Z999",
+            "reason": "value differs",
+            "status": "ok",
+            "ref": {
+              "source": "call:lookup.result.order_id",
+              "resolved_from": "expectation 'lookup'",
+              "expected_value": "A12",
+              "reason": "value differs"
+            }
+          }
+        ]
+      },
+      "components": [],
+      "judged": false,
+      "extra": {}
+    },
+    {
+      "name": "order",
+      "version": "1",
+      "params_hash": "a9a18e7a8d6edba0",
+      "scope": "run",
+      "turn": null,
+      "status": "ok",
+      "value": 1.0,
+      "passed": true,
+      "threshold": null,
+      "vetoed": false,
+      "required": true,
+      "weight": 1.0,
+      "reason_code": null,
+      "reason": "",
+      "details": {
+        "mode": "partial"
+      },
+      "components": [
+        {
+          "name": "order.edges",
+          "version": "1",
+          "params_hash": "a9a18e7a8d6edba0",
+          "scope": "run",
+          "turn": null,
+          "status": "ok",
+          "value": 1.0,
+          "passed": true,
+          "threshold": null,
+          "vetoed": false,
+          "required": true,
+          "weight": 1.0,
+          "reason_code": null,
+          "reason": "",
+          "details": {
+            "satisfied": [
+              {
+                "before": "lookup",
+                "after": "refund"
+              }
+            ],
+            "violated": []
+          },
+          "components": [],
+          "judged": false,
+          "extra": {}
+        }
+      ],
+      "judged": false,
+      "extra": {}
+    },
+    {
+      "name": "forbidden_calls",
+      "version": "1",
+      "params_hash": "89a23c6e206a6c4c",
+      "scope": "run",
+      "turn": null,
+      "status": "ok",
+      "value": 1.0,
+      "passed": true,
+      "threshold": null,
+      "vetoed": false,
+      "required": true,
+      "weight": 1.0,
+      "reason_code": null,
+      "reason": "",
+      "details": {
+        "hits": []
+      },
+      "components": [],
+      "judged": false,
+      "extra": {}
+    },
+    {
+      "name": "budgets",
+      "version": "1",
+      "params_hash": "c19faa0ced09d960",
+      "scope": "run",
+      "turn": null,
+      "status": "ok",
+      "value": 1.0,
+      "passed": true,
+      "threshold": null,
+      "vetoed": false,
+      "required": true,
+      "weight": 1.0,
+      "reason_code": null,
+      "reason": "",
+      "details": {},
+      "components": [
+        {
+          "name": "budgets.max_tool_calls",
+          "version": "1",
+          "params_hash": "c19faa0ced09d960",
+          "scope": "run",
+          "turn": null,
+          "status": "ok",
+          "value": 1.0,
+          "passed": true,
+          "threshold": null,
+          "vetoed": false,
+          "required": true,
+          "weight": 1.0,
+          "reason_code": null,
+          "reason": "",
+          "details": {
+            "used": 3,
+            "limit": 6
+          },
+          "components": [],
+          "judged": false,
+          "extra": {}
+        }
+      ],
+      "judged": false,
+      "extra": {}
+    }
+  ],
+  "judge_calls": [],
+  "warnings": [],
+  "extra": {}
+}

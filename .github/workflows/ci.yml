@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main]
 
+# Least privilege by default: every job only needs to read the repo. A job that needs more (the
+# trivy job uploads SARIF, so it declares security-events: write itself) overrides this.
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: lint
@@ -31,9 +36,9 @@ jobs:
         run: uv run black --check .
 
       - name: Mypy (type check)
-        # Scoped to disseqt_sdk only; disseqt_agentic_sdk has pre-existing
-        # strict-mode errors tracked separately.
-        run: uv run mypy src/disseqt_sdk/
+        # Scoped to disseqt_sdk and disseqt_agent_testing; disseqt_agentic_sdk has
+        # pre-existing strict-mode errors tracked separately.
+        run: uv run mypy src/disseqt_sdk/ src/disseqt_agent_testing/
 
   test:
     name: test
@@ -55,7 +60,7 @@ jobs:
       - name: Unit + agentic tests with coverage
         # Integration tests require a live API and are excluded from CI.
         run: |
-          uv run pytest tests/unit tests/agentic \
+          uv run pytest tests/unit tests/agentic tests/agent_testing \
             --cov=src --cov-report=term-missing --cov-report=xml -v
 
       - name: Upload coverage
@@ -63,6 +68,78 @@ jobs:
         with:
           name: coverage-xml
           path: coverage.xml
+
+  agent-testing:
+    name: agent-testing (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Mypy (strict) on the package
+        run: |
+          PYTHONPATH=src uv run --no-project --python ${{ matrix.python }} \
+            --with mypy==1.19.0 --with "pytest>=8.0,<10" --with typing_extensions --with requests --with wrapt \
+            python -m mypy src/disseqt_agent_testing
+
+      - name: "Tests (offline, sockets are blocked by tests/agent_testing/conftest.py)"
+        run: |
+          PYTHONPATH=src uv run --no-project --python ${{ matrix.python }} \
+            --with "pytest>=8.0,<10" --with pytest-xdist --with pyyaml --with typing_extensions --with requests --with wrapt \
+            python -m pytest tests/agent_testing -q -p no:cacheprovider --rootdir=.
+
+  agent-testing-pytest-compat:
+    name: agent-testing plugin (${{ matrix.label }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # Both ends of the supported pytest range, the same shape as adk-compat: a break almost
+      # always shows at the oldest or the newest release, so the versions in between are not run.
+      matrix:
+        include:
+          - label: "oldest pytest"
+            python: "3.10"
+            pytest: "pytest>=8.0,<8.1"
+            xdist: "off"
+          - label: "latest pytest"
+            python: "3.13"
+            pytest: "pytest>=9.2,<10"
+            xdist: "on"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Plugin, CLI and runner tests against this pytest
+        run: |
+          EXTRA=""
+          if [ "${{ matrix.xdist }}" = "on" ]; then EXTRA="--with pytest-xdist"; fi
+          PYTHONPATH=src uv run --no-project --python ${{ matrix.python }} \
+            --with "${{ matrix.pytest }}" $EXTRA --with pyyaml --with typing_extensions --with requests --with wrapt \
+            python -m pytest tests/agent_testing/runner tests/agent_testing/plugin tests/agent_testing/cli \
+            -q -p no:cacheprovider --rootdir=. -W error::DeprecationWarning
+
+  agent-testing-scipy:
+    name: agent-testing (SciPy assignment backend)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Backend equality and assertions tests with SciPy installed
+        run: |
+          PYTHONPATH=src uv run --no-project --python 3.12 \
+            --with "pytest>=8.0,<10" --with pyyaml --with typing_extensions --with requests --with wrapt --with scipy \
+            python -m pytest tests/agent_testing/assertions -q -p no:cacheprovider --rootdir=.
 
   # The ADK instrumentor hooks private functions that google-adk has moved
   # between releases (the tool call sites live in a different module in

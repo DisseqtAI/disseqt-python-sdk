@@ -1,0 +1,337 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DecisionReport",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "case_id",
+    "outcome",
+    "harness",
+    "decisions",
+    "summary",
+    "scores",
+    "checks",
+    "judge_calls",
+    "warnings"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1"
+    },
+    "case_id": {
+      "type": "string"
+    },
+    "outcome": {
+      "enum": [
+        "passed",
+        "failed",
+        "incomplete"
+      ]
+    },
+    "harness": {
+      "type": "object",
+      "required": [
+        "status",
+        "error",
+        "violations",
+        "warnings",
+        "trace_id"
+      ],
+      "properties": {
+        "status": {
+          "type": "string"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "violations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "fake": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "call_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "trace_id": {
+          "type": "string"
+        }
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "turn",
+          "label",
+          "confidence",
+          "rule"
+        ],
+        "properties": {
+          "turn": {
+            "type": "integer"
+          },
+          "label": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "number"
+          },
+          "rule": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "judged": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "n_checks",
+        "n_passed",
+        "n_failed",
+        "n_skipped",
+        "n_error",
+        "n_incomplete"
+      ],
+      "properties": {
+        "n_checks": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "n_passed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "n_failed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "n_skipped": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "n_error": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "n_incomplete": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "scores": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "number"
+      }
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/metric_result"
+      }
+    },
+    "judge_calls": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "triage": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "label"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "call_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reasoning": {
+            "type": "string"
+          },
+          "agreement": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "identity_hash": {
+            "type": "string"
+          },
+          "judged": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "extra": {
+      "type": "object"
+    }
+  },
+  "$defs": {
+    "metric_result": {
+      "type": "object",
+      "required": [
+        "name",
+        "version",
+        "params_hash",
+        "scope",
+        "status",
+        "value",
+        "passed",
+        "vetoed",
+        "required",
+        "weight",
+        "reason_code",
+        "reason",
+        "details",
+        "components",
+        "judged"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "params_hash": {
+          "type": "string"
+        },
+        "scope": {
+          "enum": [
+            "run",
+            "turn"
+          ]
+        },
+        "turn": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "status": {
+          "enum": [
+            "ok",
+            "skipped",
+            "error"
+          ]
+        },
+        "value": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "passed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "threshold": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "vetoed": {
+          "type": "boolean"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "weight": {
+          "type": "number"
+        },
+        "reason_code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "details": {
+          "type": "object"
+        },
+        "components": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/metric_result"
+          }
+        },
+        "judged": {
+          "type": "boolean"
+        },
+        "extra": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

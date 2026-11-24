@@ -29,6 +29,12 @@ dependencies = [
     "wrapt>=1.16.0",
 ]
 
+[project.scripts]
+disseqt = "disseqt_agent_testing.cli.main:main"
+
+[project.entry-points.pytest11]
+disseqt = "disseqt_agent_testing.pytest_plugin"
+
 # Optional extras — install only the LLM SDKs you actually call.
 #   pip install "disseqt-ai-sdk[openai]"          # one provider
 #   pip install "disseqt-ai-sdk[openai,anthropic]"# a few
@@ -58,6 +64,8 @@ dependencies = [
 # instrument_all() walks the canonical keys only, so each instrumentor
 # is applied exactly once regardless of which alias a caller uses.
 [project.optional-dependencies]
+yaml = ["PyYAML>=6"]
+xdist = ["pytest-xdist>=3.5"]
 openai = ["openai>=1.50.0"]
 anthropic = ["anthropic>=0.40.0"]
 groq = ["groq>=0.11.0"]
@@ -65,6 +73,8 @@ mistral = ["mistralai>=1.5.0"]
 cohere = ["cohere>=5.11.0"]
 gemini = ["google-genai>=1.0.0"]
 litellm = ["litellm>=1.40.0"]
+# disseqt_agent_testing: optional faster assignment backend (the vendored solver is the default).
+scipy = ["scipy>=1.9"]
 adk = ["google-adk>=1.32.0"]
 # Convenience: pull every provider our instrumentation supports today.
 instrumentation = [
@@ -85,8 +95,17 @@ Repository = "https://github.com/DisseqtAI/disseqt-python-sdk"
 Issues = "https://github.com/DisseqtAI/disseqt-python-sdk/issues"
 Changelog = "https://github.com/DisseqtAI/disseqt-python-sdk/blob/main/CHANGELOG.md"
 
+[tool.hatch.build.targets.sdist]
+# Design notes are kept outside the published artifacts.
+exclude = ["/plan.md", "/plans"]
+
 [tool.hatch.build.targets.wheel]
-packages = ["src/disseqt_sdk", "src/disseqt_agentic_sdk", "src/disseqt_logging"]
+packages = [
+    "src/disseqt_sdk",
+    "src/disseqt_agentic_sdk",
+    "src/disseqt_logging",
+    "src/disseqt_agent_testing",
+]
 
 [tool.black]
 line-length = 100
@@ -150,6 +169,8 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = [
+    "-p",
+    "pytester",  # fixtures for testing the disseqt pytest plugin (tests/agent_testing/plugin)
     "--strict-markers",
     "--strict-config",
     "--verbose",

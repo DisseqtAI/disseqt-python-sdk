@@ -1,0 +1,9 @@
+assert_agent FAILED for case 'refund_wrong_order' (1 failed, 0 incomplete, 5 passed, 0 skipped)
+decision   turn 0: expected call, got call (write_call, conf 1.00)   ok
+tools      matched 2/2 required; unexpected 0 (check_policy read allowed)   ok
+  args  call-3 vs expected 'refund'   [tool_args]
+    $.order_id  ungrounded_value  Expected: Ref('call:lookup.result.order_id') = 'A12'  Actual: 'Z999'
+order      partial: satisfied   ok
+forbidden  no forbidden call made   ok
+budget     max_tool_calls   ok
+scores     budgets=1.00 decision_match=1.00 forbidden_calls=1.00 order=1.00 tool_args=0.75 tool_args.arg_exact=0.50 tool_args.arg_score=0.75 tool_selection=1.00 tool_selection.f1=1.00 tool_selection.precision=1.00 tool_selection.recall=1.00

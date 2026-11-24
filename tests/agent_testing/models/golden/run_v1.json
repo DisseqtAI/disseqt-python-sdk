@@ -1,0 +1,199 @@
+{
+  "schema_version": 1,
+  "status": "crashed",
+  "run": {
+    "schema_version": 1,
+    "case_id": "refund_rich",
+    "input": "Refund order A12",
+    "follow_ups": [
+      "thanks"
+    ],
+    "steps": [
+      {
+        "seq": 1,
+        "kind": "model",
+        "name": "fake-llm",
+        "call_id": "call-1",
+        "provider_call_id": null,
+        "args": {
+          "messages": [
+            {
+              "role": "user",
+              "content": "Refund order A12"
+            }
+          ],
+          "tools": [
+            "get_order"
+          ]
+        },
+        "result": {
+          "role": "assistant",
+          "content": ""
+        },
+        "error": null,
+        "effect": null,
+        "ts": 0.5,
+        "duration_ms": 1.25,
+        "turn": 0,
+        "parallel_group": null,
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 5,
+          "latency_s": 0.001,
+          "cost_usd": 0.0001
+        },
+        "lossy": false,
+        "extra": {}
+      },
+      {
+        "seq": 2,
+        "kind": "tool",
+        "name": "get_order",
+        "call_id": "call-2",
+        "provider_call_id": null,
+        "args": {
+          "order_id": "A12"
+        },
+        "result": {
+          "order_id": "A12",
+          "total": 59.99
+        },
+        "error": null,
+        "effect": "read",
+        "ts": 2.0,
+        "duration_ms": 0.5,
+        "turn": 0,
+        "parallel_group": null,
+        "usage": null,
+        "lossy": false,
+        "extra": {}
+      },
+      {
+        "seq": 3,
+        "kind": "tool",
+        "name": "issue_refund",
+        "call_id": "call-3",
+        "provider_call_id": "call_abc",
+        "args": {
+          "order_id": "Z999"
+        },
+        "result": null,
+        "error": "FakeToolError: order service down",
+        "effect": "write",
+        "ts": 3.0,
+        "duration_ms": 0.25,
+        "turn": 1,
+        "parallel_group": 2,
+        "usage": null,
+        "lossy": true,
+        "extra": {
+          "acme.k": 1
+        }
+      },
+      {
+        "seq": 4,
+        "kind": "subagent",
+        "name": "faq_agent",
+        "call_id": "call-4",
+        "provider_call_id": null,
+        "args": {
+          "input": "hi"
+        },
+        "result": "see FAQ",
+        "error": null,
+        "effect": "read",
+        "ts": 4.0,
+        "duration_ms": null,
+        "turn": 0,
+        "parallel_group": null,
+        "usage": null,
+        "lossy": false,
+        "extra": {}
+      }
+    ],
+    "final_answer": {
+      "answer": "Refunded",
+      "n": [
+        1,
+        2
+      ]
+    },
+    "final_text": "{\"answer\": \"Refunded\", \"n\": [1, 2]}",
+    "turn_outputs": [
+      "ask",
+      {
+        "answer": "Refunded",
+        "n": [
+          1,
+          2
+        ]
+      }
+    ],
+    "messages": [
+      {
+        "role": "user",
+        "content": "Refund order A12"
+      },
+      {
+        "role": "assistant",
+        "content": "Refunded"
+      }
+    ],
+    "available_tools": [
+      {
+        "name": "get_order",
+        "kind": "tool",
+        "effect": "read",
+        "description": "Look up",
+        "schema": {
+          "type": "object"
+        },
+        "extra": {}
+      },
+      {
+        "name": "faq_agent",
+        "kind": "subagent",
+        "effect": "read",
+        "description": "",
+        "schema": null,
+        "extra": {}
+      }
+    ],
+    "model_steps_captured": true,
+    "started_at": "2026-11-12T10:00:00Z",
+    "state": {},
+    "usage": {
+      "input_tokens": 10,
+      "output_tokens": 5,
+      "latency_s": 0.0,
+      "cost_usd": 0.0
+    },
+    "error": null,
+    "extra": {
+      "acme.run": "r1"
+    }
+  },
+  "error": {
+    "type": "ValueError",
+    "module": "builtins",
+    "message": "ValueError: boom",
+    "traceback": "...(truncated)"
+  },
+  "violations": [
+    {
+      "code": "unexpected_call",
+      "message": "get_order({}) matched no response",
+      "fake": "get_order",
+      "call_id": "call-2"
+    }
+  ],
+  "warnings": [
+    "agent returned None"
+  ],
+  "trace_id": "3f2a9c1d",
+  "duration_ms": 12.5,
+  "setup_ms": 0.5,
+  "extra": {
+    "acme.r": true
+  }
+}

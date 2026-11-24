@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Agent unit testing.** `disseqt_agent_testing.models` (frozen test-case, run and verdict models),
+  `disseqt_agent_testing.harness` (`build_test_orchestrator`: run an agent offline with fake tools and a
+  scripted `FakeLLM`, record every step) and `disseqt_agent_testing.assertions` (`assert_agent`, `evaluate`,
+  the fluent API, a metric registry and a JSON-Schema-described `DecisionReport`).
+  New package `disseqt_agent_testing`, not yet released. It uses no third-party runtime dependency
+  beyond the SDK's declared `typing-extensions` (and `requests`/`wrapt` for the other packages);
+  SciPy is an optional `scipy` extra for a faster assignment backend. No changes to `disseqt_sdk` or
+  `disseqt_agentic_sdk`. Ships a `py.typed` marker.
+- **Metric versions.** Every built-in metric starts at version `"1"`: `decision_match`, `tool_selection`,
+  `tool_args`, `order`, `forbidden_calls`, `budgets`, `answer`, `routing`, `loops`, `clarification`, `refusal`,
+  `scope`, `intent`, `plan`. A change that can alter a value bumps the version (a test pins them), so baseline
+  comparisons only compare like with like.
+- Report schema version `"1"`; changes inside it are additive.
+- **LLM judges (phases 4b/4c).** `service:<model>` provider (`ServiceModel`, `HttpTransport`, in-process
+  `FakeServiceTransport`; the wire contract is documented in `judges/models/service.py`, nothing falls back to
+  the fake silently). New kinds `answer_quality`, `groundedness`, `plan_quality` (labels derived in code from
+  structured evidence) and advisory `root_cause` triage (`enable_triage()`); new metrics `answer_quality` and
+  `groundedness` (version `"1"`), `plan` is now version `"2"` (adds `judge_quality`). Calibration: golden JSONL
+  sets, hash split, TPR/TNR/kappa/macro-F1 with seeded bootstrap CIs, `CalibrationReport.gating_allowed`,
+  Rogan-Gladen `corrected_rate`, and `disseqt judges calibrate|report|golden|templates|cache`. Shipped golden
+  sets are labelled `draft` and can never license gating, and a golden item without a `source` is a
+  draft. The judge service is reached over HTTPS; plain `http://` is accepted for loopback hosts only.
+- **Runner, pytest plugin and CLI.** `disseqt_agent_testing.runner` (`run_case`, `run_suite`, `arun_*`,
+  `load_cases`, `summarize_repeats`) runs repeats and decides each case with the bounds rule over pass^k;
+  `SuiteResult` is a versioned (`schema_version` `"1"`), JSON-Schema-described document. A `pytest11` plugin
+  collects `*.agent.yaml|yml|json` files that hold a mapping with `version` and `cases` (one item per
+  case; any other `*.agent.json|yaml` file is ignored unless a `--disseqt-*` option or `disseqt_*` ini
+  key is set), provides fixtures and `parametrize_cases`, and supports pytest-xdist; the `disseqt test`
+  command runs with or without pytest. Optional extras: `yaml`, `xdist`. Supports
+  `pytest>=8.0,<10`; CI runs the plugin tests on the oldest (8.0) and the latest (9.2+) pytest. The plugin is silent and light
+  when unused (`-p no:disseqt` disables it); an invalid `DISSEQT_*` environment value only errors when
+  the plugin is actually used.
+- **`disseqt test` exit codes:** 0 passed; 1 failed (also: pytest itself failed, e.g. a plain failing
+  test next to the agent cases); 2 incomplete (undecidable, or cut off by a suite/case timeout or a
+  cancellation - never a green skip); 3 usage, configuration or collection problem (argparse usage
+  errors, a bad `--seed`, an unwritable `--output`, a pytest collection error); 4 internal error;
+  5 no cases ran (none selected, or every case skipped); 130 interrupted. A case marked `xfail` that
+  fails has the status `xfailed` (counted in `totals.xfailed`, exit 0); one that passes is `failed`. The suite result is always
+  written to a fresh temporary file and copied to `--output`, so a stale file is never read.
+  The current directory (and the pytest rootdir) is on `sys.path`, so `--agent pkg.mod:factory` imports
+  as with `python -m`.
+- **Trust:** a case file with `run: {agent: module:attr}` imports and executes that code (as do
+  `conftest.py` files); treat case files like source code. A relative `dataset:` path must stay inside the
+  case file's directory (an absolute path is allowed explicitly).
+- Two tests that report the same case id are a duplicate id (DSQ-C03, exit 3), never merged into one
+  result.
+- ``CreateRunRequest`` (prompt packs) gained an optional ``application_id``
+  field. When set and no explicit ``llm_id``/``app_integration_id``/
+  ``custom_llm_id`` is otherwise supplied on the run, the backend
+  auto-resolves it to that Application's ("AI System") one linked
+  integration. Omitted from the request payload entirely when unset --
+  existing callers see no change on the wire.
+
 ### Changed (agentic SDK only, backward-compatible)
 - **`project_id` on `DisseqtAgenticClient` is now optional.** Kong traces-auth plugin 2.2.1+
   resolves the owning project (plus org + user) server-side from
@@ -53,14 +107,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   caller breaks, but is now omitted from the payload rather than sent as
   dead weight. No observable behavior change from the caller's side of a
   successful call.
-
-### Added
-- ``CreateRunRequest`` (prompt packs) gained an optional ``application_id``
-  field. When set and no explicit ``llm_id``/``app_integration_id``/
-  ``custom_llm_id`` is otherwise supplied on the run, the backend
-  auto-resolves it to that Application's ("AI System") one linked
-  integration. Omitted from the request payload entirely when unset --
-  existing callers see no change on the wire.
 
 ## [0.11.2] - 2026-08-26
 
