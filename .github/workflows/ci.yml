@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # release.yml dispatches CI on its release-pr/* branch: a PR opened with
+  # GITHUB_TOKEN does not fire pull_request workflows, so without this the
+  # required lint / test / trivy checks would never report on a release PR.
+  workflow_dispatch:
 
 jobs:
   lint:
