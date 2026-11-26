@@ -1,14 +1,21 @@
 name: Release
 
-# One-click release: bump the version, stamp the CHANGELOG, gate on the
-# test suite, commit + tag + GitHub release, then dispatch the existing
-# publish.yml (trusted publishing to PyPI). The explicit dispatch is
-# required: a release created with the default GITHUB_TOKEN does not fire
-# other workflows' `release:` triggers — but workflow_dispatch is the
-# documented exception, so no PAT is needed. After PyPI, the backend
-# advertises the new version automatically via its registry polling
-# (SDK_VERSION_POLL_INTERVAL in production-monitoring) — no Vault bump,
-# no restart.
+# Step 1 of 2: open a release PR.
+#
+# Bumps the version, stamps the CHANGELOG, gates on the test suite, then
+# pushes a release-pr/vX.Y.Z branch and opens a "Release vX.Y.Z" PR into
+# main. main is protected by the security-enforcement ruleset (PR + review
+# + lint/test/trivy required, no bypass), so the workflow never pushes to
+# main itself.
+#
+# Step 2 (tag-release.yml) runs when that PR is merged: it tags the merge
+# commit, creates the GitHub release and dispatches publish.yml (trusted
+# publishing to PyPI). After PyPI, the backend advertises the new version
+# automatically via its registry polling (SDK_VERSION_POLL_INTERVAL in
+# production-monitoring): no Vault bump, no restart.
+#
+# Branch prefix is release-pr/, NOT release/: release/* is covered by the
+# same ruleset and the push would be rejected.
 
 on:
   workflow_dispatch:
@@ -22,6 +29,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
   actions: write
 
 concurrency:
@@ -29,11 +37,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
+  release-pr:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
 
       - name: Install uv
@@ -44,32 +53,65 @@ jobs:
         run: |
           VERSION=$(python3 .github/scripts/prepare_release.py "${{ inputs.bump }}")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Releasing v$VERSION"
+          echo "branch=release-pr/v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Preparing v$VERSION"
+
+      - name: Refuse if a release PR for this version already exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.prep.outputs.branch }}
+        run: |
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null; then
+            echo "::error::Branch $BRANCH already exists. Merge or close its PR" \
+              "(and delete the branch) before running Release again."
+            exit 1
+          fi
 
       - name: Lock and run the test suite
         run: |
           uv lock
           uv run pytest tests/unit/ tests/agentic/ -q
 
-      - name: Commit, tag, and push
+      - name: Commit and push release branch
+        env:
+          VERSION: ${{ steps.prep.outputs.version }}
+          BRANCH: ${{ steps.prep.outputs.branch }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$BRANCH"
           git add pyproject.toml CHANGELOG.md uv.lock
-          git commit -m "Release v${{ steps.prep.outputs.version }}"
-          git tag "v${{ steps.prep.outputs.version }}"
-          git push origin HEAD:main --follow-tags
+          git commit -m "Release v$VERSION"
+          git push origin "$BRANCH"
 
-      - name: Create GitHub release
+      - name: Open release PR
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.prep.outputs.version }}
+          BRANCH: ${{ steps.prep.outputs.branch }}
         run: |
-          gh release create "v${{ steps.prep.outputs.version }}" \
-            --target main \
-            --title "v${{ steps.prep.outputs.version }}" \
-            --notes-file release_notes.md
+          {
+            echo "Automated release PR opened by the **Release** workflow."
+            echo
+            echo "Merging it tags \`v$VERSION\` on the merge commit, creates the"
+            echo "GitHub release and publishes to PyPI (\`tag-release.yml\`)."
+            echo "Do not edit the version on this branch."
+            echo
+            echo "## Release notes"
+            echo
+            cat release_notes.md
+          } > pr_body.md
+          gh pr create \
+            --base main \
+            --head "$BRANCH" \
+            --title "Release v$VERSION" \
+            --body-file pr_body.md
 
-      - name: Dispatch PyPI publish
+      - name: Run required checks on the release branch
+        # A PR opened with GITHUB_TOKEN does not trigger pull_request
+        # workflows; workflow_dispatch is the documented exception. The
+        # dispatched run reports lint / test / trivy on the PR's head commit.
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run publish.yml --ref main
+          BRANCH: ${{ steps.prep.outputs.branch }}
+        run: gh workflow run ci.yml --ref "$BRANCH"

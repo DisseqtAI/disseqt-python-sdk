@@ -2,66 +2,40 @@
 
 This document outlines the release process for the Disseqt SDK.
 
-## Release Checklist
+## How to Release
 
-### Pre-Release
+Releases are automated in two steps. `main` is protected by the
+`security-enforcement` ruleset (PR, 1 approval and `lint` / `test` / `trivy`
+required, no bypass), so nothing pushes to `main` directly.
 
-- [ ] All tests pass (`uv run pytest`)
-- [ ] Code quality checks pass (`uv run pre-commit run --all-files`)
-- [ ] Coverage is ≥90% (`uv run pytest --cov=disseqt_sdk --cov-report=term-missing`)
-- [ ] Documentation is updated
-- [ ] CHANGELOG.md is updated with new version
-- [ ] Version is bumped in `pyproject.toml`
+1. **Open the release PR.** Actions → **Release** → *Run workflow* on `main`,
+   choose `patch` / `minor` / `major`. The workflow bumps `pyproject.toml`,
+   moves `## [Unreleased]` in `CHANGELOG.md` to `## [X.Y.Z] - <date>`, runs
+   `uv lock` and the unit + agentic tests, pushes `release-pr/vX.Y.Z` and
+   opens a **Release vX.Y.Z** PR. It also starts CI on that branch, since a
+   PR opened by `GITHUB_TOKEN` does not trigger `pull_request` workflows.
+2. **Review and merge the PR.** On merge, **Tag release** tags the merge
+   commit `vX.Y.Z`, creates the GitHub release from the CHANGELOG section and
+   starts **Publish to PyPI** at that tag.
 
-### Release Steps
+Then check that **Publish to PyPI** passed (approve the `pypi` environment if
+it asks) and that https://pypi.org/p/disseqt-ai-sdk shows the new version.
+The backend picks up the new version through registry polling: no Vault bump
+or restart.
 
-1. **Update Version**
-   ```bash
-   # Update version in pyproject.toml
-   # Update CHANGELOG.md with release date
-   ```
+### Rules
 
-2. **Lock Dependencies**
-   ```bash
-   uv lock
-   ```
-
-3. **Final Testing**
-   ```bash
-   uv run pytest -q --cov=disseqt_sdk --cov-report=term-missing
-   uv run pre-commit run --all-files
-   ```
-
-4. **Commit and Tag**
-   ```bash
-   git add .
-   git commit -m "Release v0.1.0"
-   git tag v0.1.0
-   git push origin main --tags
-   ```
-
-5. **Build Package**
-   ```bash
-   uv build
-   ```
-
-6. **Publish** (when ready for public distribution)
-   ```bash
-   # This will be configured when publishing is enabled
-   # uv publish
-   ```
-
-### Post-Release
-
-- [ ] Bump the advertised SDK version in Vault so the server-driven
-      upgrade notice starts pointing at this release (stage, then prod;
-      `patch`, never `put`), and restart the deployment:
-      `vault kv patch -ns=disseqt secret/services/{staging,prod}/production-monitoring SDK_LATEST_VERSION=<new version>`
-      then `kubectl rollout restart deployment -n production-monitoring`
-- [ ] Verify release artifacts
-- [ ] Update documentation site (if applicable)
-- [ ] Announce release to stakeholders
-- [ ] Monitor for issues
+- Feature PRs add entries under `## [Unreleased]` only. Never edit the
+  version by hand: the Release workflow refuses to bump past an untagged
+  version.
+- Only one release PR at a time. Merge or close it (and delete its branch)
+  before running **Release** again.
+- If **Tag release** fails after the merge, re-run it, or run it manually:
+  it tags whatever version `main` declares.
+- If PyPI publishing fails, re-run only **Publish to PyPI** at the tag. Do
+  not run **Release** again; it would bump the version a second time.
+- Repo setting needed: Settings → Actions → General → *Allow GitHub Actions
+  to create and approve pull requests* must be on.
 
 ## Version Scheme
 
