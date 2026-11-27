@@ -5,8 +5,12 @@ name: Release
 # Bumps the version, stamps the CHANGELOG, gates on the test suite, then
 # pushes a release-pr/vX.Y.Z branch and opens a "Release vX.Y.Z" PR into
 # main. main is protected by the security-enforcement ruleset (PR + review
-# + lint/test/trivy required, no bypass), so the workflow never pushes to
-# main itself.
+# + lint/test/trivy required) and by classic branch protection (1 approving
+# review, enforce_admins, no bypass allowances) - the ruleset itself has two
+# bypass actors (a GitOps App and a bot team, unrelated to this workflow);
+# the classic-protection layer underneath has none, which is what actually
+# keeps main's review requirement unconditional. The workflow never pushes
+# to main itself.
 #
 # Step 2 (tag-release.yml) runs when that PR is merged: it tags the merge
 # commit, creates the GitHub release and dispatches publish.yml (trusted
