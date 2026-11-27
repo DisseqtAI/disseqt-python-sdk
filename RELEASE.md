@@ -34,8 +34,19 @@ or restart.
   it tags whatever version `main` declares.
 - If PyPI publishing fails, re-run only **Publish to PyPI** at the tag. Do
   not run **Release** again; it would bump the version a second time.
-- Repo setting needed: Settings → Actions → General → *Allow GitHub Actions
-  to create and approve pull requests* must be on.
+- The release PR is opened by a GitHub App, **disseqt-sdk-release-bot**,
+  not the default `GITHUB_TOKEN`: this org disables "Allow GitHub Actions to
+  create and approve pull requests" and that setting stays off — do not turn
+  it on. The App is installed on this repo only, with Contents and Pull
+  requests read/write and nothing else.
+- Its App ID and private key live as secrets on the **release** environment
+  (`RELEASE_APP_ID` / `RELEASE_APP_PRIVATE_KEY`), not as repo secrets. The
+  `release-pr` job declares `environment: release`, whose deployment branch
+  policy allows only `main`. Repo secrets are readable by any workflow on any
+  branch; scoping these to an environment restricted to `main` is what stops
+  a workflow on another branch from minting the bot's token and using its
+  Pull-requests write access (which includes the Reviews API) to approve a
+  PR as the bot and supply `main`'s one required review.
 
 ## Version Scheme
 

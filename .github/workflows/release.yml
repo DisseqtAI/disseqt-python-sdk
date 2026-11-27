@@ -5,8 +5,12 @@ name: Release
 # Bumps the version, stamps the CHANGELOG, gates on the test suite, then
 # pushes a release-pr/vX.Y.Z branch and opens a "Release vX.Y.Z" PR into
 # main. main is protected by the security-enforcement ruleset (PR + review
-# + lint/test/trivy required, no bypass), so the workflow never pushes to
-# main itself.
+# + lint/test/trivy required) and by classic branch protection (1 approving
+# review, enforce_admins, no bypass allowances) - the ruleset itself has two
+# bypass actors (a GitOps App and a bot team, unrelated to this workflow);
+# the classic-protection layer underneath has none, which is what actually
+# keeps main's review requirement unconditional. The workflow never pushes
+# to main itself.
 #
 # Step 2 (tag-release.yml) runs when that PR is merged: it tags the merge
 # commit, creates the GitHub release and dispatches publish.yml (trusted
@@ -29,7 +33,6 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
   actions: write
 
 concurrency:
@@ -39,6 +42,15 @@ concurrency:
 jobs:
   release-pr:
     runs-on: ubuntu-latest
+    # Gates the whole job on running against main: the "release" environment's
+    # deployment branch policy allows only main. Repo secrets are readable by
+    # any workflow on any branch; an environment secret is readable only when
+    # the triggering ref satisfies that policy. Without this, a branch pushed
+    # by anyone with write access could mint the release bot's token (its
+    # Pull requests: write permission includes the Reviews API, and the bot
+    # isn't the author of such a PR, so GitHub wouldn't block it as a
+    # self-approval) and use it to supply main's one required review.
+    environment: release
     steps:
       - uses: actions/checkout@v4
         with:
@@ -84,9 +96,20 @@ jobs:
           git commit -m "Release v$VERSION"
           git push origin "$BRANCH"
 
+      - name: Mint release-bot App token
+        # The org blocks GITHUB_TOKEN from creating PRs (createPullRequest
+        # is disabled for Actions org-wide). disseqt-sdk-release-bot is a
+        # GitHub App installed on this repo only (Contents + Pull requests:
+        # read/write), minted here and used for the one step that needs it.
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
       - name: Open release PR
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           VERSION: ${{ steps.prep.outputs.version }}
           BRANCH: ${{ steps.prep.outputs.branch }}
         run: |
