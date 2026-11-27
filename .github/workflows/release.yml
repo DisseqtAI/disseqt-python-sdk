@@ -29,7 +29,6 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
   actions: write
 
 concurrency:
@@ -39,6 +38,15 @@ concurrency:
 jobs:
   release-pr:
     runs-on: ubuntu-latest
+    # Gates the whole job on running against main: the "release" environment's
+    # deployment branch policy allows only main. Repo secrets are readable by
+    # any workflow on any branch; an environment secret is readable only when
+    # the triggering ref satisfies that policy. Without this, a branch pushed
+    # by anyone with write access could mint the release bot's token (its
+    # Pull requests: write permission includes the Reviews API, and the bot
+    # isn't the author of such a PR, so GitHub wouldn't block it as a
+    # self-approval) and use it to supply main's one required review.
+    environment: release
     steps:
       - uses: actions/checkout@v4
         with:
