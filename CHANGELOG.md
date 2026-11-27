@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-27
+
 ### Changed (agentic SDK only, backward-compatible)
 - **`project_id` on `DisseqtAgenticClient` is now optional.** Kong traces-auth plugin 2.2.1+
   resolves the owning project (plus org + user) server-side from
