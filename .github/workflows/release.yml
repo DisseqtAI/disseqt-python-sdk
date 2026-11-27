@@ -84,9 +84,20 @@ jobs:
           git commit -m "Release v$VERSION"
           git push origin "$BRANCH"
 
+      - name: Mint release-bot App token
+        # The org blocks GITHUB_TOKEN from creating PRs (createPullRequest
+        # is disabled for Actions org-wide). disseqt-sdk-release-bot is a
+        # GitHub App installed on this repo only (Contents + Pull requests:
+        # read/write), minted here and used for the one step that needs it.
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
       - name: Open release PR
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           VERSION: ${{ steps.prep.outputs.version }}
           BRANCH: ${{ steps.prep.outputs.branch }}
         run: |
